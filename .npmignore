@@ -1,0 +1,22 @@
+# Build output
+dist/
+
+# Source (TypeScript - compiled JS is in dist/)
+src/
+
+# Development files
+*.ts
+!*.d.ts
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+
+# Tests
+test/
+coverage/
+
+# CI/CD
+.github/
+
+# Development docs
+CONTRIBUTING.md
