@@ -1,0 +1,31 @@
+{
+  "name": "pdf-rfc3161",
+  "version": "0.0.1",
+  "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
+  "keywords": [
+    "pdf",
+    "timestamp",
+    "rfc3161",
+    "tsa",
+    "pades",
+    "ltv",
+    "digital-signature",
+    "cloudflare-workers",
+    "edge"
+  ],
+  "homepage": "https://github.com/mingulov/pdf-rfc3161#readme",
+  "bugs": {
+    "url": "https://github.com/mingulov/pdf-rfc3161/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mingulov/pdf-rfc3161.git"
+  },
+  "license": "MIT",
+  "author": "Denis Mingulov <denis@mingulov.com>",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
