@@ -106,6 +106,24 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
 
     const context = pdfDoc.context;
 
+    // WORKAROUND: pdf-lib-incremental-save doesn't correctly track objects from
+    // previous incremental updates. We need to find the true largest object number
+    // by scanning all xref sections in the PDF, otherwise new object registrations
+    // will conflict with existing objects.
+    const pdfString = new TextDecoder("latin1").decode(pdfBytes);
+    const objMatches = pdfString.matchAll(/(\d+)\s+\d+\s+obj/g);
+    let maxObjNum = context.largestObjectNumber;
+    for (const match of objMatches) {
+        const objNum = parseInt(match[1] ?? "0", 10);
+        if (objNum > maxObjNum) {
+            maxObjNum = objNum;
+        }
+    }
+    // Update context to use the correct largest object number
+    // This is a workaround - we access the private property directly
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+    (context as any).largestObjectNumber = maxObjNum;
+
     // Create arrays for certificates, CRLs, and OCSP responses
     const certsArray = PDFArray.withContext(context);
     const crlsArray = PDFArray.withContext(context);
