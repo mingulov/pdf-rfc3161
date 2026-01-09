@@ -1,4 +1,9 @@
-import { DEFAULT_TSA_CONFIG, MAX_PDF_SIZE } from "./constants.js";
+import {
+    DEFAULT_TSA_CONFIG,
+    MAX_PDF_SIZE,
+    DEFAULT_SIGNATURE_SIZE,
+    LTV_SIGNATURE_SIZE,
+} from "./constants.js";
 import {
     createTimestampRequest,
     sendTimestampRequest,
@@ -112,7 +117,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
     const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
     const autoExtend = signatureSize === 0;
-    const DEFAULT_SIGNATURE_SIZE = 8192;
+    // DEFAULT_SIGNATURE_SIZE imported from constants
     const MAX_SIGNATURE_SIZE = 65536; // 64KB max to prevent runaway growth
     const MAX_AUTO_EXTEND_ATTEMPTS = 2; // Maximum retry attempts for auto-extend
     const SIGNATURE_SIZE_MARGIN = 1.2; // 20% extra margin when calculating required size
@@ -265,8 +270,7 @@ export async function timestampPdfWithLTV(
     } = options;
     const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
-    const DEFAULT_SIGNATURE_SIZE = 8192;
-    const LTV_AUTO_SIGNATURE_SIZE = 16384; // Larger default for LTV auto mode
+    // DEFAULT_SIGNATURE_SIZE imported from constants
 
     // For LTV, auto-extend (signatureSize = 0) is not fully supported because:
     // 1. We need the exact token for DSS embedding
@@ -275,7 +279,7 @@ export async function timestampPdfWithLTV(
     // If signatureSize is 0, we use a generous default (16KB) to reduce chance of overflow
     let effectiveSignatureSize = DEFAULT_SIGNATURE_SIZE;
     if (signatureSize === 0) {
-        effectiveSignatureSize = LTV_AUTO_SIGNATURE_SIZE;
+        effectiveSignatureSize = LTV_SIGNATURE_SIZE;
     } else if (signatureSize && signatureSize > 0) {
         effectiveSignatureSize = signatureSize;
     }
