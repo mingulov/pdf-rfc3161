@@ -42,6 +42,31 @@ export interface PrepareOptions {
 }
 
 /**
+ * Search window constants for ByteRange replacement.
+ * These values ensure we find the correct ByteRange placeholder when
+ * multiple signatures exist in a PDF.
+ */
+
+/**
+ * Bytes to search backward from the dictionary start hint.
+ * The hint points to the start of the signature dictionary (`<<`),
+ * but the `/ByteRange` key might appear slightly before in edge cases
+ * (e.g., whitespace or formatting variations). 100 bytes provides a
+ * small safety margin without risking matching a previous signature.
+ */
+const BYTERANGE_SEARCH_BACKWARD = 100;
+
+/**
+ * Bytes to search forward from the dictionary start hint.
+ * Must be large enough to cover:
+ * - The entire signature dictionary structure (~1KB)
+ * - The `/Contents` hex string which can be up to 65,536 hex chars (32KB token)
+ * - Additional dictionary entries after `/Contents`
+ * 100KB (102,400 bytes) provides ample headroom for the largest supported tokens.
+ */
+const BYTERANGE_SEARCH_FORWARD = 100 * 1024;
+
+/**
  * Prepares a PDF for DocTimeStamp by adding a signature field with placeholder content.
  * Returns the prepared PDF and information needed to calculate the final ByteRange.
  *
@@ -309,13 +334,16 @@ function updateByteRange(
     searchHintOffset = 0
 ): Uint8Array {
     // Only decode the relevant part around the hint
-    const searchStart = Math.max(0, searchHintOffset - 100);
-    const searchEnd = Math.min(pdfBytes.length, searchHintOffset + 200);
+    // See BYTERANGE_SEARCH_BACKWARD and BYTERANGE_SEARCH_FORWARD for rationale
+    const searchStart = Math.max(0, searchHintOffset - BYTERANGE_SEARCH_BACKWARD);
+    const searchEnd = Math.min(pdfBytes.length, searchHintOffset + BYTERANGE_SEARCH_FORWARD);
     const searchRegion = pdfBytes.subarray(searchStart, searchEnd);
     const searchString = new TextDecoder("latin1").decode(searchRegion);
 
     // Find the ByteRange placeholder
-    const byteRangePattern = /\/ByteRange\s*\[\s*\d+\s+\d+\s+\d+\s+\d+\s*\]/;
+    // Match any number of values since we use 6 placeholders for padding space
+    // Simplified to avoid security/detect-unsafe-regex warning (catastrophic backtracking)
+    const byteRangePattern = /\/ByteRange\s*\[[\s\d]+\]/;
     const match = byteRangePattern.exec(searchString);
 
     if (!match) {

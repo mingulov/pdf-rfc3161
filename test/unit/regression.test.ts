@@ -48,5 +48,46 @@ describe("Regression Tests", () => {
             // Check that ranges cover the file ends
             expect(start2 + len2).toBe(prepared.bytes.length);
         });
+
+        it("should not contain placeholder values 111111111111 in final PDF", async () => {
+            // Regression test: Placeholder values were not being replaced due to regex mismatch
+            const doc = await PDFDocument.create();
+            doc.addPage([500, 500]);
+            const originalBytes = await doc.save();
+
+            const prepared = await preparePdfForTimestamp(originalBytes);
+
+            // Convert to string to check for placeholder values
+            const pdfString = new TextDecoder("latin1").decode(prepared.bytes);
+
+            // The placeholder value 111111111111 should NOT appear in final PDF
+            expect(pdfString).not.toContain("111111111111");
+        });
+
+        it("should have ByteRange with exactly 4 valid values", async () => {
+            // Regression test: ByteRange must have format [a b c d], not 6 placeholder values
+            const doc = await PDFDocument.create();
+            doc.addPage([500, 500]);
+            const originalBytes = await doc.save();
+
+            const prepared = await preparePdfForTimestamp(originalBytes);
+
+            const pdfString = new TextDecoder("latin1").decode(prepared.bytes);
+
+            // Find ByteRange in the PDF
+            const testByteRangePattern = /\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/;
+            const byteRangeMatch = testByteRangePattern.exec(pdfString);
+            expect(byteRangeMatch).not.toBeNull();
+
+            if (byteRangeMatch) {
+                const [, v1, v2, v3, v4] = byteRangeMatch;
+                // First value should be 0
+                expect(Number(v1)).toBe(0);
+                // All values should be reasonable (not placeholder)
+                expect(Number(v2)).toBeLessThan(1000000000);
+                expect(Number(v3)).toBeLessThan(1000000000);
+                expect(Number(v4)).toBeLessThan(1000000000);
+            }
+        });
     });
 });
