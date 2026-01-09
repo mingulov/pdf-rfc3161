@@ -25,6 +25,8 @@ interface CliOptions {
     timeout: string;
     retry: string;
     verbose: boolean;
+    optimize: boolean;
+    omitM: boolean;
 }
 
 const program = new Command();
@@ -54,6 +56,8 @@ program
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
     .option("--retry <n>", "Number of retry attempts", "3")
     .option("-v, --verbose", "Verbose output", false)
+    .option("--optimize", "Optimize signature size (2-pass)", false)
+    .option("--omit-m", "Omit modification time (/M) from signature dictionary", false)
     .action(
         async (
             tsaUrl: string,
@@ -100,6 +104,8 @@ program
                     location: options.location,
                     contactInfo: options.contactInfo,
                     signatureFieldName: options.name,
+                    optimizePlaceholder: options.optimize,
+                    omitModificationTime: options.omitM,
                 };
 
                 let result;

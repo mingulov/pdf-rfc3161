@@ -50,6 +50,17 @@ export interface TimestampOptions {
      * Set to 0 for automatic sizing (will retry with larger size if needed).
      */
     signatureSize?: number;
+    /**
+     * Whether to optimize the signature placeholder size.
+     * If true, may perform an additional TSA request to determine exact token size,
+     * reducing file size and padding.
+     */
+    optimizePlaceholder?: boolean;
+    /**
+     * Whether to omit the modification time (/M) from the signature dictionary.
+     * Some users prefer to omit this as the timestamp token already contains the authoritative time.
+     */
+    omitModificationTime?: boolean;
 }
 
 /**

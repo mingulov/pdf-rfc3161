@@ -24,16 +24,16 @@ export function embedTimestampToken(
         );
     }
 
-    // Pad the token hex to fill the placeholder
-    const paddedHex = tokenHex.padEnd(contentsPlaceholderLength, "0");
-
     // Create new PDF bytes with the token
     const result = new Uint8Array(bytes);
 
-    // Replace the placeholder content with the actual token
-    const hexBytes = new TextEncoder().encode(paddedHex);
-    for (let i = 0; i < hexBytes.length; i++) {
-        const b = hexBytes[i];
+    // Pad the token hex to fill the placeholder with zeros.
+    const paddedHex = tokenHex.padEnd(contentsPlaceholderLength, "0");
+
+    // Replace the placeholder content with the padded hex token
+    const tokenHexBytes = new TextEncoder().encode(paddedHex);
+    for (let i = 0; i < tokenHexBytes.length; i++) {
+        const b = tokenHexBytes[i];
         if (b !== undefined) {
             result[contentsOffset + i] = b;
         }
@@ -69,6 +69,6 @@ export function extractBytesToHash(preparedPdf: PreparedPDF): Uint8Array {
  */
 function bufferToHex(buffer: Uint8Array): string {
     return Array.from(buffer)
-        .map((b) => b.toString(16).padStart(2, "0"))
+        .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
         .join("");
 }
