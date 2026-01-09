@@ -61,6 +61,16 @@ export interface TimestampOptions {
      * Some users prefer to omit this as the timestamp token already contains the authoritative time.
      */
     omitModificationTime?: boolean;
+    /**
+     * Enable LTV (Long-Term Validation) by embedding DSS (Document Security Store).
+     * This includes certificates, CRLs, and OCSP responses needed for offline validation.
+     */
+    enableLTV?: boolean;
+    /**
+     * Fetch OCSP responses for certificates (slower but more complete LTV).
+     * Only used when enableLTV is true.
+     */
+    fetchOCSP?: boolean;
 }
 
 /**
@@ -71,6 +81,15 @@ export interface TimestampResult {
     pdf: Uint8Array;
     /** Information about the embedded timestamp */
     timestamp: TimestampInfo;
+    /** LTV data that was embedded (if enableLTV was true) */
+    ltvData?: {
+        /** Certificates embedded for LTV */
+        certificates: Uint8Array[];
+        /** CRLs embedded for LTV */
+        crls: Uint8Array[];
+        /** OCSP responses embedded for LTV */
+        ocspResponses: Uint8Array[];
+    };
 }
 
 /**

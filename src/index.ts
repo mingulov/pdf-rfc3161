@@ -1,9 +1,4 @@
-import {
-    DEFAULT_TSA_CONFIG,
-    MAX_PDF_SIZE,
-    DEFAULT_SIGNATURE_SIZE,
-    LTV_SIGNATURE_SIZE,
-} from "./constants.js";
+import { DEFAULT_TSA_CONFIG, MAX_PDF_SIZE, DEFAULT_SIGNATURE_SIZE } from "./constants.js";
 import {
     createTimestampRequest,
     sendTimestampRequest,
@@ -217,11 +212,20 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 }
             }
 
-            const timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
+            let timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
+            let ltvData: TimestampResult["ltvData"] = undefined;
+
+            // Step 6: Add LTV data if requested
+            if (options.enableLTV) {
+                const extractedLTV = extractLTVData(tsResponse.token);
+                timestampedPdf = await addDSS(timestampedPdf, extractedLTV);
+                ltvData = extractedLTV;
+            }
 
             return {
                 pdf: timestampedPdf,
                 timestamp: tsResponse.info,
+                ltvData,
             };
         } catch (embedError) {
             // Check if it's a size error and auto-extend is enabled
@@ -265,20 +269,24 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
 /**
  * Adds an RFC 3161 document timestamp to a PDF with LTV (Long-Term Validation) support.
  *
- * LTV embeds the certificate chain and revocation data into the PDF so the
- * timestamp can be verified even after the TSA's certificate expires.
+ * @deprecated Use `timestampPdf` with `enableLTV: true` instead.
+ * This function is kept for backward compatibility and will be removed in a future version.
  *
  * @example
  * ```typescript
- * import { timestampPdfWithLTV, KNOWN_TSA_URLS } from 'pdf-rfc3161';
- *
- * const result = await timestampPdfWithLTV({
+ * // Preferred approach:
+ * const result = await timestampPdf({
  *   pdf: pdfBytes,
  *   tsa: { url: KNOWN_TSA_URLS.DIGICERT },
  *   enableLTV: true,
  * });
  *
- * console.log('Embedded', result.ltvData?.certificates.length, 'certificates for LTV');
+ * // Legacy approach (deprecated):
+ * const result = await timestampPdfWithLTV({
+ *   pdf: pdfBytes,
+ *   tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+ *   enableLTV: true,
+ * });
  * ```
  *
  * @param options - Timestamping options with LTV configuration
@@ -287,130 +295,13 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
 export async function timestampPdfWithLTV(
     options: TimestampWithLTVOptions
 ): Promise<TimestampWithLTVResult> {
-    const {
-        pdf,
-        tsa,
-        reason,
-        location,
-        contactInfo,
-        signatureFieldName,
-        maxSize,
-        signatureSize,
+    // Default enableLTV to true for backward compatibility
+    const enableLTV = options.enableLTV ?? true;
 
-        enableLTV = true,
-        optimizePlaceholder,
-        omitModificationTime,
-    } = options;
-    const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
-    const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
-    // Constants imported from module scope
-
-    // For LTV, auto-extend (signatureSize = 0) is not fully supported because:
-    // 1. We need the exact token for DSS embedding
-    // 2. Retrying would get a different token (different serial, time)
-    // 3. The LTV data must correspond to the embedded token
-    // If signatureSize is 0, we use a generous default (16KB) to reduce chance of overflow
-    let effectiveSignatureSize = DEFAULT_SIGNATURE_SIZE;
-    if (signatureSize === 0) {
-        effectiveSignatureSize = LTV_SIGNATURE_SIZE;
-    } else if (signatureSize && signatureSize > 0) {
-        effectiveSignatureSize = signatureSize;
-    }
-
-    if (pdf.length > maxPdfSize) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
-            `PDF exceeds maximum supported size of ${maxPdfSize.toString()} bytes`
-        );
-    }
-
-    let optimizePassIncluded = false;
-    // Loop for optimization/retries
-    for (;;) {
-        // Step 1: Prepare the PDF with a signature placeholder
-        const prepared = await preparePdfForTimestamp(pdf, {
-            reason,
-            location,
-            contactInfo,
-            signatureFieldName,
-            signatureSize: effectiveSignatureSize,
-            omitModificationTime,
-        });
-
-        // Step 2: Extract the bytes to be hashed (covered by ByteRange)
-        const bytesToHash = extractBytesToHash(prepared);
-
-        // Step 3: Create and send timestamp request
-        const tsRequest = await createTimestampRequest(bytesToHash, {
-            ...tsa,
-            hashAlgorithm,
-        });
-
-        const tsResponseBytes = await sendTimestampRequest(tsRequest, tsa);
-
-        // Step 4: Parse the timestamp response
-        const tsResponse = parseTimestampResponse(tsResponseBytes);
-
-        // Check for errors
-        if (
-            tsResponse.status !== TSAStatus.GRANTED &&
-            tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
-        ) {
-            const statusMessages: Record<number, string> = {
-                [TSAStatus.REJECTION]: "Request rejected",
-                [TSAStatus.WAITING]: "Request pending (try again later)",
-                [TSAStatus.REVOCATION_WARNING]: "Revocation warning",
-                [TSAStatus.REVOCATION_NOTIFICATION]: "Certificate revoked",
-            };
-
-            throw new TimestampError(
-                TimestampErrorCode.TSA_ERROR,
-                `TSA error: ${statusMessages[tsResponse.status] ?? `Unknown status ${tsResponse.status.toString()}`} ` +
-                    (tsResponse.statusString ? ` - ${tsResponse.statusString} ` : "")
-            );
-        }
-
-        if (!tsResponse.token || !tsResponse.info) {
-            throw new TimestampError(
-                TimestampErrorCode.INVALID_RESPONSE,
-                "TSA response missing timestamp token"
-            );
-        }
-        // OPTIMIZATION: Shrink placeholder if token is much smaller
-        if (optimizePlaceholder && !optimizePassIncluded) {
-            const idealSize = calculateOptimizedSignatureSize(tsResponse.token.length);
-
-            // Only optimize if we save significant space
-            if (effectiveSignatureSize > idealSize + SIGNATURE_SIZE_OPTIMIZE_THRESHOLD) {
-                effectiveSignatureSize = idealSize;
-                optimizePassIncluded = true;
-                continue; // Retry with optimized size
-            }
-        }
-
-        // Step 5: Embed the timestamp token in the PDF
-        const timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
-
-        // If LTV is disabled, return without DSS
-        if (!enableLTV) {
-            return {
-                pdf: timestampedPdf,
-                timestamp: tsResponse.info,
-            };
-        }
-
-        // Step 6: Extract LTV data from the token we just received
-        const ltvData = extractLTVData(tsResponse.token);
-
-        // Step 7: Add DSS (Document Security Store) to the PDF
-        const pdfWithDSS = await addDSS(timestampedPdf, ltvData);
-
-        return {
-            pdf: pdfWithDSS,
-            timestamp: tsResponse.info,
-            ltvData,
-        };
-    } // End of loop
+    return timestampPdf({
+        ...options,
+        enableLTV,
+    });
 }
 
 /**
@@ -465,8 +356,8 @@ export async function addTimestamp(options: TimestampOptions): Promise<Timestamp
  *   tsaList: [
  *     { url: KNOWN_TSA_URLS.DIGICERT },
  *     { url: KNOWN_TSA_URLS.SECTIGO },
- *     { url: KNOWN_TSA_URLS.FREETSA },
  *   ],
+ *   enableLTV: true, // Optional: enable LTV for all timestamps
  * });
  *
  * console.log('Added', result.timestamps.length, 'timestamps');
@@ -481,11 +372,16 @@ export async function timestampPdfMultiple(options: {
     reason?: string;
     location?: string;
     contactInfo?: string;
+    /** Enable LTV for all timestamps */
+    enableLTV?: boolean;
+    /** Fetch OCSP responses (only used when enableLTV is true) */
+    fetchOCSP?: boolean;
 }): Promise<{
     pdf: Uint8Array;
     timestamps: TimestampInfo[];
+    ltvData?: TimestampResult["ltvData"][];
 }> {
-    const { pdf, tsaList, reason, location, contactInfo } = options;
+    const { pdf, tsaList, reason, location, contactInfo, enableLTV, fetchOCSP } = options;
 
     if (tsaList.length === 0) {
         throw new TimestampError(
@@ -496,6 +392,7 @@ export async function timestampPdfMultiple(options: {
 
     let currentPdf = pdf;
     const timestamps: TimestampInfo[] = [];
+    const ltvDataList: TimestampResult["ltvData"][] = [];
 
     // Apply timestamps sequentially
     for (const tsa of tsaList) {
@@ -505,15 +402,21 @@ export async function timestampPdfMultiple(options: {
             reason,
             location,
             contactInfo,
+            enableLTV,
+            fetchOCSP,
         });
 
         currentPdf = result.pdf;
         timestamps.push(result.timestamp);
+        if (result.ltvData) {
+            ltvDataList.push(result.ltvData);
+        }
     }
 
     return {
         pdf: currentPdf,
         timestamps,
+        ltvData: ltvDataList.length > 0 ? ltvDataList : undefined,
     };
 }
 

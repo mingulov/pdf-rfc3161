@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
-import { timestampPdf, timestampPdfWithLTV, KNOWN_TSA_URLS } from "../../src/index.js";
+import { timestampPdf, KNOWN_TSA_URLS } from "../../src/index.js";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -61,7 +61,7 @@ describe("External Tool Validation", () => {
         doc.addPage([100, 100]);
         const pdfBytes = await doc.save();
 
-        const result = await timestampPdfWithLTV({
+        const result = await timestampPdf({
             pdf: pdfBytes,
             tsa: { url: KNOWN_TSA_URLS.DIGICERT },
             enableLTV: true,
