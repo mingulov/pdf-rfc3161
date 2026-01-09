@@ -111,7 +111,7 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
     // by scanning all xref sections in the PDF, otherwise new object registrations
     // will conflict with existing objects.
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d+)\s+\d+\s+obj/g);
+    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
     let maxObjNum = context.largestObjectNumber;
     for (const match of objMatches) {
         const objNum = parseInt(match[1] ?? "0", 10);

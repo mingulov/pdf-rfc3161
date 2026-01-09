@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { preparePdfForTimestamp } from "../../src/pdf/prepare.js";
 import { addDSS } from "../../src/pdf/ltv.js";
-import * as zlib from "zlib";
 
 describe("Regression Tests - LTV DSS Object Number Collision", () => {
     /**
@@ -42,7 +41,7 @@ describe("Regression Tests - LTV DSS Object Number Collision", () => {
 
         // 5. Parse the PDF to find all object definitions
         const pdfStr = new TextDecoder("latin1").decode(pdfWithDSS);
-        const objMatches = [...pdfStr.matchAll(/(\d+)\s+\d+\s+obj/g)];
+        const objMatches = [...pdfStr.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g)];
         const objNums = objMatches.map((m) => parseInt(m[1] ?? "0", 10));
 
         // 6. Check for duplicates (excluding object 5 which is intentionally reused in ObjStm)
@@ -63,7 +62,7 @@ describe("Regression Tests - LTV DSS Object Number Collision", () => {
         expect(problematicDuplicates).toEqual([]);
     });
 
-    it("should correctly embed DSS in catalog via object stream", async () => {
+    it("should correctly embed DSS in catalog", async () => {
         // 1. Create and prepare PDF
         const doc = await PDFDocument.create();
         doc.addPage([100, 100]);
@@ -80,33 +79,19 @@ describe("Regression Tests - LTV DSS Object Number Collision", () => {
 
         const pdfWithDSS = await addDSS(prepared.bytes, fakeLTVData);
 
-        // 3. Find and decompress all ObjStm objects to check for /DSS
-        const pdfStr = new TextDecoder("latin1").decode(pdfWithDSS);
-        const objStmMatches = [
-            ...pdfStr.matchAll(
-                /(\d+)\s+0\s+obj[\s\S]*?\/Type\s*\/ObjStm[\s\S]*?stream\n([\s\S]*?)\nendstream/g
-            ),
-        ];
+        // 3. Verify by reloading the PDF (robust check)
+        // This ensures the DSS is actually accessible via the PDF structure
+        const reloadedDoc = await PDFDocument.load(pdfWithDSS);
+        const { PDFName, PDFDict } = await import("pdf-lib-incremental-save");
 
-        let foundDSS = false;
-        let foundCerts = false;
+        expect(reloadedDoc.catalog.has(PDFName.of("DSS"))).toBe(true);
 
-        for (const match of objStmMatches) {
-            const streamData = Buffer.from(match[2] ?? "", "latin1");
-            try {
-                const decompressed = zlib.inflateSync(streamData).toString("latin1");
-                if (decompressed.includes("/DSS")) {
-                    foundDSS = true;
-                }
-                if (decompressed.includes("/Certs")) {
-                    foundCerts = true;
-                }
-            } catch {
-                // Some streams might not be zlib compressed, skip them
-            }
+        const dss = reloadedDoc.catalog.lookup(PDFName.of("DSS"));
+        let certs;
+        if (dss instanceof PDFDict) {
+            certs = dss.lookup(PDFName.of("Certs"));
         }
 
-        expect(foundDSS).toBe(true);
-        expect(foundCerts).toBe(true);
+        expect(certs).toBeDefined();
     });
 });
