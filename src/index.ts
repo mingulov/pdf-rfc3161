@@ -60,6 +60,25 @@ export { extractLTVData, addDSS, fetchOCSPResponse, type LTVData } from "./pdf/i
 // Re-export extraction and verification functions
 export { extractTimestamps, verifyTimestamp, type ExtractedTimestamp } from "./pdf/index.js";
 
+// Constants for signature sizing and optimization
+const MAX_AUTO_EXTEND_ATTEMPTS = 2;
+const MAX_SIGNATURE_SIZE = 65536; // 64KB max to prevent runaway growth
+const SIGNATURE_SIZE_MARGIN = 1.2; // 20% extra margin for safety retries
+const SIGNATURE_SIZE_OPTIMIZE_ADD = 32; // Fixed addition for optimization
+const SIGNATURE_SIZE_OPTIMIZE_ALIGN = 32; // Alignment for optimization
+const SIGNATURE_SIZE_OPTIMIZE_THRESHOLD = 512; // Minimum saving to trigger optimization
+
+/**
+ * Calculates an optimized signature size for a given token length.
+ * Adds a small margin and aligns to a boundary to minimize padding.
+ */
+function calculateOptimizedSignatureSize(tokenLength: number): number {
+    return (
+        Math.ceil((tokenLength + SIGNATURE_SIZE_OPTIMIZE_ADD) / SIGNATURE_SIZE_OPTIMIZE_ALIGN) *
+        SIGNATURE_SIZE_OPTIMIZE_ALIGN
+    );
+}
+
 /**
  * Options for timestamping with LTV support
  */
@@ -117,10 +136,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
     const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
     const autoExtend = signatureSize === 0;
-    // DEFAULT_SIGNATURE_SIZE imported from constants
-    const MAX_SIGNATURE_SIZE = 65536; // 64KB max to prevent runaway growth
-    const MAX_AUTO_EXTEND_ATTEMPTS = 2; // Maximum retry attempts for auto-extend
-    const SIGNATURE_SIZE_MARGIN = 1.2; // 20% extra margin when calculating required size
+    // Constants imported from module scope
 
     if (pdf.length > maxPdfSize) {
         throw new TimestampError(
@@ -133,6 +149,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
     let currentSignatureSize =
         signatureSize && signatureSize > 0 ? signatureSize : DEFAULT_SIGNATURE_SIZE;
     let autoExtendAttempts = 0;
+    let optimizePassIncluded = false;
 
     // Auto-extend loop: try embedding, grow placeholder if needed (max 2 retries)
     for (;;) {
@@ -143,6 +160,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
             contactInfo,
             signatureFieldName,
             signatureSize: currentSignatureSize,
+            omitModificationTime: options.omitModificationTime,
         });
 
         // Step 2: Extract the bytes to be hashed (covered by ByteRange)
@@ -187,6 +205,18 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
 
         // Step 5: Try to embed the timestamp token in the PDF
         try {
+            // OPTIMIZATION: Shrink placeholder if token is much smaller
+            if (options.optimizePlaceholder && !optimizePassIncluded) {
+                const idealSize = calculateOptimizedSignatureSize(tsResponse.token.length);
+
+                // Only optimize if we save significant space or user explicitly asked
+                if (currentSignatureSize > idealSize + SIGNATURE_SIZE_OPTIMIZE_THRESHOLD) {
+                    currentSignatureSize = idealSize;
+                    optimizePassIncluded = true;
+                    continue; // Retry with optimized size
+                }
+            }
+
             const timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
 
             return {
@@ -266,11 +296,14 @@ export async function timestampPdfWithLTV(
         signatureFieldName,
         maxSize,
         signatureSize,
+
         enableLTV = true,
+        optimizePlaceholder,
+        omitModificationTime,
     } = options;
     const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
-    // DEFAULT_SIGNATURE_SIZE imported from constants
+    // Constants imported from module scope
 
     // For LTV, auto-extend (signatureSize = 0) is not fully supported because:
     // 1. We need the exact token for DSS embedding
@@ -291,77 +324,93 @@ export async function timestampPdfWithLTV(
         );
     }
 
-    // Step 1: Prepare the PDF with a signature placeholder
-    const prepared = await preparePdfForTimestamp(pdf, {
-        reason,
-        location,
-        contactInfo,
-        signatureFieldName,
-        signatureSize: effectiveSignatureSize,
-    });
+    let optimizePassIncluded = false;
+    // Loop for optimization/retries
+    for (;;) {
+        // Step 1: Prepare the PDF with a signature placeholder
+        const prepared = await preparePdfForTimestamp(pdf, {
+            reason,
+            location,
+            contactInfo,
+            signatureFieldName,
+            signatureSize: effectiveSignatureSize,
+            omitModificationTime,
+        });
 
-    // Step 2: Extract the bytes to be hashed (covered by ByteRange)
-    const bytesToHash = extractBytesToHash(prepared);
+        // Step 2: Extract the bytes to be hashed (covered by ByteRange)
+        const bytesToHash = extractBytesToHash(prepared);
 
-    // Step 3: Create and send timestamp request
-    const tsRequest = await createTimestampRequest(bytesToHash, {
-        ...tsa,
-        hashAlgorithm,
-    });
+        // Step 3: Create and send timestamp request
+        const tsRequest = await createTimestampRequest(bytesToHash, {
+            ...tsa,
+            hashAlgorithm,
+        });
 
-    const tsResponseBytes = await sendTimestampRequest(tsRequest, tsa);
+        const tsResponseBytes = await sendTimestampRequest(tsRequest, tsa);
 
-    // Step 4: Parse the timestamp response
-    const tsResponse = parseTimestampResponse(tsResponseBytes);
+        // Step 4: Parse the timestamp response
+        const tsResponse = parseTimestampResponse(tsResponseBytes);
 
-    // Check for errors
-    if (
-        tsResponse.status !== TSAStatus.GRANTED &&
-        tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
-    ) {
-        const statusMessages: Record<number, string> = {
-            [TSAStatus.REJECTION]: "Request rejected",
-            [TSAStatus.WAITING]: "Request pending (try again later)",
-            [TSAStatus.REVOCATION_WARNING]: "Revocation warning",
-            [TSAStatus.REVOCATION_NOTIFICATION]: "Certificate revoked",
-        };
+        // Check for errors
+        if (
+            tsResponse.status !== TSAStatus.GRANTED &&
+            tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
+        ) {
+            const statusMessages: Record<number, string> = {
+                [TSAStatus.REJECTION]: "Request rejected",
+                [TSAStatus.WAITING]: "Request pending (try again later)",
+                [TSAStatus.REVOCATION_WARNING]: "Revocation warning",
+                [TSAStatus.REVOCATION_NOTIFICATION]: "Certificate revoked",
+            };
 
-        throw new TimestampError(
-            TimestampErrorCode.TSA_ERROR,
-            `TSA error: ${statusMessages[tsResponse.status] ?? `Unknown status ${tsResponse.status.toString()}`} ` +
-                (tsResponse.statusString ? ` - ${tsResponse.statusString} ` : "")
-        );
-    }
+            throw new TimestampError(
+                TimestampErrorCode.TSA_ERROR,
+                `TSA error: ${statusMessages[tsResponse.status] ?? `Unknown status ${tsResponse.status.toString()}`} ` +
+                    (tsResponse.statusString ? ` - ${tsResponse.statusString} ` : "")
+            );
+        }
 
-    if (!tsResponse.token || !tsResponse.info) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "TSA response missing timestamp token"
-        );
-    }
+        if (!tsResponse.token || !tsResponse.info) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "TSA response missing timestamp token"
+            );
+        }
+        // OPTIMIZATION: Shrink placeholder if token is much smaller
+        if (optimizePlaceholder && !optimizePassIncluded) {
+            const idealSize = calculateOptimizedSignatureSize(tsResponse.token.length);
 
-    // Step 5: Embed the timestamp token in the PDF
-    const timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
+            // Only optimize if we save significant space
+            if (effectiveSignatureSize > idealSize + SIGNATURE_SIZE_OPTIMIZE_THRESHOLD) {
+                effectiveSignatureSize = idealSize;
+                optimizePassIncluded = true;
+                continue; // Retry with optimized size
+            }
+        }
 
-    // If LTV is disabled, return without DSS
-    if (!enableLTV) {
+        // Step 5: Embed the timestamp token in the PDF
+        const timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
+
+        // If LTV is disabled, return without DSS
+        if (!enableLTV) {
+            return {
+                pdf: timestampedPdf,
+                timestamp: tsResponse.info,
+            };
+        }
+
+        // Step 6: Extract LTV data from the token we just received
+        const ltvData = extractLTVData(tsResponse.token);
+
+        // Step 7: Add DSS (Document Security Store) to the PDF
+        const pdfWithDSS = await addDSS(timestampedPdf, ltvData);
+
         return {
-            pdf: timestampedPdf,
+            pdf: pdfWithDSS,
             timestamp: tsResponse.info,
+            ltvData,
         };
-    }
-
-    // Step 6: Extract LTV data from the token we just received
-    const ltvData = extractLTVData(tsResponse.token);
-
-    // Step 7: Add DSS (Document Security Store) to the PDF
-    const pdfWithDSS = await addDSS(timestampedPdf, ltvData);
-
-    return {
-        pdf: pdfWithDSS,
-        timestamp: tsResponse.info,
-        ltvData,
-    };
+    } // End of loop
 }
 
 /**

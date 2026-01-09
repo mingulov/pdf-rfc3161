@@ -7,6 +7,7 @@ import {
     PDFNumber,
     PDFString,
     PDFRef,
+    PDFObject,
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 
@@ -40,6 +41,8 @@ export interface PrepareOptions {
     contactInfo?: string;
     /** Optional name for the signature field (default: "Timestamp") */
     signatureFieldName?: string;
+    /** Whether to omit the modification time (/M) from the signature dictionary */
+    omitModificationTime?: boolean;
 }
 
 /**
@@ -117,22 +120,42 @@ export async function preparePdfForTimestamp(
     // Phase 2: Reload and prepare for incremental signature append
     const sigPdfDoc = await PDFDocument.load(basePdfBytes, { updateMetadata: false });
 
+    // WORKAROUND: pdf-lib-incremental-save doesn't correctly track objects from
+    // the input PDF in some cases (e.g. object streams). We need to find the
+    // true largest object number by scanning all xref sections.
+    const sigContext = sigPdfDoc.context;
+    const pdfString = new TextDecoder("latin1").decode(pdfBytes);
+    const objMatches = pdfString.matchAll(/(\d+)\s+\d+\s+obj/g);
+    let maxObjNum = sigContext.largestObjectNumber;
+    for (const match of objMatches) {
+        const objNum = parseInt(match[1] ?? "0", 10);
+        if (objNum > maxObjNum) {
+            maxObjNum = objNum;
+        }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+    (sigContext as any).largestObjectNumber = maxObjNum;
+
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();
 
     // Re-add the signature dictionary and field to the reloaded document
     // Note: We need to re-create everything since object refs changed on reload
-    const sigContext = sigPdfDoc.context;
 
     // Create new signature dictionary
-    const newSigDict = sigContext.obj({
+    const sigDictFields: Record<string, PDFObject> = {
         Type: PDFName.of("Sig"),
         Filter: PDFName.of("Adobe.PPKLite"),
         SubFilter: PDFName.of("ETSI.RFC3161"),
         Contents: PDFHexString.of(placeholderHex),
         ByteRange: PDFArray.withContext(sigContext),
-        M: PDFString.of(formatPdfDate(new Date())),
-    });
+    };
+
+    if (!options.omitModificationTime) {
+        sigDictFields.M = PDFString.of(formatPdfDate(new Date()));
+    }
+
+    const newSigDict = sigContext.obj(sigDictFields);
 
     // Fill ByteRange with placeholders.
     // Use 12-digit numbers to reserve enough space for the final ByteRange string.
