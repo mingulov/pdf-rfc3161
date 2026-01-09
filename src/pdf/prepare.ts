@@ -359,7 +359,7 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         0,
         contentsHexStart - 1,
         contentsHexEnd + 1,
-        pdfBytes.length - (contentsHexEnd + 1)
+        pdfBytes.length - (contentsHexEnd + 1),
     ];
 
     // Update ByteRange in the PDF with correct values

@@ -4,7 +4,6 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
     timestampPdf,
-    timestampPdfWithLTV,
     extractTimestamps,
     verifyTimestamp,
     KNOWN_TSA_URLS,
@@ -106,17 +105,10 @@ program
                     signatureFieldName: options.name,
                     optimizePlaceholder: options.optimize,
                     omitModificationTime: options.omitM,
+                    enableLTV: options.ltv,
                 };
 
-                let result;
-                if (options.ltv) {
-                    result = await timestampPdfWithLTV({
-                        ...timestampOptions,
-                        enableLTV: true,
-                    });
-                } else {
-                    result = await timestampPdf(timestampOptions);
-                }
+                const result = await timestampPdf(timestampOptions);
 
                 // Write output
                 await writeFile(outputFile, result.pdf);

@@ -67,6 +67,20 @@ const result = await timestampPdf({
 });
 ```
 
+### LTV (Long-Term Validation)
+
+Enable LTV to embed certificate chains. This allows timestamp validation even after the TSA certificates expire:
+
+```typescript
+import { timestampPdf } from 'pdf-rfc3161';
+
+const result = await timestampPdf({
+  pdf: pdfBytes,
+  tsa: { url: 'http://timestamp.digicert.com' },
+  enableLTV: true,
+});
+```
+
 ### Multiple Timestamps
 
 Add timestamps from multiple Time Stamping Authorities for redundancy:
@@ -80,23 +94,10 @@ const result = await timestampPdfMultiple({
     { url: KNOWN_TSA_URLS.DIGICERT },
     { url: KNOWN_TSA_URLS.SECTIGO },
   ],
+  enableLTV: true, // Optional: enable LTV for all timestamps
 });
 
 console.log(`Added ${result.timestamps.length} timestamps`);
-```
-
-### LTV (Long-Term Validation)
-
-Enable LTV to embed certificate chains. This allows timestamp validation even after the TSA certificates expire:
-
-```typescript
-import { timestampPdfWithLTV } from 'pdf-rfc3161';
-
-const result = await timestampPdfWithLTV({
-  pdf: pdfBytes,
-  tsa: { url: 'http://timestamp.digicert.com' },
-  enableLTV: true,
-});
 ```
 
 ### Extract Timestamps
@@ -131,6 +132,7 @@ export default {
     const result = await timestampPdf({
       pdf: pdfBytes,
       tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+      enableLTV: true, // Recommended for production
     });
 
     return new Response(result.pdf, {
@@ -159,29 +161,28 @@ Options:
 | `tsa.timeout` | `number` | No | Request timeout in milliseconds (default: 30000) |
 | `tsa.retry` | `number` | No | Retry attempts for network errors (default: 3) |
 | `tsa.retryDelay` | `number` | No | Base retry delay in ms (default: 1000) |
+| `enableLTV` | `boolean` | No | Enable Long-Term Validation by embedding certificate chain (default: false) |
+| `fetchOCSP` | `boolean` | No | Fetch OCSP responses for LTV (default: false) |
 | `maxSize` | `number` | No | Maximum PDF size in bytes (default: 250MB) |
 | `signatureSize` | `number` | No | Size reserved for timestamp token (default: 8192). Set to `0` for automatic sizing. |
 | `signatureFieldName` | `string` | No | Custom field name (default: "Timestamp") |
 | `reason` | `string` | No | Reason for timestamping |
 | `location` | `string` | No | Location metadata |
 | `contactInfo` | `string` | No | Contact information |
+| `omitModificationTime` | `boolean` | No | Omit the modification time (/M) from signature dictionary |
+| `optimizePlaceholder` | `boolean` | No | Optimize signature size by making specific request (default: false) |
 
-Returns a `TimestampResult` with the timestamped PDF and timestamp information.
+Returns a `TimestampResult` with the timestamped PDF, timestamp information, and optional `ltvData`.
+
+**Note on `signatureSize: 0` with LTV:** When using LTV, automatic signature sizing (setting `signatureSize: 0`) does not perform retry logic. Instead, it uses a generous default size (16KB) to accommodate the timestamp token. Ideally, if you encounter "token larger than placeholder" errors with LTV, specify a larger `signatureSize` value manually.
 
 ### `timestampPdfMultiple(options)`
 
-Adds timestamps from multiple TSAs. Takes a `tsaList` array instead of a single `tsa` configuration.
+Adds timestamps from multiple TSAs using the unified `timestampPdf` logic. Takes a `tsaList` array. Supports `enableLTV` and `fetchOCSP` options which are applied to all timestamps.
 
 ### `timestampPdfWithLTV(options)`
 
-Timestamps with LTV support. Set `enableLTV: true` to embed certificate chains.
-
-**Note on `signatureSize: 0` with LTV:** When using LTV, automatic signature sizing (setting `signatureSize: 0`) does not perform retry logic. Instead, it uses a generous default size (16KB) because:
-- LTV requires the exact timestamp token for DSS embedding
-- Retrying the TSA request would return a different token (different serial number and time)
-- The embedded LTV data must correspond to the embedded token
-
-If you encounter "token larger than placeholder" errors with LTV, specify a larger `signatureSize` value manually.
+**Deprecated**: Use `timestampPdf` with `enableLTV: true` instead. Kept for backward compatibility.
 
 ### `extractTimestamps(pdfBytes)`
 

@@ -1,5 +1,5 @@
 const { PDFDocument } = require('pdf-lib-incremental-save');
-const { timestampPdf, timestampPdfWithLTV, KNOWN_TSA_URLS } = require('../dist/index.cjs');
+const { timestampPdf, KNOWN_TSA_URLS } = require('../dist/index.cjs');
 const fs = require('fs');
 const path = require('path');
 
@@ -26,18 +26,18 @@ async function generateCheckFiles() {
     });
     fs.writeFileSync(path.join(outputDir, 'final-test-no-ltv.pdf'), resNoLTV.pdf);
 
-    // 2. LTV Timestamp
+    // 2. LTV Timestamp (using unified API)
     console.log('Generating LTV timestamp...');
-    const resLTV = await timestampPdfWithLTV({
+    const resLTV = await timestampPdf({
         pdf: pdfBytes,
         tsa: { url: KNOWN_TSA_URLS.DIGICERT },
         enableLTV: true,
     });
     fs.writeFileSync(path.join(outputDir, 'final-test-ltv.pdf'), resLTV.pdf);
 
-    // 3. LTV Disabled (Regression check)
+    // 3. LTV Disabled (Regression check - same as non-LTV)
     console.log('Generating LTV disabled timestamp...');
-    const resLTVDisabled = await timestampPdfWithLTV({
+    const resLTVDisabled = await timestampPdf({
         pdf: pdfBytes,
         tsa: { url: KNOWN_TSA_URLS.DIGICERT },
         enableLTV: false,
@@ -55,7 +55,7 @@ async function generateCheckFiles() {
 
     // 5. Optimized LTV
     console.log('Generating Optimized LTV timestamp...');
-    const resLTVOptimized = await timestampPdfWithLTV({
+    const resLTVOptimized = await timestampPdf({
         pdf: pdfBytes,
         tsa: { url: KNOWN_TSA_URLS.DIGICERT },
         enableLTV: true,

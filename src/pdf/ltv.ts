@@ -173,7 +173,31 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
     const dssRef = context.register(dssDict);
     pdfDoc.catalog.set(PDFName.of("DSS"), dssRef);
 
-    // Mark the catalog as modified so DSS is included in incremental save
+    // Mark all new objects for incremental save
+    // The DSS ref must be marked
+    snapshot.markRefForSave(dssRef);
+
+    // Mark all certificate/CRL/OCSP stream refs for save
+    for (let i = 0; i < certsArray.size(); i++) {
+        const ref = certsArray.get(i);
+        if (ref instanceof PDFRef) {
+            snapshot.markRefForSave(ref);
+        }
+    }
+    for (let i = 0; i < crlsArray.size(); i++) {
+        const ref = crlsArray.get(i);
+        if (ref instanceof PDFRef) {
+            snapshot.markRefForSave(ref);
+        }
+    }
+    for (let i = 0; i < ocspsArray.size(); i++) {
+        const ref = ocspsArray.get(i);
+        if (ref instanceof PDFRef) {
+            snapshot.markRefForSave(ref);
+        }
+    }
+
+    // Mark the catalog as modified so DSS entry is included
     const catalogRef = context.trailerInfo.Root;
     if (catalogRef instanceof PDFRef) {
         snapshot.markRefForSave(catalogRef);
