@@ -143,12 +143,13 @@ export async function preparePdfForTimestamp(
     // Note: We need to re-create everything since object refs changed on reload
 
     // Create new signature dictionary
+    // Note: ByteRange comes BEFORE Contents to match Adobe's expected format
     const sigDictFields: Record<string, PDFObject> = {
         Type: PDFName.of("Sig"),
         Filter: PDFName.of("Adobe.PPKLite"),
         SubFilter: PDFName.of("ETSI.RFC3161"),
-        Contents: PDFHexString.of(placeholderHex),
         ByteRange: PDFArray.withContext(sigContext),
+        Contents: PDFHexString.of(placeholderHex),
     };
 
     if (!options.omitModificationTime) {
@@ -349,18 +350,19 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
     const contentsHexEnd = contentsHexStart + placeholderHexLength;
 
     // Calculate final ByteRange values
-    // ByteRange = [start1, length1, start2, length2]
-    // Range 1: from 0 to just before hex content
-    // Range 2: from after hex content to end
+    // Range 1: Start of file up to (but excluding) the '<' bracket
+    // Range 2: After the '>' bracket to the end of the file
+    // Hole: The entire hex string <HEX...HEX> including both brackets
+    // This follows standard PDF signature practice for Adobe compatibility.
+
     const finalByteRange: [number, number, number, number] = [
         0,
-        contentsHexStart,
-        contentsHexEnd,
-        pdfBytes.length - contentsHexEnd,
+        contentsHexStart - 1,
+        contentsHexEnd + 1,
+        pdfBytes.length - (contentsHexEnd + 1)
     ];
 
     // Update ByteRange in the PDF with correct values
-    // We pass the dict position so updateByteRange doesn't have to search widely
     const updatedPdf = updateByteRange(pdfBytes, finalByteRange, dictStartAbsolute);
 
     return {
