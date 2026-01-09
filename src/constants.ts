@@ -67,3 +67,16 @@ export const TSA_CONTENT_TYPE = {
  * Default: 250MB
  */
 export const MAX_PDF_SIZE = 250 * 1024 * 1024;
+
+/**
+ * Default reserved size for the timestamp signature placeholder.
+ * 8192 bytes (8KB) is typically sufficient for most DocTimeStamp tokens.
+ */
+export const DEFAULT_SIGNATURE_SIZE = 8192;
+
+/**
+ * Default reserved size for LTV (Long-Term Validation) signatures.
+ * LTV requires significantly more space to embed certificate chains and revocation data (DSS).
+ * We allocate double the default size to be safe.
+ */
+export const LTV_SIGNATURE_SIZE = DEFAULT_SIGNATURE_SIZE * 2;

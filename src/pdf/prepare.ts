@@ -8,6 +8,7 @@ import {
     PDFString,
     PDFRef,
 } from "pdf-lib-incremental-save";
+import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 
 /**
  * Result of preparing a PDF for timestamping.
@@ -67,6 +68,28 @@ const BYTERANGE_SEARCH_BACKWARD = 100;
 const BYTERANGE_SEARCH_FORWARD = 100 * 1024;
 
 /**
+ * Formats a Date object as a PDF date string (PDF spec §7.9.4).
+ * Format: D:YYYYMMDDHHmmSS+HH'mm' or D:YYYYMMDDHHmmSS-HH'mm'
+ * Uses UTC to avoid timezone ambiguity.
+ *
+ * @param date - The date to format
+ * @returns PDF-formatted date string
+ */
+function formatPdfDate(date: Date): string {
+    const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+
+    const year = date.getUTCFullYear();
+    const month = pad(date.getUTCMonth() + 1);
+    const day = pad(date.getUTCDate());
+    const hours = pad(date.getUTCHours());
+    const minutes = pad(date.getUTCMinutes());
+    const seconds = pad(date.getUTCSeconds());
+
+    // Use Z (UTC) timezone, represented as +00'00' in PDF format
+    return `D:${String(year)}${month}${day}${hours}${minutes}${seconds}+00'00'`;
+}
+
+/**
  * Prepares a PDF for DocTimeStamp by adding a signature field with placeholder content.
  * Returns the prepared PDF and information needed to calculate the final ByteRange.
  *
@@ -78,7 +101,7 @@ export async function preparePdfForTimestamp(
     pdfBytes: Uint8Array,
     options: PrepareOptions = {}
 ): Promise<PreparedPDF> {
-    const signatureSize = options.signatureSize ?? 8192;
+    const signatureSize = options.signatureSize ?? DEFAULT_SIGNATURE_SIZE;
     const placeholderHexLength = signatureSize * 2; // Each byte = 2 hex chars
     const signatureFieldName = options.signatureFieldName ?? "Timestamp";
 
@@ -108,7 +131,7 @@ export async function preparePdfForTimestamp(
         SubFilter: PDFName.of("ETSI.RFC3161"),
         Contents: PDFHexString.of(placeholderHex),
         ByteRange: PDFArray.withContext(sigContext),
-        M: PDFString.of(new Date().toISOString()),
+        M: PDFString.of(formatPdfDate(new Date())),
     });
 
     // Fill ByteRange with placeholders.
