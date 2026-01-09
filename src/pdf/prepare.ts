@@ -125,7 +125,7 @@ export async function preparePdfForTimestamp(
     // true largest object number by scanning all xref sections.
     const sigContext = sigPdfDoc.context;
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d+)\s+\d+\s+obj/g);
+    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
     let maxObjNum = sigContext.largestObjectNumber;
     for (const match of objMatches) {
         const objNum = parseInt(match[1] ?? "0", 10);
