@@ -39,7 +39,7 @@ const pdfBytes = await readFile('document.pdf');
 const result = await timestampPdf({
   pdf: new Uint8Array(pdfBytes),
   tsa: {
-    url: KNOWN_TSA_URLS.DIGICERT,
+    url: KNOWN_TSA_URLS.FREETSA,
   },
 });
 
@@ -58,7 +58,7 @@ import { timestampPdf } from 'pdf-rfc3161';
 const result = await timestampPdf({
   pdf: pdfBytes,
   tsa: {
-    url: 'http://timestamp.digicert.com',
+    url: 'https://freetsa.org/tsr',
     hashAlgorithm: 'SHA-256', // or SHA-384, SHA-512
     timeout: 30000,
   },
@@ -76,7 +76,7 @@ import { timestampPdf } from 'pdf-rfc3161';
 
 const result = await timestampPdf({
   pdf: pdfBytes,
-  tsa: { url: 'http://timestamp.digicert.com' },
+  tsa: { url: 'https://freetsa.org/tsr' },
   enableLTV: true,
 });
 ```
@@ -91,8 +91,8 @@ import { timestampPdfMultiple, KNOWN_TSA_URLS } from 'pdf-rfc3161';
 const result = await timestampPdfMultiple({
   pdf: pdfBytes,
   tsaList: [
-    { url: KNOWN_TSA_URLS.DIGICERT },
-    { url: KNOWN_TSA_URLS.SECTIGO },
+    { url: KNOWN_TSA_URLS.FREETSA },
+    { url: 'https://another-tsa-server' }, // Example of another TSA server
   ],
   enableLTV: true, // Optional: enable LTV for all timestamps
 });
@@ -131,7 +131,7 @@ export default {
 
     const result = await timestampPdf({
       pdf: pdfBytes,
-      tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+      tsa: { url: KNOWN_TSA_URLS.FREETSA },
       enableLTV: true, // Recommended for production
     });
 
@@ -193,28 +193,10 @@ Returns an array of `ExtractedTimestamp` objects from the PDF.
 Verifies the cryptographic signature of an extracted timestamp.
 
 ## TSA Servers
-  
-The library includes a list of known TSA server URLs for convenience. These are standard endpoints provided by organizations like DigiCert, Sectigo, etc.
 
-**Note:** Usage of these services is governed by the respective providers' Terms of Service. Be sure to check them before using in production.
+The library include `KNOWN_TSA_URLS` - a list of some known TSA URLs for convenience (e.g., FreeTSA: `https://freetsa.org/tsr`).
 
-```typescript
-import { KNOWN_TSA_URLS } from 'pdf-rfc3161';
-
-// Commercial TSA servers (certificates typically chain to well-known root CAs)
-KNOWN_TSA_URLS.DIGICERT     // http://timestamp.digicert.com
-KNOWN_TSA_URLS.SECTIGO      // https://timestamp.sectigo.com
-KNOWN_TSA_URLS.COMODO       // http://timestamp.comodoca.com
-KNOWN_TSA_URLS.GLOBALSIGN   // http://timestamp.globalsign.com/tsa/r6advanced1
-KNOWN_TSA_URLS.ENTRUST      // http://timestamp.entrust.net/TSS/RFC3161sha2TS
-KNOWN_TSA_URLS.QUOVADIS     // http://ts.quovadisglobal.com/eu
-
-// Free/Community TSA servers
-KNOWN_TSA_URLS.FREETSA      // https://freetsa.org/tsr
-KNOWN_TSA_URLS.CODEGIC      // http://pki.codegic.com/codegic-service/timestamp (Testing only)
-```
-
-Most commercial TSAs listed above use certificates that chain to root CAs included in standard system trust stores, making validation straightforward. FreeTSA uses a self-signed CA which requires manual installation of their root certificate.
+**Note:** Usage of these services is governed by the respective providers' Terms and Conditions. Be sure to check them before using in production. FreeTSA uses a self-signed CA which requires manual installation of their root certificate.
 
 
 ## Error Handling
