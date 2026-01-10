@@ -1,6 +1,5 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
-import { OID_TO_HASH_ALGORITHM } from "../constants.js";
 import {
     TimestampError,
     TimestampErrorCode,
@@ -8,6 +7,8 @@ import {
     type ParsedTimestampResponse,
     type TimestampInfo,
 } from "../types.js";
+import { bytesToHex } from "../utils.js";
+import { extractTimestampInfoFromContentInfo } from "../pki/pki-utils.js";
 
 /**
  * Parses an RFC 3161 TimeStampResp from DER-encoded bytes.
@@ -68,7 +69,7 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
         const tokenBytes = new Uint8Array(tokenSchema.toBER(false));
 
         // Parse TSTInfo from the token to extract timestamp details
-        const info = extractTimestampInfo(tsResp.timeStampToken);
+        const info = extractTimestampInfoFromContentInfo(tsResp.timeStampToken);
 
         return {
             status,
@@ -86,92 +87,6 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
             error
         );
     }
-}
-
-/**
- * Extracts TimestampInfo from a ContentInfo containing SignedData with TSTInfo.
- */
-function extractTimestampInfo(contentInfo: pkijs.ContentInfo): TimestampInfo {
-    // The token is a ContentInfo containing SignedData
-    const signedData = new pkijs.SignedData({
-        schema: contentInfo.content,
-    });
-
-    // The encapsulated content is the TSTInfo
-    if (!signedData.encapContentInfo.eContent) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "SignedData does not contain encapsulated TSTInfo"
-        );
-    }
-
-    // Extract the TSTInfo OctetString content
-    const eContentAsn1 = signedData.encapContentInfo.eContent;
-    let tstInfoBytes: ArrayBuffer;
-
-    if (eContentAsn1 instanceof asn1js.OctetString) {
-        tstInfoBytes = new Uint8Array(eContentAsn1.valueBlock.valueHexView).slice().buffer;
-    } else {
-        // It might be wrapped in a constructed OCTET STRING
-        // Cast to access the internal structure - asn1js uses dynamic types
-        const eContentAny = eContentAsn1 as { valueBlock?: { value?: asn1js.OctetString[] } };
-        if (
-            eContentAny.valueBlock?.value &&
-            eContentAny.valueBlock.value[0] instanceof asn1js.OctetString
-        ) {
-            tstInfoBytes = new Uint8Array(
-                eContentAny.valueBlock.value[0].valueBlock.valueHexView
-            ).slice().buffer;
-        } else {
-            throw new TimestampError(
-                TimestampErrorCode.INVALID_RESPONSE,
-                "Cannot extract TSTInfo from encapsulated content"
-            );
-        }
-    }
-
-    // Parse TSTInfo
-    const tstInfoAsn1 = asn1js.fromBER(tstInfoBytes);
-    if (tstInfoAsn1.offset === -1) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "Failed to parse TSTInfo ASN.1"
-        );
-    }
-
-    const tstInfo = new pkijs.TSTInfo({ schema: tstInfoAsn1.result });
-
-    // Extract message imprint details
-    const hashAlgorithmOID = tstInfo.messageImprint.hashAlgorithm.algorithmId;
-    const hashAlgorithm = OID_TO_HASH_ALGORITHM[hashAlgorithmOID] ?? hashAlgorithmOID;
-    const messageDigest = bufferToHex(tstInfo.messageImprint.hashedMessage.valueBlock.valueHexView);
-
-    // Extract serial number
-    const serialNumber = bufferToHex(tstInfo.serialNumber.valueBlock.valueHexView);
-
-    // Check if certificate was included
-    const hasCertificate =
-        signedData.certificates !== undefined && signedData.certificates.length > 0;
-
-    return {
-        genTime: tstInfo.genTime,
-        policy: tstInfo.policy,
-        serialNumber,
-        hashAlgorithm,
-        hashAlgorithmOID,
-        messageDigest,
-        hasCertificate,
-    };
-}
-
-/**
- * Converts an ArrayBuffer or Uint8Array to a hex string.
- */
-function bufferToHex(buffer: ArrayBuffer | Uint8Array): string {
-    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-    return Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
 }
 
 /**
@@ -193,7 +108,7 @@ export function validateTimestampResponse(
     }
 
     // Verify the message digest matches
-    const expectedDigest = bufferToHex(originalHash);
+    const expectedDigest = bytesToHex(originalHash);
     if (responseInfo.messageDigest.toLowerCase() !== expectedDigest.toLowerCase()) {
         return false;
     }

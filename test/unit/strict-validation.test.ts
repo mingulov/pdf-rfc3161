@@ -91,6 +91,7 @@ describe("Strict PAdES Validation", () => {
             fieldName: "Test",
             coversWholeDocument: true,
             verified: false,
+            byteRange: [0, 0, 0, 0],
         };
 
         const result = await verifyTimestamp(timestamp, { strictESSValidation: true });
@@ -118,6 +119,7 @@ describe("Strict PAdES Validation", () => {
             fieldName: "Test",
             coversWholeDocument: true,
             verified: true,
+            byteRange: [0, 0, 0, 0],
         };
 
         const result = await verifyTimestamp(timestamp, { strictESSValidation: true });
@@ -145,6 +147,7 @@ describe("Strict PAdES Validation", () => {
             fieldName: "Test",
             coversWholeDocument: true,
             verified: true,
+            byteRange: [0, 0, 0, 0],
         };
 
         // Default is false

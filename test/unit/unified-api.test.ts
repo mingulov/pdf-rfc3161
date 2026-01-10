@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
-import { timestampPdf, timestampPdfWithLTV } from "../../src/index.js";
+import { timestampPdf } from "../../src/index.js";
 
 /**
- * Tests for the unified API that supports both LTV and non-LTV modes.
+ * Tests for the unified API.
  */
 describe("Unified API Tests", () => {
     // Mock TSA URL - tests use mocked responses
@@ -16,10 +16,8 @@ describe("Unified API Tests", () => {
                 pdf: new Uint8Array([]),
                 tsa: { url: mockTsaUrl },
                 enableLTV: true,
-                fetchOCSP: false,
             };
             expect(options.enableLTV).toBe(true);
-            expect(options.fetchOCSP).toBe(false);
         });
 
         it("should return ltvData when enableLTV is true", async () => {
@@ -28,32 +26,10 @@ describe("Unified API Tests", () => {
             doc.addPage([100, 100]);
             await doc.save();
 
-            // This test would need a real TSA or mock - just verify types compile
             // Result type should include optional ltvData
             type ResultCheck = Awaited<ReturnType<typeof timestampPdf>>;
             const hasLtvData: keyof ResultCheck = "ltvData";
             expect(hasLtvData).toBe("ltvData");
-        });
-    });
-
-    describe("timestampPdfWithLTV deprecation", () => {
-        it("should still be exported for backward compatibility", () => {
-            // Verify the deprecated function is still exported
-            // eslint-disable-next-line @typescript-eslint/no-deprecated
-            expect(typeof timestampPdfWithLTV).toBe("function");
-        });
-
-        it("should have same return type as timestampPdf with enableLTV", () => {
-            // Type check: both functions should return compatible types
-            // eslint-disable-next-line @typescript-eslint/no-deprecated
-            type LTVResult = Awaited<ReturnType<typeof timestampPdfWithLTV>>;
-            type UnifiedResult = Awaited<ReturnType<typeof timestampPdf>>;
-
-            // Both should have pdf, timestamp, and optional ltvData
-            const ltvResultKeys: (keyof LTVResult)[] = ["pdf", "timestamp", "ltvData"];
-            const unifiedResultKeys: (keyof UnifiedResult)[] = ["pdf", "timestamp", "ltvData"];
-
-            expect(ltvResultKeys).toEqual(unifiedResultKeys);
         });
     });
 });
