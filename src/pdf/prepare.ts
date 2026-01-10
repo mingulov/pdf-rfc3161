@@ -71,7 +71,7 @@ const BYTERANGE_SEARCH_BACKWARD = 100;
 const BYTERANGE_SEARCH_FORWARD = 100 * 1024;
 
 /**
- * Formats a Date object as a PDF date string (PDF spec §7.9.4).
+ * Formats a Date object as a PDF date string (PDF spec Section 7.9.4).
  * Format: D:YYYYMMDDHHmmSS+HH'mm' or D:YYYYMMDDHHmmSS-HH'mm'
  * Uses UTC to avoid timezone ambiguity.
  *
