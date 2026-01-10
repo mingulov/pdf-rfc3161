@@ -1,6 +1,6 @@
 {
   "name": "pdf-rfc3161",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
   "keywords": [
     "pdf",
