@@ -29,4 +29,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Browser support via Web Crypto API
 - TypeScript type definitions
 - Low-level API for advanced usage
-- Public TSA server constants
+- Known TSA server constants
