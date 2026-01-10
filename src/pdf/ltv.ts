@@ -105,9 +105,8 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
     const context = sigPdfDoc.context;
 
     // WORKAROUND: correctly track objects from previous incremental updates.
-    // ALWAYS scan the actual bytes to find the true largest object number,
-    // because even if pdfDoc is passed, the bytes may have been modified
-    // (e.g., by embedTimestampToken) since pdfDoc was created.
+    // Scan bytes to ensure largestObjectNumber matches the actual file content,
+    // preserving the object numbering sequence for incremental updates.
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
     const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
     let maxObjNum = context.largestObjectNumber;
