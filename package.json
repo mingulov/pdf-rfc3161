@@ -1,84 +1,86 @@
 {
-  "name": "pdf-rfc3161",
-  "version": "0.1.2",
-  "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
-  "keywords": [
-    "pdf",
-    "timestamp",
-    "rfc3161",
-    "tsa",
-    "pades",
-    "ltv",
-    "digital-signature",
-    "cloudflare-workers",
-    "edge"
-  ],
-  "homepage": "https://github.com/mingulov/pdf-rfc3161#readme",
-  "bugs": {
-    "url": "https://github.com/mingulov/pdf-rfc3161/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/mingulov/pdf-rfc3161.git"
-  },
-  "license": "MIT",
-  "author": "Denis Mingulov <denis@mingulov.com>",
-  "type": "module",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+    "name": "pdf-rfc3161",
+    "version": "0.1.2",
+    "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
+    "keywords": [
+        "pdf",
+        "timestamp",
+        "rfc3161",
+        "tsa",
+        "pades",
+        "ltv",
+        "digital-signature",
+        "cloudflare-workers",
+        "edge"
+    ],
+    "homepage": "https://github.com/mingulov/pdf-rfc3161#readme",
+    "bugs": {
+        "url": "https://github.com/mingulov/pdf-rfc3161/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/mingulov/pdf-rfc3161.git"
+    },
+    "license": "MIT",
+    "author": "Denis Mingulov <denis@mingulov.com>",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "bin": {
+        "pdf-rfc3161": "dist/cli.cjs"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "cli": "tsx src/cli/cli.ts",
+        "demo:dev": "cd demo && npm run dev",
+        "demo:build": "cd demo && npm run build",
+        "dev": "tsup --watch",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage",
+        "test:integration": "vitest run test/integration",
+        "test:robustness": "npx tsx scripts/test-robustness.ts",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint src test",
+        "lint:fix": "eslint src test --fix",
+        "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+        "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+        "security:audit": "npm audit --audit-level=moderate",
+        "security:sbom": "npx -y @cyclonedx/cdxgen -o sbom.json",
+        "prepublishOnly": "npm run build"
+    },
+    "dependencies": {
+        "asn1js": "^3.0.5",
+        "pdf-lib-incremental-save": "^1.17.4",
+        "pkijs": "^3.2.4",
+        "pvutils": "^1.1.3"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.17.0",
+        "@types/node": "^20.11.0",
+        "@vitest/coverage-v8": "^4.0.16",
+        "commander": "^14.0.2",
+        "eslint": "^9.17.0",
+        "eslint-plugin-security": "^3.0.1",
+        "prettier": "^3.4.2",
+        "tsup": "^8.0.1",
+        "tsx": "^4.21.0",
+        "typescript": "^5.3.3",
+        "typescript-eslint": "^8.19.0",
+        "vitest": "^4.0.16"
+    },
+    "engines": {
+        "node": ">=18.0.0"
     }
-  },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "bin": {
-    "pdf-rfc3161": "dist/cli.cjs"
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "tsup",
-    "cli": "tsx src/cli/cli.ts",
-    "dev": "tsup --watch",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "test:integration": "vitest run test/integration",
-    "test:robustness": "npx tsx scripts/test-robustness.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src test",
-    "lint:fix": "eslint src test --fix",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
-    "security:audit": "npm audit --audit-level=moderate",
-    "security:sbom": "npx -y @cyclonedx/cdxgen -o sbom.json",
-    "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "asn1js": "^3.0.5",
-    "pdf-lib-incremental-save": "^1.17.4",
-    "pkijs": "^3.2.4",
-    "pvutils": "^1.1.3"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.17.0",
-    "@types/node": "^20.11.0",
-    "@vitest/coverage-v8": "^4.0.16",
-    "commander": "^14.0.2",
-    "eslint": "^9.17.0",
-    "eslint-plugin-security": "^3.0.1",
-    "prettier": "^3.4.2",
-    "tsup": "^8.0.1",
-    "tsx": "^4.21.0",
-    "typescript": "^5.3.3",
-    "typescript-eslint": "^8.19.0",
-    "vitest": "^4.0.16"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  }
 }

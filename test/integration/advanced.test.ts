@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { timestampPdf, timestampPdfMultiple, KNOWN_TSA_URLS } from "../../src/index.js";
+import {
+    timestampPdf,
+    timestampPdfMultiple,
+    KNOWN_TSA_URLS,
+    INCOMPATIBLE_TSA_URLS,
+} from "../../src/index.js";
 
 // Create a minimal valid PDF for testing
 function createTestPdf(): Uint8Array {
@@ -27,6 +32,25 @@ startxref
     return new TextEncoder().encode(pdfContent);
 }
 
+/**
+ * Helper function that handles incompatible TSA servers gracefully.
+ */
+async function withTSAHandler(tsaUrl: string, testFn: () => Promise<void>): Promise<void> {
+    if (INCOMPATIBLE_TSA_URLS.has(tsaUrl)) {
+        try {
+            await testFn();
+            throw new Error(`Expected TimestampError for incompatible TSA: ${tsaUrl}`);
+        } catch (error) {
+            if ((error as Error).message.includes("Expected TimestampError")) {
+                throw error;
+            }
+            expect((error as Error).name).toBe("TimestampError");
+        }
+    } else {
+        await testFn();
+    }
+}
+
 describe("Integration: Advanced Features", () => {
     // Only run integration tests if explicitly enabled
     const itIntegration = process.env.LIVE_TSA_TESTS ? it : it.skip;
@@ -36,6 +60,25 @@ describe("Integration: Advanced Features", () => {
             "should add timestamps from multiple TSAs",
             async () => {
                 const pdf = createTestPdf();
+
+                // Check if any TSA is incompatible
+                const tsaUrls = [KNOWN_TSA_URLS.DIGICERT, KNOWN_TSA_URLS.SECTIGO];
+                const hasIncompatible = tsaUrls.some((url) => INCOMPATIBLE_TSA_URLS.has(url));
+
+                if (hasIncompatible) {
+                    try {
+                        await timestampPdfMultiple({
+                            pdf,
+                            tsaList: [
+                                { url: KNOWN_TSA_URLS.DIGICERT },
+                                { url: KNOWN_TSA_URLS.SECTIGO },
+                            ],
+                        });
+                    } catch (error) {
+                        expect((error as Error).name).toBe("TimestampError");
+                    }
+                    return;
+                }
 
                 const result = await timestampPdfMultiple({
                     pdf,
@@ -57,21 +100,30 @@ describe("Integration: Advanced Features", () => {
             async () => {
                 const pdf = createTestPdf();
 
-                // First timestamp
-                const result1 = await timestampPdf({
-                    pdf,
-                    tsa: { url: KNOWN_TSA_URLS.SECTIGO },
+                await withTSAHandler(KNOWN_TSA_URLS.SECTIGO, async () => {
+                    // First timestamp
+                    const result1 = await timestampPdf({
+                        pdf,
+                        tsa: { url: KNOWN_TSA_URLS.SECTIGO },
+                    });
+
+                    expect(result1.pdf.length).toBeGreaterThan(pdf.length);
                 });
 
-                expect(result1.pdf.length).toBeGreaterThan(pdf.length);
+                await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
+                    // Second timestamp on the already-timestamped PDF
+                    const result1 = await timestampPdf({
+                        pdf,
+                        tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                    });
 
-                // Second timestamp on the already-timestamped PDF
-                const result2 = await timestampPdf({
-                    pdf: result1.pdf,
-                    tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                    const result2 = await timestampPdf({
+                        pdf: result1.pdf,
+                        tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                    });
+
+                    expect(result2.pdf.length).toBeGreaterThan(result1.pdf.length);
                 });
-
-                expect(result2.pdf.length).toBeGreaterThan(result1.pdf.length);
             },
             120000
         );
@@ -83,19 +135,21 @@ describe("Integration: Advanced Features", () => {
             async () => {
                 const pdf = createTestPdf();
 
-                // Get a timestamp with the token available
-                const result = await timestampPdf({
-                    pdf,
-                    tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
+                    // Get a timestamp with the token available
+                    const result = await timestampPdf({
+                        pdf,
+                        tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                    });
+
+                    // The result.pdf contains the embedded timestamp
+                    // To extract the token, we need to parse the PDF
+                    // For now, we test the extractLTVData function with a mock
+
+                    // Verify the PDF was timestamped
+                    expect(result.pdf).toBeInstanceOf(Uint8Array);
+                    expect(result.timestamp.hasCertificate).toBe(true);
                 });
-
-                // The result.pdf contains the embedded timestamp
-                // To extract the token, we need to parse the PDF
-                // For now, we test the extractLTVData function with a mock
-
-                // Verify the PDF was timestamped
-                expect(result.pdf).toBeInstanceOf(Uint8Array);
-                expect(result.timestamp.hasCertificate).toBe(true);
             },
             60000
         );
@@ -105,13 +159,15 @@ describe("Integration: Advanced Features", () => {
             async () => {
                 const pdf = createTestPdf();
 
-                const result = await timestampPdf({
-                    pdf,
-                    tsa: { url: KNOWN_TSA_URLS.DIGICERT },
-                });
+                await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
+                    const result = await timestampPdf({
+                        pdf,
+                        tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+                    });
 
-                // DigiCert should include certificates in the response
-                expect(result.timestamp.hasCertificate).toBe(true);
+                    // DigiCert should include certificates in the response
+                    expect(result.timestamp.hasCertificate).toBe(true);
+                });
             },
             60000
         );

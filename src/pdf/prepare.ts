@@ -104,7 +104,10 @@ export async function preparePdfForTimestamp(
     pdfBytes: Uint8Array,
     options: PrepareOptions = {}
 ): Promise<PreparedPDF> {
-    const signatureSize = options.signatureSize ?? DEFAULT_SIGNATURE_SIZE;
+    const signatureSize =
+        options.signatureSize && options.signatureSize > 0
+            ? options.signatureSize
+            : DEFAULT_SIGNATURE_SIZE;
     const placeholderHexLength = signatureSize * 2; // Each byte = 2 hex chars
     const signatureFieldName = options.signatureFieldName ?? "Timestamp";
 
@@ -127,8 +130,13 @@ export async function preparePdfForTimestamp(
             maxObjNum = objNum;
         }
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-    (sigContext as any).largestObjectNumber = maxObjNum;
+    // internal property of PDFContext needed for the workaround
+    interface PDFContextInternal {
+        largestObjectNumber: number;
+    }
+
+    const sigContextInternal = sigContext as unknown as PDFContextInternal;
+    sigContextInternal.largestObjectNumber = maxObjNum;
 
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();

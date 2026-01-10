@@ -80,3 +80,10 @@ export const DEFAULT_SIGNATURE_SIZE = 8192;
  * We allocate double the default size to be safe.
  */
 export const LTV_SIGNATURE_SIZE = DEFAULT_SIGNATURE_SIZE * 2;
+
+/**
+ * Constants for signature sizing and optimization.
+ */
+export const SIGNATURE_SIZE_OPTIMIZE_ADD = 32;
+export const SIGNATURE_SIZE_OPTIMIZE_ALIGN = 32;
+export const MAX_SIGNATURE_SIZE = 65536;

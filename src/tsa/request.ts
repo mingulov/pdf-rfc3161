@@ -26,7 +26,7 @@ if (typeof globalThis.crypto === "undefined") {
  */
 export async function createTimestampRequest(
     data: Uint8Array,
-    config: TSAConfig
+    config: Omit<TSAConfig, "url"> & { url?: string }
 ): Promise<Uint8Array> {
     const hashAlgorithm: HashAlgorithm = config.hashAlgorithm ?? "SHA-256";
 

@@ -41,6 +41,10 @@ export interface ExtractedTimestamp {
     certificates?: pkijs.Certificate[];
     /** Byte range [offset1, length1, offset2, length2] */
     byteRange: [number, number, number, number];
+    /** Number of CRLs found in the signature */
+    crlCount?: number;
+    /** Number of OCSP responses found in the signature */
+    ocspCount?: number;
 }
 
 /**
@@ -225,6 +229,9 @@ export async function verifyTimestamp(
         // Best fix: Temporarily set type to id-data so pkijs verifies the hash of eContent content.
         signedData.encapContentInfo.eContentType = "1.2.840.113549.1.7.1"; // id-data
 
+        const crlCount = signedData.crls?.length ?? 0;
+        const ocspCount = (signedData as unknown as { ocsps?: unknown[] }).ocsps?.length ?? 0;
+
         // Verify the SignedData structure (cryptographic integrity)
         const verifyResult = await signedData.verify({
             signer: 0,
@@ -297,6 +304,8 @@ export async function verifyTimestamp(
             ...timestamp,
             verified: true,
             certificates,
+            crlCount,
+            ocspCount,
         };
     } catch (error) {
         return {

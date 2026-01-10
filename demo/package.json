@@ -1,0 +1,35 @@
+{
+    "name": "pdf-rfc3161-demo",
+    "private": true,
+    "version": "0.0.1",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc -b && vite build",
+        "lint": "eslint .",
+        "preview": "vite preview",
+        "test:a11y": "node test/a11y.mjs"
+    },
+    "dependencies": {
+        "lucide-react": "^0.562.0",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.39.1",
+        "@playwright/test": "^1.57.0",
+        "@types/node": "^24.10.6",
+        "@types/react": "^19.2.5",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^5.1.1",
+        "eslint": "^9.39.1",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "eslint-plugin-react-refresh": "^0.4.24",
+        "globals": "^16.5.0",
+        "playwright": "^1.57.0",
+        "terser": "^5.44.1",
+        "typescript": "~5.9.3",
+        "typescript-eslint": "^8.46.4",
+        "vite": "^7.2.4"
+    }
+}

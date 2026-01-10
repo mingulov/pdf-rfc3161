@@ -1,102 +1,109 @@
-import { DEFAULT_TSA_CONFIG, MAX_PDF_SIZE, DEFAULT_SIGNATURE_SIZE } from "./constants.js";
+import {
+    DEFAULT_TSA_CONFIG,
+    MAX_PDF_SIZE,
+    DEFAULT_SIGNATURE_SIZE,
+    LTV_SIGNATURE_SIZE,
+} from "./constants.js";
+
 import {
     createTimestampRequest,
     sendTimestampRequest,
     parseTimestampResponse,
 } from "./tsa/index.js";
+
+import { preparePdfForTimestamp, type PreparedPDF } from "./pdf/prepare.js";
+
+import { embedTimestampToken, extractBytesToHash } from "./pdf/embed.js";
+
+import { extractTimestamps, verifyTimestamp, type ExtractedTimestamp } from "./pdf/extract.js";
+
 import {
-    preparePdfForTimestamp,
-    embedTimestampToken,
-    extractBytesToHash,
     extractLTVData,
+    completeLTVData,
     addDSS,
-} from "./pdf/index.js";
+    addVRI,
+    getDSSInfo,
+    type LTVData,
+} from "./pdf/ltv.js";
+
+import { timestampPdfLTA, type ArchiveTimestampOptions } from "./pdf/archive.js";
+
+import { TimestampSession } from "./session.js";
+
 import {
+    type TimestampOptions,
+    type TimestampResult,
+    type TimestampInfo,
+    type VerificationOptions,
+    type HashAlgorithm,
+    type TSAConfig,
+    type ParsedTimestampResponse,
     TimestampError,
     TimestampErrorCode,
     TSAStatus,
-    type TimestampOptions,
-    type TimestampResult,
-    type TSAConfig,
-    type HashAlgorithm,
-    type TimestampInfo,
 } from "./types.js";
 
-// Re-export types and errors for consumers
+import { TrustStore, SimpleTrustStore } from "./pki/trust-store.js";
+
+export { KNOWN_TSA_URLS } from "./tsa-urls.js";
+
 export {
-    TimestampError,
-    TimestampErrorCode,
-    TSAStatus,
-    type TimestampOptions,
-    type TimestampResult,
-    type TSAConfig,
-    type HashAlgorithm,
-    type TimestampInfo,
-};
+    TSA_COMPATIBILITY,
+    INCOMPATIBLE_TSA_URLS,
+    isTSACompatible,
+    getTSACompatibility,
+    type TSACompatibilityInfo,
+} from "./tsa-compatibility.js";
+
+// Re-export standard APIs and Types
+export { TimestampError, TimestampErrorCode, TSAStatus };
+
+export type { TimestampOptions, TimestampResult, TSAConfig, HashAlgorithm, TimestampInfo };
 
 // Re-export lower-level APIs for advanced usage
+export { createTimestampRequest, sendTimestampRequest, parseTimestampResponse };
+
+export { preparePdfForTimestamp, embedTimestampToken, extractBytesToHash };
+
+export type { PreparedPDF };
+
+// Re-export LTV and verification functions
 export {
-    createTimestampRequest,
-    sendTimestampRequest,
-    parseTimestampResponse,
-} from "./tsa/index.js";
+    extractLTVData,
+    completeLTVData,
+    addDSS,
+    addVRI,
+    getDSSInfo,
+    timestampPdfLTA,
+    SimpleTrustStore,
+};
+export { extractTimestamps, verifyTimestamp };
 
+export type { LTVData, ExtractedTimestamp, ArchiveTimestampOptions, TrustStore };
+
+// Re-export constants
+export { DEFAULT_TSA_CONFIG, MAX_PDF_SIZE, DEFAULT_SIGNATURE_SIZE, LTV_SIGNATURE_SIZE };
+
+// Re-export new Session API
+export { TimestampSession, type TimestampSessionOptions } from "./session.js";
+
+// Re-export verify types that were missed
+export type { VerificationOptions, ParsedTimestampResponse };
+
+// Re-export Circuit Breaker utilities
 export {
-    preparePdfForTimestamp,
-    embedTimestampToken,
-    extractBytesToHash,
-    type PreparedPDF,
-    type PrepareOptions,
-} from "./pdf/index.js";
-
-// Re-export LTV functions
-export { extractLTVData, addDSS, type LTVData } from "./pdf/index.js";
-
-// Re-export extraction and verification functions
-export { extractTimestamps, verifyTimestamp, type ExtractedTimestamp } from "./pdf/index.js";
-
-// Constants for signature sizing and optimization
-const MAX_AUTO_EXTEND_ATTEMPTS = 2;
-const MAX_SIGNATURE_SIZE = 65536; // 64KB max to prevent runaway growth
-const SIGNATURE_SIZE_MARGIN = 1.2; // 20% extra margin for safety retries
-const SIGNATURE_SIZE_OPTIMIZE_ADD = 32; // Fixed addition for optimization
-const SIGNATURE_SIZE_OPTIMIZE_ALIGN = 32; // Alignment for optimization
-const SIGNATURE_SIZE_OPTIMIZE_THRESHOLD = 512; // Minimum saving to trigger optimization
+    CircuitBreaker,
+    CircuitBreakerMap,
+    CircuitState,
+    CircuitBreakerError,
+} from "./utils/circuit-breaker.js";
 
 /**
- * Calculates an optimized signature size for a given token length.
- * Adds a small margin and aligns to a boundary to minimize padding.
- */
-function calculateOptimizedSignatureSize(tokenLength: number): number {
-    return (
-        Math.ceil((tokenLength + SIGNATURE_SIZE_OPTIMIZE_ADD) / SIGNATURE_SIZE_OPTIMIZE_ALIGN) *
-        SIGNATURE_SIZE_OPTIMIZE_ALIGN
-    );
-}
-
-// Re-export TrustStore for consumers
-export { type TrustStore, SimpleTrustStore } from "./pki/trust-store.js";
-
-/**
- * Adds an RFC 3161 document timestamp to a PDF.
- *
- * This is the main entry point for the library. It handles the complete
- * timestamping workflow:
- * 1. Prepares the PDF with a signature placeholder
- * 2. Calculates the hash of the document
- * 3. Sends a timestamp request to the TSA
- * 4. Embeds the timestamp token in the PDF
- *
- * @param options - Timestamping options
- * @returns Promise resolving to the timestamped PDF and timestamp info
- * @throws {TimestampError} If timestamping fails
+ * Main API function to timestamp a PDF with LTV support
  */
 export async function timestampPdf(options: TimestampOptions): Promise<TimestampResult> {
-    const { pdf, tsa, reason, location, contactInfo, signatureFieldName, maxSize, signatureSize } =
-        options;
-    const hashAlgorithm = tsa.hashAlgorithm ?? DEFAULT_TSA_CONFIG.hashAlgorithm;
+    const { pdf, tsa, enableLTV = false, signatureSize, optimizePlaceholder, maxSize } = options;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
-    const autoExtend = signatureSize === 0;
 
     if (pdf.length > maxPdfSize) {
         throw new TimestampError(
@@ -105,195 +112,123 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
         );
     }
 
-    // Determine initial signature size (0 means auto, use default)
-    let currentSignatureSize =
-        signatureSize && signatureSize > 0 ? signatureSize : DEFAULT_SIGNATURE_SIZE;
-    let autoExtendAttempts = 0;
-    let optimizePassIncluded = false;
+    // Config for retries
+    let currentSignatureSize = signatureSize ?? 0; // 0 will use default in Session
+    const MAX_RETRIES = 3;
 
-    // Auto-extend loop: try embedding, grow placeholder if needed (max 2 retries)
-    for (;;) {
-        // Step 1: Prepare the PDF with a signature placeholder
-        const prepared = await preparePdfForTimestamp(pdf, {
-            reason,
-            location,
-            contactInfo,
-            signatureFieldName,
-            signatureSize: currentSignatureSize,
-            omitModificationTime: options.omitModificationTime,
-        });
-
-        // Step 2: Extract the bytes to be hashed (covered by ByteRange)
-        const bytesToHash = extractBytesToHash(prepared);
-
-        // Step 3: Create and send timestamp request
-        const tsRequest = await createTimestampRequest(bytesToHash, {
-            ...tsa,
-            hashAlgorithm,
-        });
-
-        const tsResponseBytes = await sendTimestampRequest(tsRequest, tsa);
-
-        // Step 4: Parse the timestamp response
-        const tsResponse = parseTimestampResponse(tsResponseBytes);
-
-        // Check for errors
-        if (
-            tsResponse.status !== TSAStatus.GRANTED &&
-            tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
-        ) {
-            const statusMessages: Record<number, string> = {
-                [TSAStatus.REJECTION]: "Request rejected",
-                [TSAStatus.WAITING]: "Request pending (try again later)",
-                [TSAStatus.REVOCATION_WARNING]: "Revocation warning",
-                [TSAStatus.REVOCATION_NOTIFICATION]: "Certificate revoked",
-            };
-
-            throw new TimestampError(
-                TimestampErrorCode.TSA_ERROR,
-                `TSA error: ${statusMessages[tsResponse.status] ?? `Unknown status ${tsResponse.status.toString()}`}` +
-                    (tsResponse.statusString ? ` - ${tsResponse.statusString}` : "")
-            );
-        }
-
-        if (!tsResponse.token || !tsResponse.info) {
-            throw new TimestampError(
-                TimestampErrorCode.INVALID_RESPONSE,
-                "TSA response missing timestamp token"
-            );
-        }
-
-        // Step 5: Try to embed the timestamp token in the PDF
+    // Optimization phase: if enabled, determine optimal size first
+    if (optimizePlaceholder) {
         try {
-            // OPTIMIZATION: Shrink placeholder if token is much smaller
-            if (options.optimizePlaceholder && !optimizePassIncluded) {
-                const idealSize = calculateOptimizedSignatureSize(tsResponse.token.length);
+            // Use session to handle defaults and preparation
+            const session = new TimestampSession(pdf, {
+                enableLTV,
+                prepareOptions: { ...options, signatureSize: currentSignatureSize },
+                hashAlgorithm: tsa.hashAlgorithm,
+            });
 
-                // Only optimize if we save significant space
-                if (currentSignatureSize > idealSize + SIGNATURE_SIZE_OPTIMIZE_THRESHOLD) {
-                    currentSignatureSize = idealSize;
-                    optimizePassIncluded = true;
-                    continue; // Retry with optimized size
-                }
+            const request = await session.createTimestampRequest();
+
+            // We need to fetch a real token to know its size
+            const responseBytes = await sendTimestampRequest(request, tsa);
+            const tsResponse = parseTimestampResponse(responseBytes);
+
+            if (tsResponse.token) {
+                const optimalSize = TimestampSession.calculateOptimalSize(tsResponse.token);
+                session.setSignatureSize(optimalSize);
+                currentSignatureSize = optimalSize;
+            }
+        } catch {
+            // If optimization probe fails, proceed with standard logic
+        }
+    }
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        let tsResponse: ParsedTimestampResponse | undefined;
+        try {
+            const session = new TimestampSession(pdf, {
+                enableLTV: false, // We handle LTV manually to capture the data for the return value
+                prepareOptions: {
+                    ...options,
+                    signatureSize: currentSignatureSize,
+                },
+                hashAlgorithm: tsa.hashAlgorithm,
+            });
+
+            const request = await session.createTimestampRequest();
+            const responseBytes = await sendTimestampRequest(request, tsa);
+            tsResponse = parseTimestampResponse(responseBytes);
+
+            if (
+                tsResponse.status !== TSAStatus.GRANTED &&
+                tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
+            ) {
+                throw new TimestampError(
+                    TimestampErrorCode.TSA_ERROR,
+                    `TSA server returned error: ${tsResponse.statusString ?? "Unknown error"} (Status: ${String(tsResponse.status)})`
+                );
             }
 
-            let timestampedPdf = embedTimestampToken(prepared, tsResponse.token);
-            let ltvData: TimestampResult["ltvData"] = undefined;
+            if (!tsResponse.token) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    "No timestamp token in response"
+                );
+            }
 
-            // Step 6: Add LTV data if requested
-            if (options.enableLTV) {
-                const extractedLTV = extractLTVData(tsResponse.token);
-                // Note: The PDF bytes have been modified (timestamp embedded),
-                // so we pass the new bytes to addDSS which will load fresh.
-                timestampedPdf = await addDSS(timestampedPdf, extractedLTV);
-                ltvData = extractedLTV;
+            let finalPdf = await session.embedTimestampToken(tsResponse.token);
+
+            let ltvData: TimestampResult["ltvData"] = undefined;
+            if (enableLTV) {
+                const extracted = extractLTVData(tsResponse.token);
+                // Fetch missing OCSP data to make LTV complete
+                const completed = await completeLTVData(extracted);
+
+                ltvData = {
+                    certificates: completed.data.certificates,
+                    crls: completed.data.crls,
+                    ocspResponses: completed.data.ocspResponses,
+                };
+
+                finalPdf = await addDSS(finalPdf, completed.data);
+            }
+
+            if (!tsResponse.info) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    "No timestamp information in response"
+                );
             }
 
             return {
-                pdf: timestampedPdf,
+                pdf: finalPdf,
                 timestamp: tsResponse.info,
                 ltvData,
             };
-        } catch (embedError) {
-            // Check if it's a size error and auto-extend is enabled
-            if (
-                autoExtend &&
-                embedError instanceof Error &&
-                embedError.message.includes("larger than placeholder")
-            ) {
-                autoExtendAttempts++;
-
-                // Check if we've exceeded max attempts
-                if (autoExtendAttempts >= MAX_AUTO_EXTEND_ATTEMPTS) {
-                    throw new TimestampError(
-                        TimestampErrorCode.PDF_ERROR,
-                        `Timestamp token still too large after ${MAX_AUTO_EXTEND_ATTEMPTS.toString()} auto-extend attempts. ` +
-                            `Try specifying a larger signatureSize manually.`
-                    );
+        } catch (error) {
+            // Check if error is due to placeholder size
+            if (error instanceof Error && error.message.includes("Increase signatureSize")) {
+                if (attempt < MAX_RETRIES) {
+                    // Use the optimal size for the token we just received if available
+                    if (tsResponse?.token) {
+                        currentSignatureSize = TimestampSession.calculateOptimalSize(
+                            tsResponse.token
+                        );
+                    } else {
+                        // Fallback to doubling if we don't have a token (shouldn't happen with this error)
+                        const currentVal = currentSignatureSize || DEFAULT_SIGNATURE_SIZE;
+                        currentSignatureSize = currentVal * 2;
+                    }
+                    continue;
                 }
-
-                // Calculate required size with safety margin
-                const requiredSize = Math.ceil(tsResponse.token.length * SIGNATURE_SIZE_MARGIN);
-
-                if (requiredSize > MAX_SIGNATURE_SIZE) {
-                    throw new TimestampError(
-                        TimestampErrorCode.PDF_ERROR,
-                        `Timestamp token too large (${tsResponse.token.length.toString()} bytes). Maximum supported is ${(MAX_SIGNATURE_SIZE / 2).toString()} bytes.`
-                    );
-                }
-
-                // Grow the signature size and retry
-                currentSignatureSize = requiredSize;
-                continue; // Retry with larger placeholder
             }
-
-            // Re-throw if not auto-extendable or different error
-            throw embedError;
+            throw error;
         }
     }
-}
-
-/**
- * Adds an additional timestamp to an already timestamped PDF.
- *
- * This is useful for:
- * - Adding timestamps from multiple TSAs for redundancy
- * - Re-timestamping a document before a TSA's certificate expires
- *
- * @example
- * ```typescript
- * import { timestampPdf, addTimestamp, KNOWN_TSA_URLS } from 'pdf-rfc3161';
- *
- * // First timestamp
- * const result1 = await timestampPdf({
- *   pdf: pdfBytes,
- *   tsa: { url: KNOWN_TSA_URLS.DIGICERT },
- * });
- *
- * // Add second timestamp from different TSA
- * const result2 = await addTimestamp({
- *   pdf: result1.pdf,
- *   tsa: { url: KNOWN_TSA_URLS.SECTIGO },
- * });
- *
- * console.log('PDF now has 2 timestamps');
- * ```
- *
- * @param options - Timestamping options
- * @returns Promise resolving to the PDF with an additional timestamp
- */
-export async function addTimestamp(options: TimestampOptions): Promise<TimestampResult> {
-    // For adding an additional timestamp, we simply call timestampPdf
-    // The PDF preparation will create a new signature field
-    // while preserving the existing one(s)
-    return timestampPdf(options);
+    throw new TimestampError(TimestampErrorCode.PDF_ERROR, "Failed to timestamp after retries");
 }
 
 /**
  * Timestamps a PDF with multiple TSAs in sequence.
- *
- * This provides redundancy by having multiple independent timestamps.
- * If one TSA's certificate is revoked or expires, the other timestamps
- * remain valid.
- *
- * @example
- * ```typescript
- * import { timestampPdfMultiple, KNOWN_TSA_URLS } from 'pdf-rfc3161';
- *
- * const result = await timestampPdfMultiple({
- *   pdf: pdfBytes,
- *   tsaList: [
- *     { url: KNOWN_TSA_URLS.DIGICERT },
- *     { url: KNOWN_TSA_URLS.SECTIGO },
- *   ],
- *   enableLTV: true, // Optional: enable LTV for all timestamps
- * });
- *
- * console.log('Added', result.timestamps.length, 'timestamps');
- * ```
- *
- * @param options - Options with multiple TSA configurations
- * @returns Promise resolving to PDF with multiple timestamps
  */
 export async function timestampPdfMultiple(options: {
     pdf: Uint8Array;
@@ -301,7 +236,6 @@ export async function timestampPdfMultiple(options: {
     reason?: string;
     location?: string;
     contactInfo?: string;
-    /** Enable LTV for all timestamps */
     enableLTV?: boolean;
 }): Promise<{
     pdf: Uint8Array;
@@ -321,7 +255,6 @@ export async function timestampPdfMultiple(options: {
     const timestamps: TimestampInfo[] = [];
     const ltvDataList: TimestampResult["ltvData"][] = [];
 
-    // Apply timestamps sequentially
     for (const tsa of tsaList) {
         const result = await timestampPdf({
             pdf: currentPdf,
@@ -345,8 +278,3 @@ export async function timestampPdfMultiple(options: {
         ltvData: ltvDataList.length > 0 ? ltvDataList : undefined,
     };
 }
-
-// Re-export KNOWN_TSA_URLS from its dedicated module
-export { KNOWN_TSA_URLS } from "./tsa-urls.js";
-
-export { timestampPdfLTA, type ArchiveTimestampOptions } from "./pdf/archive.js";

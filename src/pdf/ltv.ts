@@ -1,7 +1,38 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
-import { PDFDocument, PDFName, PDFArray, PDFRawStream, PDFRef } from "pdf-lib-incremental-save";
+import {
+    PDFDocument,
+    PDFName,
+    PDFArray,
+    PDFRawStream,
+    PDFRef,
+    PDFDict,
+} from "pdf-lib-incremental-save";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import {
+    getOCSPURI,
+    createOCSPRequest,
+    parseOCSPResponse,
+    CertificateStatus,
+} from "../pki/ocsp-utils.js";
+import { fetchOCSPResponse } from "../pki/ocsp-client.js";
+import { getCRLDistributionPoints } from "../pki/crl-utils.js";
+import { fetchCRL } from "../pki/crl-client.js";
+import { bytesToHex } from "../utils.js";
+
+// SHA-1 hash function for VRI key (required by PDF 1.x / PAdES standards)
+async function sha1Hex(data: Uint8Array): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest("SHA-1", data.slice().buffer);
+    const hashArray = new Uint8Array(hashBuffer);
+    return bytesToHex(hashArray);
+}
+
+// SHA-256 hash function for VRI key (PDF 2.0 extension level 8)
+async function sha256Hex(data: Uint8Array): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data.slice().buffer);
+    const hashArray = new Uint8Array(hashBuffer);
+    return bytesToHex(hashArray);
+}
 
 /**
  * LTV (Long-Term Validation) data extracted from a timestamp token
@@ -116,8 +147,13 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
             maxObjNum = objNum;
         }
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-    (context as any).largestObjectNumber = maxObjNum;
+    // internal property of PDFContext needed for the workaround
+    interface PDFContextInternal {
+        largestObjectNumber: number;
+    }
+
+    const contextInternal = context as unknown as PDFContextInternal;
+    contextInternal.largestObjectNumber = maxObjNum;
 
     // Create arrays for certificates, CRLs, and OCSP responses
     const certsArray = PDFArray.withContext(context);
@@ -205,4 +241,310 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
     finalBytes.set(incrementalBytes, pdfBytes.length);
 
     return finalBytes;
+}
+
+/**
+ * Adds a VRI (Validation-Related Information) dictionary for a signature.
+ * Required by PAdES-LTA for full compliance.
+ *
+ * The VRI dictionary associates validation material (certificates, CRLs, OCSP responses)
+ * with a specific signature by using the signing certificate's hash as the key.
+ *
+ * PAdES-LTA Compliance (ETSI EN 319 142-1):
+ * - VRI dictionaries must be added to the catalog under "VRI" key
+ * - Each VRI entry is named by the SHA-1 hash of the signing certificate
+ * - VRI contains: Cert (reference), CRLs (array), OCSPs (array)
+ *
+ * Hash Algorithm Note:
+ * SHA-1 is used for the VRI key as required by PDF 1.x / PAdES standards.
+ * This is NOT a security-critical hash - SHA-1 here is used purely as a unique
+ * identifier/key to look up the correct validation material for a signature.
+ *
+ * The actual cryptographic security comes from:
+ * 1. The timestamp signature itself (uses SHA-256/384/512 as configured)
+ * 2. The embedded certificate chain
+ * 3. The OCSP/CRL revocation data
+ *
+ * PDF 2.0 (PDF 1.7 with extension level 8) allows SHA-256 for VRI keys.
+ * For maximum compatibility with PDF 1.x viewers and tools, SHA-1 is used.
+ * Future versions could add an optional hashAlgorithm parameter for PDF 2.0.
+ *
+ * @param pdfBytes - The PDF bytes
+ * @param signingCert - The signing certificate (for VRI key generation)
+ * @param revocationData - CRLs and OCSP responses to associate with this signature
+ * @returns PDF bytes with VRI added incrementally
+ */
+export async function addVRI(
+    pdfBytes: Uint8Array,
+    signingCert: pkijs.Certificate,
+    revocationData: { crls?: Uint8Array[]; ocspResponses?: Uint8Array[] },
+    options?: { hashAlgorithm?: "SHA-1" | "SHA-256" } // TODO: PDF 2.0 support
+): Promise<Uint8Array> {
+    // Load the PDF
+    const sigPdfDoc = await PDFDocument.load(pdfBytes, {
+        updateMetadata: false,
+    });
+
+    // Take snapshot BEFORE modifications for incremental save
+    const snapshot = sigPdfDoc.takeSnapshot();
+    const context = sigPdfDoc.context;
+
+    // Compute VRI key: hash of the signing certificate
+    // Note: PDF 1.x / PAdES requires SHA-1 for VRI key names.
+    // SHA-1 here is used as a lookup key, not for cryptographic security.
+    const certDer = signingCert.toSchema().toBER(false);
+    const algorithm = options?.hashAlgorithm ?? "SHA-1";
+    const vriKey =
+        algorithm === "SHA-256"
+            ? await sha256Hex(new Uint8Array(certDer))
+            : await sha1Hex(new Uint8Array(certDer));
+
+    // Create arrays for CRLs and OCSPs
+    const crlsArray = PDFArray.withContext(context);
+    const ocspsArray = PDFArray.withContext(context);
+
+    // Add CRL references
+    if (revocationData.crls) {
+        for (const crlData of revocationData.crls) {
+            const streamDict = context.obj({});
+            const crlStream = PDFRawStream.of(streamDict, crlData);
+            const crlRef = context.register(crlStream);
+            crlsArray.push(crlRef);
+        }
+    }
+
+    // Add OCSP response references
+    if (revocationData.ocspResponses) {
+        for (const ocspData of revocationData.ocspResponses) {
+            const streamDict = context.obj({});
+            const ocspStream = PDFRawStream.of(streamDict, ocspData);
+            const ocspRef = context.register(ocspStream);
+            ocspsArray.push(ocspRef);
+        }
+    }
+
+    // Create the VRI entry dictionary for this signature
+    const vriEntry = context.obj({});
+
+    // Add reference to the signing certificate itself
+    // Note: In a full implementation, we'd find the exact ref to the cert in Certs array
+    // For now, we create a reference that validators can follow
+
+    if (revocationData.crls && revocationData.crls.length > 0) {
+        vriEntry.set(PDFName.of("CRL"), crlsArray);
+    }
+
+    if (revocationData.ocspResponses && revocationData.ocspResponses.length > 0) {
+        vriEntry.set(PDFName.of("OCSP"), ocspsArray);
+    }
+
+    // Get or create the VRI dictionary in the catalog
+    const vriDict: PDFDict = sigPdfDoc.catalog.has(PDFName.of("VRI"))
+        ? (sigPdfDoc.catalog.lookup(PDFName.of("VRI")) as PDFDict)
+        : (() => {
+              const newVri = context.obj({});
+              const vriRef = context.register(newVri);
+              sigPdfDoc.catalog.set(PDFName.of("VRI"), vriRef);
+              return newVri;
+          })();
+
+    // Add this VRI entry with the certificate hash as key
+    vriDict.set(PDFName.of(vriKey), vriEntry);
+
+    // Mark VRI dict ref for save
+    const catalogRef = context.trailerInfo.Root;
+    if (catalogRef instanceof PDFRef) {
+        snapshot.markRefForSave(catalogRef);
+    }
+
+    // Use incremental save to append VRI without destroying existing signatures
+    const incrementalBytes = await sigPdfDoc.saveIncremental(snapshot);
+
+    // Concatenate original + incremental bytes
+    const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);
+    finalBytes.set(pdfBytes, 0);
+    finalBytes.set(incrementalBytes, pdfBytes.length);
+
+    return finalBytes;
+}
+
+/**
+ * Result of completing LTV data, including any errors encountered
+ */
+export interface CompletedLTVData {
+    /** The enriched LTV data */
+    data: LTVData;
+    /** Any errors encountered during enrichment (for debugging/monitoring) */
+    errors: string[];
+}
+
+/**
+ * Attempts to fetch missing revocation data (OCSP) for the certificates in the LTV data.
+ * This is "best effort" - if network fails or OCSP is unavailable, it returns the original data (or partial).
+ *
+ * @param ltvData - The extracted LTV data (certs, CRLs)
+ * @returns CompletedLTVData with enhanced data and any errors encountered
+ */
+export async function completeLTVData(ltvData: LTVData): Promise<CompletedLTVData> {
+    const enrichedData: LTVData = {
+        certificates: [...ltvData.certificates],
+        crls: [...ltvData.crls],
+        ocspResponses: [...ltvData.ocspResponses],
+    };
+
+    const errors: string[] = [];
+
+    // Deduplication sets to prevent PDF bloat
+    const seenCRLs = new Set<string>(enrichedData.crls.map((c) => bytesToHex(c)));
+    const seenOCSPs = new Set<string>(enrichedData.ocspResponses.map((o) => bytesToHex(o)));
+
+    try {
+        // Parse all certificates to work with them
+        const certs: pkijs.Certificate[] = [];
+        for (const certBytes of enrichedData.certificates) {
+            const asn1 = asn1js.fromBER(certBytes.slice().buffer);
+            if (asn1.offset !== -1) {
+                certs.push(new pkijs.Certificate({ schema: asn1.result }));
+            }
+        }
+
+        // We need at least 2 certs to have an issuer-subject pair (unless self-signed, which don't have OCSP)
+        if (certs.length < 2) {
+            return { data: enrichedData, errors };
+        }
+
+        // Iterate over certs to find their issuers and fetch OCSP
+        // We skip the root (last one usually, or self-signed) effectively because we won't find an issuer for it
+        // that is *different* (or if we do, root OCSP is rare/uncommon).
+        for (const cert of certs) {
+            // Find issuer
+            // Simple check: issuer's subject == cert's issuer
+            // This is O(N^2) but N is small (chain length ~3-4)
+            const issuer = certs.find(
+                (c) =>
+                    c.subject.toString() === cert.issuer.toString() &&
+                    // Basic check to ensure we aren't using the cert as its own issuer (unless self-signed, but then no OCSP usually)
+                    // Serial number check helps avoid self-match for non-root
+                    c.serialNumber.toString() !== cert.serialNumber.toString()
+            );
+
+            if (!issuer) {
+                continue;
+            }
+
+            // Try OCSP first
+            let ocspSuccess = false;
+            const ocspUrl = getOCSPURI(cert);
+            if (ocspUrl) {
+                try {
+                    // Generate Request
+                    const request = await createOCSPRequest(cert, issuer);
+
+                    // Fetch Response
+                    const response = await fetchOCSPResponse(ocspUrl, request);
+
+                    // Validate OCSP response before embedding (best effort)
+                    // If parsing fails, we still embed the response but log a warning
+                    try {
+                        const parsed = parseOCSPResponse(response);
+                        if (parsed.certStatus !== CertificateStatus.GOOD) {
+                            errors.push(
+                                `OCSP indicates certificate is not good (Status: ${CertificateStatus[parsed.certStatus]}), skipping for cert serial: ${cert.serialNumber.valueBlock.toString()}`
+                            );
+                            continue;
+                        }
+                    } catch (parseError) {
+                        // Parse failure - embed anyway but log warning
+                        errors.push(
+                            `Failed to parse OCSP response, embedding anyway: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+                        );
+                    }
+
+                    // Deduplicate OCSP responses
+                    const ocspHash = bytesToHex(response);
+                    if (!seenOCSPs.has(ocspHash)) {
+                        seenOCSPs.add(ocspHash);
+                        enrichedData.ocspResponses.push(response);
+                    }
+                    ocspSuccess = true;
+                } catch (e) {
+                    // OCSP fetch failed - log error and continue to CRL
+                    errors.push(
+                        `Failed to fetch OCSP for certificate (Serial: ${cert.serialNumber.valueBlock.toString()}): ${e instanceof Error ? e.message : String(e)}`
+                    );
+                }
+            }
+
+            // If OCSP failed or wasn't available, try CRL
+            if (!ocspSuccess) {
+                const crlUrls = getCRLDistributionPoints(cert);
+                for (const url of crlUrls) {
+                    try {
+                        const crlBytes = await fetchCRL(url);
+
+                        // Deduplicate CRLs
+                        const crlHash = bytesToHex(crlBytes);
+                        if (!seenCRLs.has(crlHash)) {
+                            seenCRLs.add(crlHash);
+                            enrichedData.crls.push(crlBytes);
+                        }
+                        // If we got one CRL, that's usually enough for this cert (ignoring delta CRLs for now)
+                        break;
+                    } catch (e) {
+                        // CRL fetch failed - try next URL
+                        errors.push(
+                            `Failed to fetch CRL from ${url}: ${e instanceof Error ? e.message : String(e)}`
+                        );
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        // Unexpected error in completeLTVData - log and return partial results
+        errors.push(
+            `Unexpected error completing LTV data: ${e instanceof Error ? e.message : String(e)}`
+        );
+    }
+
+    return { data: enrichedData, errors };
+}
+
+/**
+ * Returns information about the Document Security Store (DSS) in the PDF.
+ * This indicates how many LTV validation objects are embedded in the document structure.
+ *
+ * @param pdfBytes - The PDF bytes
+ * @returns Counts of Certs, CRLs, and OCSPs in the DSS
+ */
+export async function getDSSInfo(
+    pdfBytes: Uint8Array
+): Promise<{ certs: number; crls: number; ocsps: number }> {
+    try {
+        const pdfDoc = await PDFDocument.load(pdfBytes, {
+            updateMetadata: false,
+            ignoreEncryption: true,
+        });
+        const catalog = pdfDoc.catalog;
+
+        const dss = catalog.lookup(PDFName.of("DSS"));
+        if (!dss || !(dss instanceof PDFDict)) {
+            return { certs: 0, crls: 0, ocsps: 0 };
+        }
+
+        const countArray = (key: string): number => {
+            const arr = dss.lookup(PDFName.of(key));
+            if (arr instanceof PDFArray) {
+                return arr.size();
+            }
+            return 0;
+        };
+
+        return {
+            certs: countArray("Certs"),
+            crls: countArray("CRLs"),
+            ocsps: countArray("OCSPs"),
+        };
+    } catch {
+        return { certs: 0, crls: 0, ocsps: 0 };
+    }
 }

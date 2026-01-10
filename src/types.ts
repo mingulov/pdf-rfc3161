@@ -51,16 +51,16 @@ export interface TimestampOptions {
      */
     signatureSize?: number;
     /**
+     * Whether to omit the modification time (/M) from the signature dictionary.
+     * Some users prefer to omit this as the timestamp token already contains the authoritative time.
+     */
+    omitModificationTime?: boolean;
+    /**
      * Whether to optimize the signature placeholder size.
      * If true, may perform an additional TSA request to determine exact token size,
      * reducing file size and padding.
      */
     optimizePlaceholder?: boolean;
-    /**
-     * Whether to omit the modification time (/M) from the signature dictionary.
-     * Some users prefer to omit this as the timestamp token already contains the authoritative time.
-     */
-    omitModificationTime?: boolean;
     /**
      * Enable LTV (Long-Term Validation) by embedding DSS (Document Security Store).
      * This includes certificates, CRLs, and OCSP responses needed for offline validation.

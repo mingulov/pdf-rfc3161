@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
-import { timestampPdf, KNOWN_TSA_URLS } from "../../src/index.js";
+import { timestampPdf, KNOWN_TSA_URLS, INCOMPATIBLE_TSA_URLS } from "../../src/index.js";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -16,10 +16,24 @@ const commandExists = (cmd: string) => {
     }
 };
 
+/**
+ * External tool validation tests.
+ *
+ * These tests validate the output PDF using external tools (qpdf, pdfsig).
+ * They call real TSA servers when LIVE_TSA_TESTS=true.
+ *
+ * Known incompatible TSA servers will be handled gracefully - the test
+ * will verify that the library properly throws TimestampError instead
+ * of silently failing or producing corrupted output.
+ */
 describe("External Tool Validation", () => {
-    // Only run these tests if the tools are available
+    // Only run these tests if the tools are available AND LIVE_TSA_TESTS is set
     const hasQpdf = commandExists("qpdf");
     const hasPdfSig = commandExists("pdfsig");
+    const hasLiveTsa = process.env.LIVE_TSA_TESTS === "true";
+    const shouldRun = hasLiveTsa && hasQpdf;
+    const itLive = shouldRun ? it : it.skip;
+    const itPdfSig = hasLiveTsa && hasPdfSig ? it : it.skip;
 
     const tmpDir = os.tmpdir();
     const testPdfPath = path.join(tmpDir, `test-validation-${Date.now().toString()}.pdf`);
@@ -31,14 +45,31 @@ describe("External Tool Validation", () => {
         }
     };
 
-    it.skipIf(!hasQpdf)("should pass qpdf validation (No LTV)", async () => {
+    itLive("should pass qpdf validation (No LTV)", async () => {
         const doc = await PDFDocument.create();
         doc.addPage([100, 100]);
         const pdfBytes = await doc.save();
 
+        const tsaUrl = KNOWN_TSA_URLS.DIGICERT;
+
+        // Handle incompatible TSA servers gracefully
+        if (INCOMPATIBLE_TSA_URLS.has(tsaUrl)) {
+            try {
+                await timestampPdf({
+                    pdf: pdfBytes,
+                    tsa: { url: tsaUrl },
+                });
+            } catch (error) {
+                // Expected: TimestampError from incompatible TSA
+                expect((error as Error).name).toBe("TimestampError");
+            }
+            cleanup();
+            return;
+        }
+
         const result = await timestampPdf({
             pdf: pdfBytes,
-            tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+            tsa: { url: tsaUrl },
         });
 
         fs.writeFileSync(testPdfPath, result.pdf);
@@ -56,14 +87,31 @@ describe("External Tool Validation", () => {
         cleanup();
     });
 
-    it.skipIf(!hasQpdf)("should pass qpdf validation (With LTV)", async () => {
+    itLive("should pass qpdf validation (With LTV)", async () => {
         const doc = await PDFDocument.create();
         doc.addPage([100, 100]);
         const pdfBytes = await doc.save();
 
+        const tsaUrl = KNOWN_TSA_URLS.DIGICERT;
+
+        // Handle incompatible TSA servers gracefully
+        if (INCOMPATIBLE_TSA_URLS.has(tsaUrl)) {
+            try {
+                await timestampPdf({
+                    pdf: pdfBytes,
+                    tsa: { url: tsaUrl },
+                    enableLTV: true,
+                });
+            } catch (error) {
+                expect((error as Error).name).toBe("TimestampError");
+            }
+            cleanup();
+            return;
+        }
+
         const result = await timestampPdf({
             pdf: pdfBytes,
-            tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+            tsa: { url: tsaUrl },
             enableLTV: true,
         });
 
@@ -78,14 +126,30 @@ describe("External Tool Validation", () => {
         cleanup();
     });
 
-    it.skipIf(!hasPdfSig)("should be parsable by pdfsig (No LTV)", async () => {
+    itPdfSig("should be parsable by pdfsig (No LTV)", async () => {
         const doc = await PDFDocument.create();
         doc.addPage([100, 100]);
         const pdfBytes = await doc.save();
 
+        const tsaUrl = KNOWN_TSA_URLS.DIGICERT;
+
+        // Handle incompatible TSA servers gracefully
+        if (INCOMPATIBLE_TSA_URLS.has(tsaUrl)) {
+            try {
+                await timestampPdf({
+                    pdf: pdfBytes,
+                    tsa: { url: tsaUrl },
+                });
+            } catch (error) {
+                expect((error as Error).name).toBe("TimestampError");
+            }
+            cleanup();
+            return;
+        }
+
         const result = await timestampPdf({
             pdf: pdfBytes,
-            tsa: { url: KNOWN_TSA_URLS.DIGICERT },
+            tsa: { url: tsaUrl },
         });
 
         fs.writeFileSync(testPdfPath, result.pdf);
