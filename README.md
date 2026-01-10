@@ -2,6 +2,17 @@
 
 A pure JavaScript/TypeScript library for adding RFC 3161 trusted timestamps to PDF documents. Works in Node.js, Cloudflare Workers, Deno, and modern browsers without native dependencies.
 
+## About RFC 3161
+
+RFC 3161 defines the Time-Stamp Protocol (TSP). It allows proving that data existed at a specific time by having a trusted third party (Time Stamping Authority) cryptographically sign the hash of the data along with a timestamp.
+
+When embedded in a PDF as a Document Timestamp (DocTimeStamp):
+
+- It proves the document existed at the timestamp time
+- It can be verified by PDF readers like Adobe Acrobat
+- It does not require a signing certificate from the user
+- With LTV, it remains valid even after the TSA certificate expires
+
 ## Features
 
 - RFC 3161 compliant implementation of the Time-Stamp Protocol
@@ -13,6 +24,26 @@ A pure JavaScript/TypeScript library for adding RFC 3161 trusted timestamps to P
 - Browser support via the Web Crypto API
 - Full TypeScript type definitions
 - No native dependencies
+
+## Quick Start
+
+```typescript
+import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
+import { readFile, writeFile } from "fs/promises";
+
+const pdfBytes = await readFile("document.pdf");
+
+const result = await timestampPdf({
+    pdf: new Uint8Array(pdfBytes),
+    tsa: {
+        url: KNOWN_TSA_URLS.FREETSA,
+    },
+});
+
+await writeFile("document-timestamped.pdf", result.pdf);
+
+console.log("Timestamp added at:", result.timestamp.genTime);
+```
 
 ## Installation
 
@@ -28,42 +59,22 @@ yarn add pdf-rfc3161
 pnpm add pdf-rfc3161
 ```
 
-### Quick Start
-
-```typescript
-import { timestampPdf, KNOWN_TSA_URLS } from 'pdf-rfc3161';
-import { readFile, writeFile } from 'fs/promises';
-
-const pdfBytes = await readFile('document.pdf');
-
-const result = await timestampPdf({
-  pdf: new Uint8Array(pdfBytes),
-  tsa: {
-    url: KNOWN_TSA_URLS.FREETSA,
-  },
-});
-
-await writeFile('document-timestamped.pdf', result.pdf);
-
-console.log('Timestamp added at:', result.timestamp.genTime);
-```
-
 ## Usage
 
 ### Basic Timestamping
 
 ```typescript
-import { timestampPdf } from 'pdf-rfc3161';
+import { timestampPdf } from "pdf-rfc3161";
 
 const result = await timestampPdf({
-  pdf: pdfBytes,
-  tsa: {
-    url: 'https://freetsa.org/tsr',
-    hashAlgorithm: 'SHA-256', // or SHA-384, SHA-512
-    timeout: 30000,
-  },
-  reason: 'Document archival',
-  location: 'Server',
+    pdf: pdfBytes,
+    tsa: {
+        url: "https://freetsa.org/tsr",
+        hashAlgorithm: "SHA-256", // or SHA-384, SHA-512
+        timeout: 30000,
+    },
+    reason: "Document archival",
+    location: "Server",
 });
 ```
 
@@ -72,12 +83,12 @@ const result = await timestampPdf({
 Enable LTV to embed certificate chains. This allows timestamp validation even after the TSA certificates expire:
 
 ```typescript
-import { timestampPdf } from 'pdf-rfc3161';
+import { timestampPdf } from "pdf-rfc3161";
 
 const result = await timestampPdf({
-  pdf: pdfBytes,
-  tsa: { url: 'https://freetsa.org/tsr' },
-  enableLTV: true,
+    pdf: pdfBytes,
+    tsa: { url: "https://freetsa.org/tsr" },
+    enableLTV: true,
 });
 ```
 
@@ -86,66 +97,77 @@ const result = await timestampPdf({
 Add timestamps from multiple Time Stamping Authorities for redundancy:
 
 ```typescript
-import { timestampPdfMultiple, KNOWN_TSA_URLS } from 'pdf-rfc3161';
+import { timestampPdfMultiple, KNOWN_TSA_URLS } from "pdf-rfc3161";
 
 const result = await timestampPdfMultiple({
-  pdf: pdfBytes,
-  tsaList: [
-    { url: KNOWN_TSA_URLS.FREETSA },
-    { url: 'https://another-tsa-server' }, // Example of another TSA server
-  ],
-  enableLTV: true, // Optional: enable LTV for all timestamps
+    pdf: pdfBytes,
+    tsaList: [{ url: KNOWN_TSA_URLS.FREETSA }, { url: "https://another-tsa-server" }],
+    enableLTV: true,
 });
 
 console.log(`Added ${result.timestamps.length} timestamps`);
 ```
 
-### Extract Timestamps
+### PAdES-LTA Archive Timestamp
+
+For long-term preservation of signed documents, use `timestampPdfLTA`. This fetches fresh revocation data and adds a final document timestamp:
+
+```typescript
+import { timestampPdfLTA, KNOWN_TSA_URLS } from "pdf-rfc3161";
+
+const result = await timestampPdfLTA({
+    pdf: signedPdfBytes,
+    tsa: { url: KNOWN_TSA_URLS.FREETSA },
+    includeExistingRevocationData: true,
+});
+```
+
+### Extract and Verify Timestamps
 
 Extract timestamps from an existing PDF:
 
 ```typescript
-import { extractTimestamps, verifyTimestamp } from 'pdf-rfc3161';
+import { extractTimestamps, verifyTimestamp } from "pdf-rfc3161";
 
 const timestamps = await extractTimestamps(pdfBytes);
 
 for (const ts of timestamps) {
-  console.log(`Timestamp: ${ts.info.genTime}`);
-  console.log(`Policy: ${ts.info.policy}`);
-  
-  const verified = await verifyTimestamp(ts);
-  console.log(`Verified: ${verified.verified}`);
+    console.log(`Timestamp: ${ts.info.genTime}`);
+    console.log(`Policy: ${ts.info.policy}`);
+
+    const verified = await verifyTimestamp(ts);
+    console.log(`Verified: ${verified.verified}`);
 }
 ```
 
 ### Cloudflare Workers
 
 ```typescript
-import { timestampPdf, KNOWN_TSA_URLS } from 'pdf-rfc3161';
+import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
 
 export default {
-  async fetch(request: Request): Promise<Response> {
-    const formData = await request.formData();
-    const file = formData.get('pdf') as File;
-    const pdfBytes = new Uint8Array(await file.arrayBuffer());
+    async fetch(request: Request): Promise<Response> {
+        const formData = await request.formData();
+        const file = formData.get("pdf") as File;
+        const pdfBytes = new Uint8Array(await file.arrayBuffer());
 
-    const result = await timestampPdf({
-      pdf: pdfBytes,
-      tsa: { url: KNOWN_TSA_URLS.FREETSA },
-      enableLTV: true, // Recommended for production
-    });
+        const result = await timestampPdf({
+            pdf: pdfBytes,
+            tsa: { url: KNOWN_TSA_URLS.FREETSA },
+            enableLTV: true,
+        });
 
-    return new Response(result.pdf, {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': 'attachment; filename="timestamped.pdf"',
-      },
-    });
-  },
+        return new Response(result.pdf, {
+            headers: {
+                "Content-Type": "application/pdf",
+                "Content-Disposition": 'attachment; filename="timestamped.pdf"',
+            },
+        });
+    },
 };
 ```
 
-## API
+## API Reference
 
 ### `timestampPdf(options)`
 
@@ -153,87 +175,131 @@ Adds an RFC 3161 timestamp to a PDF document.
 
 Options:
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `pdf` | `Uint8Array` | Yes | PDF document bytes |
-| `tsa.url` | `string` | Yes | TSA server URL |
-| `tsa.hashAlgorithm` | `string` | No | SHA-256, SHA-384, or SHA-512 (default: SHA-256) |
-| `tsa.timeout` | `number` | No | Request timeout in milliseconds (default: 30000) |
-| `tsa.retry` | `number` | No | Retry attempts for network errors (default: 3) |
-| `tsa.retryDelay` | `number` | No | Base retry delay in ms (default: 1000) |
-| `enableLTV` | `boolean` | No | Enable Long-Term Validation by embedding certificate chain (default: false) |
-| `maxSize` | `number` | No | Maximum PDF size in bytes (default: 250MB) |
-| `signatureSize` | `number` | No | Size reserved for timestamp token (default: 8192). Set to `0` for automatic sizing. |
-| `signatureFieldName` | `string` | No | Custom field name (default: "Timestamp") |
-| `reason` | `string` | No | Reason for timestamping |
-| `location` | `string` | No | Location metadata |
-| `contactInfo` | `string` | No | Contact information |
-| `omitModificationTime` | `boolean` | No | Omit the modification time (/M) from signature dictionary |
-| `optimizePlaceholder` | `boolean` | No | Optimize signature size by making specific request (default: false) |
+| Name                   | Type         | Required | Description                                                        |
+| ---------------------- | ------------ | -------- | ------------------------------------------------------------------ |
+| `pdf`                  | `Uint8Array` | Yes      | PDF document bytes                                                 |
+| `tsa.url`              | `string`     | Yes      | TSA server URL                                                     |
+| `tsa.hashAlgorithm`    | `string`     | No       | SHA-256, SHA-384, or SHA-512 (default: SHA-256)                    |
+| `tsa.timeout`          | `number`     | No       | Request timeout in ms (default: 30000)                             |
+| `tsa.retry`            | `number`     | No       | Retry attempts (default: 3)                                        |
+| `tsa.retryDelay`       | `number`     | No       | Base retry delay in ms (default: 1000)                             |
+| `enableLTV`            | `boolean`    | No       | Enable Long-Term Validation (default: false)                       |
+| `maxSize`              | `number`     | No       | Maximum PDF size in bytes (default: 250MB)                         |
+| `signatureSize`        | `number`     | No       | Size reserved for token (default: 8192). Set to `0` for automatic. |
+| `signatureFieldName`   | `string`     | No       | Custom field name (default: "Timestamp")                           |
+| `reason`               | `string`     | No       | Reason for timestamping                                            |
+| `location`             | `string`     | No       | Location metadata                                                  |
+| `contactInfo`          | `string`     | No       | Contact information                                                |
+| `omitModificationTime` | `boolean`    | No       | Omit /M from signature dictionary                                  |
+| `optimizePlaceholder`  | `boolean`    | No       | Optimize signature size (default: false)                           |
 
-Returns a `TimestampResult` with the timestamped PDF, timestamp information, and optional `ltvData`.
+Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional `ltvData`.
 
-**Note on `signatureSize: 0` with LTV:** When using LTV, automatic signature sizing (setting `signatureSize: 0`) does not perform retry logic. Instead, it uses a generous default size (16KB) to accommodate the timestamp token. Ideally, if you encounter "token larger than placeholder" errors with LTV, specify a larger `signatureSize` value manually.
+Note: When using LTV, `signatureSize: 0` uses a 16KB default. Specify larger value manually if you encounter "token larger than placeholder" errors.
 
 ### `timestampPdfMultiple(options)`
 
-Adds timestamps from multiple TSAs using the unified `timestampPdf` logic. Takes a `tsaList` array. Supports `enableLTV` option which is applied to all timestamps.
-
+Adds timestamps from multiple TSAs. Takes a `tsaList` array and supports `enableLTV`.
 
 ### `extractTimestamps(pdfBytes)`
 
 Returns an array of `ExtractedTimestamp` objects from the PDF.
 
-### `verifyTimestamp(timestamp)`
+### `verifyTimestamp(timestamp, options?)`
 
 Verifies the cryptographic signature of an extracted timestamp.
 
+Options:
+
+| Name                  | Type         | Required | Description                                  |
+| --------------------- | ------------ | -------- | -------------------------------------------- |
+| `pdf`                 | `Uint8Array` | No       | Original PDF bytes for hash verification     |
+| `trustStore`          | `TrustStore` | No       | Trust store for certificate chain validation |
+| `strictESSValidation` | `boolean`    | No       | Enforce PAdES compliance                     |
+
 ## TSA Servers
 
-The library include `KNOWN_TSA_URLS` - a list of some known TSA URLs for convenience (e.g., FreeTSA: `https://freetsa.org/tsr`).
+The library includes `KNOWN_TSA_URLS` - a list of known TSA URLs for convenience.
 
-**Note:** Usage of these services is governed by the respective providers' Terms and Conditions. Be sure to check them before using in production. FreeTSA uses a self-signed CA which requires manual installation of their root certificate.
+Note: Usage is governed by providers' Terms and Conditions. FreeTSA uses a self-signed CA requiring manual root certificate installation.
 
+## Demo
+
+A client-side demo is included in the `demo/` folder. Run it with:
+
+```bash
+npm install
+npm run demo:dev
+```
 
 ## Error Handling
 
 ```typescript
-import { timestampPdf, TimestampError, TimestampErrorCode } from 'pdf-rfc3161';
+import { timestampPdf, TimestampError, TimestampErrorCode } from "pdf-rfc3161";
 
 try {
-  const result = await timestampPdf({ /* ... */ });
+    const result = await timestampPdf({
+        /* ... */
+    });
 } catch (error) {
-  if (error instanceof TimestampError) {
-    switch (error.code) {
-      case TimestampErrorCode.NETWORK_ERROR:
-        // Handle network issues
-        break;
-      case TimestampErrorCode.TSA_ERROR:
-        // TSA rejected the request
-        break;
-      case TimestampErrorCode.TIMEOUT:
-        // Request timed out
-        break;
+    if (error instanceof TimestampError) {
+        switch (error.code) {
+            case TimestampErrorCode.NETWORK_ERROR:
+                // Handle network issues
+                break;
+            case TimestampErrorCode.TSA_ERROR:
+                // TSA rejected the request
+                break;
+            case TimestampErrorCode.TIMEOUT:
+                // Request timed out
+                break;
+        }
     }
-  }
 }
+```
+
+## Scope & Design Philosophy
+
+This library focuses on generating RFC 3161 timestamps for PDFs with full LTV support.
+
+**Primary use cases:**
+
+- Adding timestamps to fresh documents
+- Archiving documents with PAdES-LTA for indefinite validity
+- Extracting and verifying timestamp structures
+
+**Verification scope:**
+
+The `verifyTimestamp()` function performs cryptographic integrity verification:
+
+- The timestamp token is properly signed by the TSA
+- The document hash matches what was timestamped
+- The timestamp structure is valid
+
+**OCSP/CRL handling:**
+
+For LTV support, the library includes OCSP and CRL fetching. This enables standalone operation. In the future, these could be replaced with specialized libraries if needed.
+
+**TrustStore validation:**
+
+For production chain validation, pass a `TrustStore` to `verifyTimestamp()`:
+
+```typescript
+import { verifyTimestamp, SimpleTrustStore } from "pdf-rfc3161";
+
+const trustStore = new SimpleTrustStore();
+trustStore.addCertificate(rootCaCert);
+
+const verified = await verifyTimestamp(ts, {
+    trustStore,
+    strictESSValidation: true,
+});
 ```
 
 ## Limitations
 
 - Encrypted/password-protected PDFs are not supported (pdf-lib limitation)
 - The library creates document timestamps, not signature timestamps on existing signatures
-
-## About RFC 3161
-
-RFC 3161 defines the Time-Stamp Protocol (TSP). It allows proving that data existed at a specific time by having a trusted third party (Time Stamping Authority) cryptographically sign the hash of the data along with a timestamp.
-
-When embedded in a PDF as a Document Timestamp (DocTimeStamp):
-
-- It proves the document existed at the timestamp time
-- It can be verified by PDF readers like Adobe Acrobat
-- It does not require a signing certificate from the user
-- With LTV, it remains valid even after the TSA certificate expires
 
 ## Requirements
 

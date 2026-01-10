@@ -1,7 +1,7 @@
 import { timestampPdf } from "../index.js";
 import { extractTimestamps, verifyTimestamp } from "./extract.js";
-import { addDSS, type LTVData } from "./ltv.js";
-import { type TimestampResult, type TSAConfig } from "../types.js";
+import { addDSS, addVRI, extractLTVData, completeLTVData, type LTVData } from "./ltv.js";
+import type { TimestampResult, TSAConfig } from "../types.js";
 
 /**
  * Options for PAdES-LTA archive timestamping
@@ -65,14 +65,13 @@ export async function timestampPdfLTA(options: ArchiveTimestampOptions): Promise
         if (includeExistingRevocationData) {
             // Note: extractLTVData in ltv.ts handles this extraction from a token
             try {
-                const { extractLTVData } = await import("./ltv.js");
                 const ltv = extractLTVData(ts.token);
 
                 // Add unique CRLs and OCSPs (simplified deduplication)
                 for (const crl of ltv.crls) crls.push(crl);
                 for (const ocsp of ltv.ocspResponses) ocspResponses.push(ocsp);
             } catch {
-                // Ignore errors from malformed existing tokens
+                // Skip malformed existing tokens
             }
         }
     }
@@ -89,13 +88,61 @@ export async function timestampPdfLTA(options: ArchiveTimestampOptions): Promise
         ocspResponses,
     };
 
+    // 4. Update the DSS with collected information
+    // Fetch missing revocation data (best effort)
+    let completeData = ltvData;
+    const ltvResult = await completeLTVData(ltvData);
+    completeData = ltvResult.data;
+
+    // Log any errors encountered during LTV enrichment (for debugging)
+    if (ltvResult.errors.length > 0) {
+        console.warn("Warnings during LTV data completion:");
+        for (const error of ltvResult.errors) {
+            console.warn(`  - ${error}`);
+        }
+    }
+
+    // If no new info was found, we still proceed to add the archive timestamp
+
     // Use incremental addDSS
     let currentPdf = pdf;
 
     if (certificates.length > 0 || crls.length > 0 || ocspResponses.length > 0) {
         // Note: We do NOT pass pdfDoc here because addDSS needs to load fresh
         // from the bytes to get correct xref offsets for incremental save.
-        currentPdf = await addDSS(pdf, ltvData);
+        currentPdf = await addDSS(pdf, completeData);
+    }
+
+    // 4.5 Add VRI entries for each signature
+    // VRI associates validation material with specific signing certificates
+    for (const ts of existingTimestamps) {
+        try {
+            const verified = await verifyTimestamp(ts);
+            if (verified.certificates && verified.certificates.length > 0) {
+                // Use the first certificate as the signing certificate
+                const signingCert = verified.certificates[0];
+                if (!signingCert) continue;
+
+                // Collect revocation data for this signature
+                const revocationData: { crls?: Uint8Array[]; ocspResponses?: Uint8Array[] } = {};
+
+                // Extract revocation data from this timestamp's token
+                const ltv = extractLTVData(ts.token);
+                if (ltv.crls.length > 0) {
+                    revocationData.crls = ltv.crls;
+                }
+                if (ltv.ocspResponses.length > 0) {
+                    revocationData.ocspResponses = ltv.ocspResponses;
+                }
+
+                // Add VRI entry for this signature
+                if (Object.keys(revocationData).length > 0) {
+                    currentPdf = await addVRI(currentPdf, signingCert, revocationData);
+                }
+            }
+        } catch {
+            // Skip VRI for malformed signatures
+        }
     }
 
     // 5. Add the final archive timestamp

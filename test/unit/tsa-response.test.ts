@@ -2,16 +2,22 @@ import { describe, it, expect } from "vitest";
 import { parseTimestampResponse, validateTimestampResponse } from "../../src/tsa/response.js";
 import { TimestampError, TSAStatus } from "../../src/types.js";
 
-// A minimal valid TimeStampResp with status=0 (granted) but no token
+// A minimal valid TimeStampResp with status=2 (rejection) but no token
 // This is for testing error cases
 const MINIMAL_REJECTED_RESPONSE = new Uint8Array([
     0x30,
-    0x05, // SEQUENCE
+    0x0b, // SEQUENCE (11 bytes)
     0x30,
-    0x03, // PKIStatusInfo SEQUENCE
+    0x09, // PKIStatusInfo SEQUENCE (9 bytes)
     0x02,
     0x01,
     0x02, // INTEGER status=2 (rejection)
+    0x30,
+    0x04, // statusString SEQUENCE (4 bytes)
+    0x0c,
+    0x02,
+    0x65,
+    0x72, // UTF8String "er"
 ]);
 
 describe("TSA Response", () => {

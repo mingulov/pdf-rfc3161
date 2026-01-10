@@ -3,6 +3,38 @@ import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 
 /**
+ * Trust Store for Certificate Chain Validation
+ *
+ * This module provides TrustStore and SimpleTrustStore for certificate chain validation.
+ *
+ * NOTE: TrustStore is NOT currently integrated into the core timestamp verification flow.
+ * This is a design choice - RFC 3161 timestamps focus on cryptographic integrity of the
+ * timestamp token itself, not on validating the TSA's certificate chain.
+ *
+ * Reasons for this design:
+ * 1. TSA certificates are typically validated by the TLS connection to the TSA
+ * 2. Trust validation requirements vary significantly between jurisdictions (e.g., eIDAS, FIPS)
+ * 3. Users may have custom trust requirements (private PKI, specific CAs, etc.)
+ * 4. Adding trust validation would require a trust store configuration mechanism
+ *
+ * If you need chain validation, you can:
+ * 1. Use the TrustStore API directly: `trustStore.verifyChain(chain)`
+ * 2. Pass a TrustStore to verifyTimestamp() options if you modify the API
+ * 3. Implement custom validation logic using pkijs
+ *
+ * Example usage:
+ * ```typescript
+ * import { SimpleTrustStore } from "./pki/trust-store.js";
+ *
+ * const trustStore = new SimpleTrustStore();
+ * trustStore.addCertificate( rootCaCert );
+ *
+ * // Use for custom validation
+ * const isTrusted = await trustStore.verifyChain(certChain);
+ * ```
+ */
+
+/**
  * interface for a store of trusted certificates
  */
 export interface TrustStore {

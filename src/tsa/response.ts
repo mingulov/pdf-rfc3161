@@ -10,6 +10,143 @@ import {
 import { bytesToHex } from "../utils.js";
 import { extractTimestampInfoFromContentInfo } from "../pki/pki-utils.js";
 
+interface StatusInfo {
+    status: TSAStatus;
+    statusString?: string;
+    failInfo?: number;
+}
+
+/**
+ * Attempts to extract status information from an ASN.1 block without using pkijs.
+ * Used as fallback when pkijs schema validation fails.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/prefer-optional-chain */
+function tryExtractStatusFromASN1(asn1Block: unknown): StatusInfo | null {
+    try {
+        const result: StatusInfo = { status: TSAStatus.GRANTED };
+
+        const block = asn1Block;
+        if (!block || typeof block !== "object") {
+            return null;
+        }
+
+        const getField = (keys: number[]): any => {
+            let current: any = block;
+            for (const key of keys) {
+                if (current && typeof current === "object" && key in current) {
+                    current = current[key];
+                } else {
+                    return null;
+                }
+            }
+            return current;
+        };
+
+        const innerSequence = getField([0]);
+        if (
+            innerSequence &&
+            innerSequence.valueBlock &&
+            Array.isArray(innerSequence.valueBlock.value)
+        ) {
+            const statusValue = innerSequence.valueBlock.value[0];
+            if (statusValue && statusValue.valueBlock) {
+                if (Array.isArray(statusValue.valueBlock.valueHexView)) {
+                    result.status = statusValue.valueBlock.valueHexView[0] as TSAStatus;
+                } else if (typeof statusValue.valueBlock.value === "number") {
+                    result.status = statusValue.valueBlock.value as TSAStatus;
+                }
+            }
+
+            if (innerSequence.valueBlock.value[1]) {
+                const statusStringValue = innerSequence.valueBlock.value[1];
+                if (
+                    statusStringValue &&
+                    statusStringValue.valueBlock &&
+                    Array.isArray(statusStringValue.valueBlock.value)
+                ) {
+                    const utf8String = statusStringValue.valueBlock.value[0];
+                    if (utf8String && utf8String.valueBlock && utf8String.valueBlock.value) {
+                        result.statusString = utf8String.valueBlock.value;
+                    }
+                }
+            }
+
+            if (innerSequence.valueBlock.value[2]) {
+                const failInfoValue = innerSequence.valueBlock.value[2];
+                if (
+                    failInfoValue &&
+                    failInfoValue.valueBlock &&
+                    Array.isArray(failInfoValue.valueBlock.valueHexView)
+                ) {
+                    result.failInfo = failInfoValue.valueBlock.valueHexView[0];
+                }
+            }
+        }
+
+        return result;
+    } catch {
+        return null;
+    }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/prefer-optional-chain */
+
+/**
+ * Attempts to extract the timeStampToken from an ASN.1 block without using pkijs.
+ * Used as fallback when pkijs schema validation fails.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
+function tryExtractTokenFromASN1(asn1Block: unknown): Uint8Array | null {
+    try {
+        if (!asn1Block || typeof asn1Block !== "object") {
+            return null;
+        }
+
+        const getField = (keys: number[]): any => {
+            let current: any = asn1Block;
+            for (const key of keys) {
+                if (current && typeof current === "object" && key in current) {
+                    current = current[key];
+                } else {
+                    return null;
+                }
+            }
+            return current;
+        };
+
+        const timeStampToken = getField([1]);
+        if (timeStampToken) {
+            try {
+                const schema = timeStampToken.toSchema();
+                return new Uint8Array(schema.toBER(false));
+            } catch {
+                return null;
+            }
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
+
+/**
+ * Attempts to extract timestamp info from a token's ContentInfo structure.
+ */
+function tryExtractInfoFromToken(tokenBytes: Uint8Array): TimestampInfo | null {
+    try {
+        const asn1 = asn1js.fromBER(tokenBytes.slice().buffer);
+        if (asn1.offset === -1) {
+            return null;
+        }
+
+        const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
+        return extractTimestampInfoFromContentInfo(contentInfo);
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Parses an RFC 3161 TimeStampResp from DER-encoded bytes.
  *
@@ -18,8 +155,23 @@ import { extractTimestampInfoFromContentInfo } from "../pki/pki-utils.js";
  * @throws TimestampError if the response cannot be parsed
  */
 export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimestampResponse {
+    // Validate response is not empty
+    if (responseBytes.length === 0) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "TSA returned empty response"
+        );
+    }
+
+    // Validate minimum response size (a valid TimeStampResp with status=0 needs at least ~11 bytes)
+    if (responseBytes.length < 11) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            `TSA response too small (${responseBytes.length.toString()} bytes), expected at least 11 bytes for valid TimeStampResp`
+        );
+    }
+
     try {
-        // Parse the ASN.1 structure
         const asn1 = asn1js.fromBER(responseBytes.slice().buffer);
         if (asn1.offset === -1) {
             throw new TimestampError(
@@ -28,26 +180,48 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
             );
         }
 
-        // Create TimeStampResp from the parsed ASN.1
-        const tsResp = new pkijs.TimeStampResp({ schema: asn1.result });
+        let tsResp: pkijs.TimeStampResp | null = null;
+        let extractedStatus: StatusInfo | null = null;
 
-        // Extract status information - pkijs returns a number
-        const statusValue = tsResp.status.status as number;
+        try {
+            tsResp = new pkijs.TimeStampResp({ schema: asn1.result });
+        } catch (schemaError) {
+            extractedStatus = tryExtractStatusFromASN1(asn1.result);
+            if (!extractedStatus) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    `Failed to parse timestamp response: ${schemaError instanceof Error ? schemaError.message : String(schemaError)}`,
+                    schemaError
+                );
+            }
+        }
+
+        let status: TSAStatus;
         let statusString: string | undefined;
         let failInfo: number | undefined;
 
-        if (tsResp.status.statusStrings && tsResp.status.statusStrings.length > 0) {
-            statusString = tsResp.status.statusStrings.map((s) => s.valueBlock.value).join("; ");
+        if (extractedStatus) {
+            status = extractedStatus.status;
+            statusString = extractedStatus.statusString;
+            failInfo = extractedStatus.failInfo;
+        } else if (tsResp) {
+            const statusValue = tsResp.status.status as number;
+            status = statusValue as TSAStatus;
+            if (tsResp.status.statusStrings && tsResp.status.statusStrings.length > 0) {
+                statusString = tsResp.status.statusStrings
+                    .map((s) => s.valueBlock.value)
+                    .join("; ");
+            }
+            if (tsResp.status.failInfo) {
+                failInfo = tsResp.status.failInfo.valueBlock.valueHexView[0];
+            }
+        } else {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "Could not parse timestamp response status"
+            );
         }
 
-        if (tsResp.status.failInfo) {
-            failInfo = tsResp.status.failInfo.valueBlock.valueHexView[0];
-        }
-
-        // Map to our TSAStatus enum
-        const status = statusValue as TSAStatus;
-
-        // If status is not granted, return early
         if (status !== TSAStatus.GRANTED && status !== TSAStatus.GRANTED_WITH_MODS) {
             return {
                 status,
@@ -56,19 +230,26 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
             };
         }
 
-        // Extract the timestamp token
-        if (!tsResp.timeStampToken) {
+        if (!tsResp?.timeStampToken) {
+            const manuallyExtractedToken = tryExtractTokenFromASN1(asn1.result);
+            if (manuallyExtractedToken) {
+                const info = tryExtractInfoFromToken(manuallyExtractedToken);
+                return {
+                    status,
+                    statusString,
+                    token: manuallyExtractedToken,
+                    info: info ?? undefined,
+                };
+            }
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
-                "TimeStampResp is granted but contains no token"
+                `TimeStampResp status was extracted (status=${String(status as number)}) but no token found - TSA response may be incomplete or malformed (statusString: ${statusString ?? "none"})`
             );
         }
 
-        // Encode the token back to DER for embedding
         const tokenSchema = tsResp.timeStampToken.toSchema();
         const tokenBytes = new Uint8Array(tokenSchema.toBER(false));
 
-        // Parse TSTInfo from the token to extract timestamp details
         const info = extractTimestampInfoFromContentInfo(tsResp.timeStampToken);
 
         return {
@@ -92,22 +273,20 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
 /**
  * Validates that a timestamp response matches the original request.
  *
- * @param responseInfo - Parsed timestamp info
- * @param originalHash - The hash that was sent in the request
- * @param hashAlgorithm - The algorithm used for hashing
- * @returns true if the response matches the request
+ * @param responseInfo - The parsed timestamp info from the response
+ * @param originalHash - The hash that was sent to the TSA
+ * @param hashAlgorithm - The hash algorithm that was used
+ * @returns true if the response is valid for the request
  */
 export function validateTimestampResponse(
     responseInfo: TimestampInfo,
     originalHash: Uint8Array,
     hashAlgorithm: string
 ): boolean {
-    // Verify the hash algorithm matches
     if (responseInfo.hashAlgorithm !== hashAlgorithm) {
         return false;
     }
 
-    // Verify the message digest matches
     const expectedDigest = bytesToHex(originalHash);
     if (responseInfo.messageDigest.toLowerCase() !== expectedDigest.toLowerCase()) {
         return false;

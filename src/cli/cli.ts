@@ -4,8 +4,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
     timestampPdf,
+    timestampPdfLTA,
     extractTimestamps,
     verifyTimestamp,
+    getDSSInfo,
     KNOWN_TSA_URLS,
     TimestampError,
 } from "../index.js";
@@ -38,7 +40,7 @@ program
 program
     .command("timestamp")
     .description("Add an RFC 3161 timestamp to a PDF document")
-    .argument("<tsa_url>", "TSA server URL (e.g., http://timestamp.digicert.com)")
+    .argument("<tsa_url>", "TSA server URL (e.g., https://freetsa.org/tsr)")
     .argument("<file>", "Input PDF file")
     .argument("[bucket_output]", "Output file path (optional)")
     .addOption(new Option("-o, --output <file>", "Output file (legacy option)").hideHelp())
@@ -135,8 +137,95 @@ program
                         `  Size delta:  +${delta.toLocaleString()} bytes (+${deltaPercent}%)`
                     );
                 }
+
+                if (result.ltvData) {
+                    const certCount = result.ltvData.certificates.length;
+                    const crlCount = result.ltvData.crls.length;
+                    const ocspCount = result.ltvData.ocspResponses.length;
+                    console.log(
+                        `  LTV Data:    ${String(certCount)} Certs, ${String(crlCount)} CRLs, ${String(ocspCount)} OCSPs embedded`
+                    );
+                }
             } catch (error: unknown) {
                 handleError(error, options.verbose);
+            }
+        }
+    );
+
+program
+    .command("archive")
+    .description("Add a PAdES-LTA Archive Timestamp (long-term preservation)")
+    .argument("<tsa_url>", "TSA server URL (e.g., https://freetsa.org/tsr)")
+    .argument("<file>", "Input PDF file")
+    .argument("[bucket_output]", "Output file path (optional)")
+    .addOption(new Option("-o, --output <file>", "Output file").hideHelp())
+    .addOption(
+        new Option("-a, --algorithm <alg>", "Hash algorithm")
+            .choices(["SHA-256", "SHA-384", "SHA-512"])
+            .default("SHA-256")
+    )
+    .option("--no-update", "Do not fetch fresh revocation data for existing signatures", false)
+    .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
+    .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
+    .option("--retry <n>", "Number of retry attempts", "3")
+    .option("-v, --verbose", "Verbose output", false)
+    .action(
+        async (
+            tsaUrl: string,
+            inputFile: string,
+            bucketOutput: string | undefined,
+            cmdOptions: CliOptions & { noUpdate: boolean }
+        ) => {
+            try {
+                const outputFile =
+                    bucketOutput ?? cmdOptions.output ?? generateOutputFilename(inputFile);
+
+                if (cmdOptions.verbose) {
+                    console.log(`PAdES-LTA Archive Timestamping`);
+                    console.log(`Input:     ${inputFile}`);
+                    console.log(`Output:    ${outputFile}`);
+                    console.log(`TSA:       ${tsaUrl}`);
+                    console.log(
+                        `Update:    ${!cmdOptions.noUpdate ? "Fetch fresh revocation data" : "Use existing only"}`
+                    );
+                    console.log();
+                }
+
+                const pdfBytes = await readFile(inputFile);
+                const pdfData = new Uint8Array(pdfBytes);
+
+                if (cmdOptions.verbose) {
+                    console.log("Processing document...");
+                }
+
+                const result = await timestampPdfLTA({
+                    pdf: pdfData,
+                    tsa: {
+                        url: tsaUrl,
+                        hashAlgorithm: cmdOptions.algorithm,
+                        timeout: parseInt(cmdOptions.timeout, 10),
+                        retry: parseInt(cmdOptions.retry, 10),
+                    },
+                    signatureFieldName: cmdOptions.name,
+                    includeExistingRevocationData: !cmdOptions.noUpdate,
+                });
+
+                await writeFile(outputFile, result.pdf);
+
+                console.log(`SUCCESS: Archive timestamp added!`);
+                console.log(`  Output:      ${outputFile}`);
+                console.log(`  Time:        ${result.timestamp.genTime.toISOString()}`);
+
+                if (result.ltvData) {
+                    const certCount = result.ltvData.certificates.length;
+                    const crlCount = result.ltvData.crls.length;
+                    const ocspCount = result.ltvData.ocspResponses.length;
+                    console.log(
+                        `  LTV Data:    ${String(certCount)} Certs, ${String(crlCount)} CRLs, ${String(ocspCount)} OCSPs embedded`
+                    );
+                }
+            } catch (err: unknown) {
+                handleError(err, cmdOptions.verbose);
             }
         }
     );
@@ -155,6 +244,16 @@ program
             // Read input PDF
             const pdfBytes = await readFile(inputFile);
             const pdfData = new Uint8Array(pdfBytes);
+
+            // Check for Document Security Store (LTV)
+            const dssInfo = await getDSSInfo(pdfData);
+            if (dssInfo.certs > 0 || dssInfo.crls > 0 || dssInfo.ocsps > 0) {
+                console.log(`Document Security Store (LTV):`);
+                console.log(`  Certificates:   ${String(dssInfo.certs)}`);
+                console.log(`  CRLs:           ${String(dssInfo.crls)}`);
+                console.log(`  OCSP Responses: ${String(dssInfo.ocsps)}`);
+                console.log();
+            }
 
             // Extract timestamps
             const timestamps = await extractTimestamps(pdfData);
@@ -231,7 +330,7 @@ KNOWN TSA SERVERS:
 
 function handleError(err: unknown, verbose: boolean): void {
     if (err instanceof TimestampError) {
-        console.error(`Error [${err.code}]: ${err.message}`);
+        console.error(`Error [${err.code.toString()}]: ${err.message}`);
         if (verbose && err.cause) {
             console.error("Cause:", err.cause);
         }
