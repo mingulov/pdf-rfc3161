@@ -66,11 +66,6 @@ export interface TimestampOptions {
      * This includes certificates, CRLs, and OCSP responses needed for offline validation.
      */
     enableLTV?: boolean;
-    /**
-     * Fetch OCSP responses for certificates (slower but more complete LTV).
-     * Only used when enableLTV is true.
-     */
-    fetchOCSP?: boolean;
 }
 
 /**
@@ -188,4 +183,11 @@ export interface VerificationOptions {
      * This attribute binds the signature to a specific certificate.
      */
     strictESSValidation?: boolean;
+
+    /**
+     * The original PDF bytes.
+     * If provided, verifyTimestamp will also verify that the document hash
+     * matches the hash stored in the timestamp token.
+     */
+    pdf?: Uint8Array;
 }

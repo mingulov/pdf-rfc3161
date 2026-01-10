@@ -162,7 +162,6 @@ Options:
 | `tsa.retry` | `number` | No | Retry attempts for network errors (default: 3) |
 | `tsa.retryDelay` | `number` | No | Base retry delay in ms (default: 1000) |
 | `enableLTV` | `boolean` | No | Enable Long-Term Validation by embedding certificate chain (default: false) |
-| `fetchOCSP` | `boolean` | No | Fetch OCSP responses for LTV (default: false) |
 | `maxSize` | `number` | No | Maximum PDF size in bytes (default: 250MB) |
 | `signatureSize` | `number` | No | Size reserved for timestamp token (default: 8192). Set to `0` for automatic sizing. |
 | `signatureFieldName` | `string` | No | Custom field name (default: "Timestamp") |
@@ -178,11 +177,8 @@ Returns a `TimestampResult` with the timestamped PDF, timestamp information, and
 
 ### `timestampPdfMultiple(options)`
 
-Adds timestamps from multiple TSAs using the unified `timestampPdf` logic. Takes a `tsaList` array. Supports `enableLTV` and `fetchOCSP` options which are applied to all timestamps.
+Adds timestamps from multiple TSAs using the unified `timestampPdf` logic. Takes a `tsaList` array. Supports `enableLTV` option which is applied to all timestamps.
 
-### `timestampPdfWithLTV(options)`
-
-**Deprecated**: Use `timestampPdf` with `enableLTV: true` instead. Kept for backward compatibility.
 
 ### `extractTimestamps(pdfBytes)`
 

@@ -9,13 +9,14 @@ import {
     PDFNumber,
     PDFRef,
 } from "pdf-lib-incremental-save";
-import { OID_TO_HASH_ALGORITHM } from "../constants.js";
 import {
     TimestampError,
     TimestampErrorCode,
     type TimestampInfo,
     type VerificationOptions,
 } from "../types.js";
+import { hexToBytes, bytesToHex, extractBytesFromByteRange } from "../utils.js";
+import { parseTimestampToken } from "../pki/pki-utils.js";
 
 /**
  * Information about an extracted timestamp signature from a PDF
@@ -38,6 +39,8 @@ export interface ExtractedTimestamp {
      * Useful for performing manual revocation checks (CRL/OCSP).
      */
     certificates?: pkijs.Certificate[];
+    /** Byte range [offset1, length1, offset2, length2] */
+    byteRange: [number, number, number, number];
 }
 
 /**
@@ -69,11 +72,6 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
     }
 
     // Get fields array
-    const fieldsRef = acroForm.get(PDFName.of("Fields"));
-    if (!fieldsRef) {
-        return timestamps;
-    }
-
     const fields = acroForm.lookup(PDFName.of("Fields"));
     if (!fields || !(fields instanceof PDFArray)) {
         return timestamps;
@@ -90,10 +88,7 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
 
             // Check if it's a signature field (FT = /Sig)
             const ft = field.get(PDFName.of("FT"));
-            if (!ft) continue;
-
-            const ftString = ft.toString();
-            if (ftString !== "/Sig") continue;
+            if (ft?.toString() !== "/Sig") continue;
 
             // Get the signature value (V)
             const sigValueRef = field.get(PDFName.of("V"));
@@ -112,10 +107,7 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
 
             // Check if it's an RFC 3161 timestamp (SubFilter = /ETSI.RFC3161)
             const subFilter = sigValue.get(PDFName.of("SubFilter"));
-            if (!subFilter) continue;
-
-            const subFilterStr = subFilter.toString();
-            if (!subFilterStr.includes("ETSI.RFC3161")) continue;
+            if (!subFilter?.toString().includes("ETSI.RFC3161")) continue;
 
             // Get field name
             const fieldNameObj = field.get(PDFName.of("T"));
@@ -134,29 +126,29 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
             // Skip if token is all zeros (placeholder)
             if (token.every((b) => b === 0)) continue;
 
-            // Parse the timestamp
+            // Extract ByteRange
+            const byteRange = sigValue.get(PDFName.of("ByteRange"));
+            if (!(byteRange instanceof PDFArray) || byteRange.size() !== 4) continue;
+
+            const brValues = [
+                (byteRange.get(0) as PDFNumber).asNumber(),
+                (byteRange.get(1) as PDFNumber).asNumber(),
+                (byteRange.get(2) as PDFNumber).asNumber(),
+                (byteRange.get(3) as PDFNumber).asNumber(),
+            ] as [number, number, number, number];
+
+            // Parse the timestamp details
             const info = parseTimestampToken(token);
 
-            // Check ByteRange to see if it covers the whole document
-            const byteRange = sigValue.get(PDFName.of("ByteRange"));
-            let coversWholeDocument = false;
-
-            if (byteRange instanceof PDFArray && byteRange.size() === 4) {
-                const start2Obj = byteRange.get(2);
-                const len2Obj = byteRange.get(3);
-
-                if (start2Obj instanceof PDFNumber && len2Obj instanceof PDFNumber) {
-                    const start2 = start2Obj.asNumber();
-                    const len2 = len2Obj.asNumber();
-                    coversWholeDocument = start2 + len2 === pdfBytes.length;
-                }
-            }
+            // Check if it covers the whole document
+            const coversWholeDocument = brValues[2] + brValues[3] === pdfBytes.length;
 
             timestamps.push({
                 info,
                 token,
                 fieldName,
                 coversWholeDocument,
+                byteRange: brValues,
                 verified: false, // Not verified until verifyTimestamp is called
             });
         } catch {
@@ -172,6 +164,7 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
  * Verifies an extracted timestamp's cryptographic signature.
  *
  * @param timestamp - The extracted timestamp to verify
+ * @param options - Verification options (including optional pdf bytes for hash verification)
  * @returns The timestamp with verification status updated
  */
 export async function verifyTimestamp(
@@ -179,7 +172,25 @@ export async function verifyTimestamp(
     options: VerificationOptions = {}
 ): Promise<ExtractedTimestamp> {
     try {
-        // Parse the timestamp token
+        // Step 1: Verify document hash if PDF is provided
+        if (options.pdf) {
+            const dataToHash = extractBytesFromByteRange(options.pdf, timestamp.byteRange);
+            const hashBuffer = await crypto.subtle.digest(
+                timestamp.info.hashAlgorithm,
+                dataToHash.slice().buffer
+            );
+            const actualHash = bytesToHex(hashBuffer);
+
+            if (actualHash.toLowerCase() !== timestamp.info.messageDigest.toLowerCase()) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError: `Document hash mismatch. Expected ${timestamp.info.messageDigest}, found ${actualHash}`,
+                };
+            }
+        }
+
+        // Step 2: Verify cryptographic signature of the token
         const asn1 = asn1js.fromBER(timestamp.token.slice().buffer);
         if (asn1.offset === -1) {
             return {
@@ -266,8 +277,6 @@ export async function verifyTimestamp(
                         oid === "1.2.840.113549.1.9.16.2.47"
                     ) {
                         hasESS = true;
-                        // Ideally we should also match the hash inside ESS to the cert,
-                        // but presence is the primary structural requirement for PAdES-LTA compliance.
                         break;
                     }
                 }
@@ -290,99 +299,10 @@ export async function verifyTimestamp(
             certificates,
         };
     } catch (error) {
-        if (error instanceof Error && error.stack) {
-            console.error("Verification Error Stack:", error.stack);
-        }
         return {
             ...timestamp,
             verified: false,
             verificationError: error instanceof Error ? error.message : String(error),
         };
     }
-}
-
-/**
- * Parses a timestamp token and extracts the TimestampInfo.
- */
-function parseTimestampToken(token: Uint8Array): TimestampInfo {
-    const asn1 = asn1js.fromBER(token.slice().buffer);
-    if (asn1.offset === -1) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "Failed to parse timestamp token"
-        );
-    }
-
-    const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
-    const signedData = new pkijs.SignedData({ schema: contentInfo.content });
-
-    if (!signedData.encapContentInfo.eContent) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "Timestamp token missing TSTInfo"
-        );
-    }
-
-    // Extract TSTInfo
-    const eContent = signedData.encapContentInfo.eContent;
-    let tstInfoBytes: ArrayBuffer;
-
-    if (eContent instanceof asn1js.OctetString) {
-        tstInfoBytes = new Uint8Array(eContent.valueBlock.valueHexView).slice().buffer;
-    } else {
-        const eContentAny = eContent as { valueBlock?: { value?: asn1js.OctetString[] } };
-        if (eContentAny.valueBlock?.value?.[0] instanceof asn1js.OctetString) {
-            tstInfoBytes = new Uint8Array(
-                eContentAny.valueBlock.value[0].valueBlock.valueHexView
-            ).slice().buffer;
-        } else {
-            throw new TimestampError(TimestampErrorCode.INVALID_RESPONSE, "Cannot extract TSTInfo");
-        }
-    }
-
-    const tstInfoAsn1 = asn1js.fromBER(tstInfoBytes);
-    if (tstInfoAsn1.offset === -1) {
-        throw new TimestampError(TimestampErrorCode.INVALID_RESPONSE, "Failed to parse TSTInfo");
-    }
-
-    const tstInfo = new pkijs.TSTInfo({ schema: tstInfoAsn1.result });
-
-    const hashAlgorithmOID = tstInfo.messageImprint.hashAlgorithm.algorithmId;
-    const hashAlgorithm = OID_TO_HASH_ALGORITHM[hashAlgorithmOID] ?? hashAlgorithmOID;
-
-    return {
-        genTime: tstInfo.genTime,
-        policy: tstInfo.policy,
-        serialNumber: bytesToHex(new Uint8Array(tstInfo.serialNumber.valueBlock.valueHexView)),
-        hashAlgorithm,
-        hashAlgorithmOID,
-        messageDigest: bytesToHex(
-            new Uint8Array(tstInfo.messageImprint.hashedMessage.valueBlock.valueHexView)
-        ),
-        hasCertificate: (signedData.certificates?.length ?? 0) > 0,
-    };
-}
-
-/**
- * Converts a hex string to bytes.
- */
-function hexToBytes(hex: string): Uint8Array {
-    // Remove any non-hex characters and handle odd length
-    const cleanHex = hex.replace(/[^0-9a-fA-F]/g, "");
-    const paddedHex = cleanHex.length % 2 ? "0" + cleanHex : cleanHex;
-
-    const bytes = new Uint8Array(paddedHex.length / 2);
-    for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = parseInt(paddedHex.substring(i * 2, i * 2 + 2), 16);
-    }
-    return bytes;
-}
-
-/**
- * Converts bytes to a hex string.
- */
-function bytesToHex(bytes: Uint8Array): string {
-    return Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
 }

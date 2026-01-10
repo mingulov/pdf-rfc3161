@@ -123,7 +123,8 @@ program
                     console.log(`  Algorithm:   ${result.timestamp.hashAlgorithm}`);
                     console.log(`  Digest:      ${result.timestamp.messageDigest.slice(0, 32)}...`);
                     console.log(
-                        `  Certificate: ${result.timestamp.hasCertificate ? "included" : "not included"
+                        `  Certificate: ${
+                            result.timestamp.hasCertificate ? "included" : "not included"
                         }`
                     );
                     console.log(`  Input size:  ${pdfBytes.length.toLocaleString()} bytes`);

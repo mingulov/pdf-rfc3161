@@ -1,4 +1,5 @@
 import type { PreparedPDF } from "./prepare.js";
+import { bufferToHexUpper, extractBytesFromByteRange } from "../utils.js";
 
 /**
  * Embeds a timestamp token into a prepared PDF by replacing the placeholder content.
@@ -13,8 +14,8 @@ export function embedTimestampToken(
 ): Uint8Array {
     const { bytes, contentsOffset, contentsPlaceholderLength } = preparedPdf;
 
-    // Convert token to hex string
-    const tokenHex = bufferToHex(timestampToken);
+    // Convert token to hex string (uppercase as usual in PDF Content)
+    const tokenHex = bufferToHexUpper(timestampToken);
 
     // Check if token fits in placeholder
     if (tokenHex.length > contentsPlaceholderLength) {
@@ -50,25 +51,5 @@ export function embedTimestampToken(
  * @returns The concatenated bytes that should be hashed
  */
 export function extractBytesToHash(preparedPdf: PreparedPDF): Uint8Array {
-    const { bytes, byteRange } = preparedPdf;
-    const [offset1, length1, offset2, length2] = byteRange;
-
-    // Concatenate the two ranges
-    const range1 = bytes.slice(offset1, offset1 + length1);
-    const range2 = bytes.slice(offset2, offset2 + length2);
-
-    const result = new Uint8Array(length1 + length2);
-    result.set(range1, 0);
-    result.set(range2, length1);
-
-    return result;
-}
-
-/**
- * Converts a buffer to a hex string.
- */
-function bufferToHex(buffer: Uint8Array): string {
-    return Array.from(buffer)
-        .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
-        .join("");
+    return extractBytesFromByteRange(preparedPdf.bytes, preparedPdf.byteRange);
 }

@@ -108,21 +108,15 @@ export async function preparePdfForTimestamp(
     const placeholderHexLength = signatureSize * 2; // Each byte = 2 hex chars
     const signatureFieldName = options.signatureFieldName ?? "Timestamp";
 
-    // Create placeholder content (will be replaced with actual token)
-    // Use '0' characters as placeholder
+    // Create placeholder content
     const placeholderHex = "0".repeat(placeholderHexLength);
 
-    // === INCREMENTAL SAVE WORKFLOW ===
-    // Phase 1: Use original bytes as base for true incremental timestamping.
-    // This preserves file size and only appends the new signature objects.
-    const basePdfBytes = pdfBytes;
+    // Load the PDF document
+    const sigPdfDoc = await PDFDocument.load(pdfBytes, { updateMetadata: false });
 
-    // Phase 2: Reload and prepare for incremental signature append
-    const sigPdfDoc = await PDFDocument.load(basePdfBytes, { updateMetadata: false });
-
-    // WORKAROUND: pdf-lib-incremental-save doesn't correctly track objects from
-    // the input PDF in some cases (e.g. object streams). We need to find the
-    // true largest object number by scanning all xref sections.
+    // WORKAROUND: correctly track objects from input PDF.
+    // Scan bytes to ensure largestObjectNumber matches the actual file content,
+    // preserving the object numbering sequence for incremental updates.
     const sigContext = sigPdfDoc.context;
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
     const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
@@ -139,11 +133,7 @@ export async function preparePdfForTimestamp(
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();
 
-    // Re-add the signature dictionary and field to the reloaded document
-    // Note: We need to re-create everything since object refs changed on reload
-
     // Create new signature dictionary
-    // Note: ByteRange comes BEFORE Contents to match Adobe's expected format
     const sigDictFields: Record<string, PDFObject> = {
         Type: PDFName.of("Sig"),
         Filter: PDFName.of("Adobe.PPKLite"),
@@ -158,19 +148,14 @@ export async function preparePdfForTimestamp(
 
     const newSigDict = sigContext.obj(sigDictFields);
 
-    // Fill ByteRange with placeholders.
-    // Use 12-digit numbers to reserve enough space for the final ByteRange string.
-    // updateByteRange replaces in-place and pads with spaces, but throws if new string is longer.
     const newByteRangeArr = newSigDict.get(PDFName.of("ByteRange")) as PDFArray;
     newByteRangeArr.push(PDFNumber.of(0));
     newByteRangeArr.push(PDFNumber.of(111111111111));
     newByteRangeArr.push(PDFNumber.of(111111111111));
     newByteRangeArr.push(PDFNumber.of(111111111111));
-    // Extra entries increase serialized length for safe in-place replacement
     newByteRangeArr.push(PDFNumber.of(111111111111));
     newByteRangeArr.push(PDFNumber.of(111111111111));
 
-    // Add optional fields
     if (options.reason) {
         newSigDict.set(PDFName.of("Reason"), PDFString.of(options.reason));
     }
@@ -183,7 +168,7 @@ export async function preparePdfForTimestamp(
 
     const newSigRef = sigContext.register(newSigDict);
 
-    // Get or create AcroForm on reloaded doc
+    // Get or create AcroForm
     let newAcroForm = sigPdfDoc.catalog.lookup(PDFName.of("AcroForm")) as PDFDict | undefined;
     if (!newAcroForm) {
         newAcroForm = sigContext.obj({
@@ -218,7 +203,6 @@ export async function preparePdfForTimestamp(
         Rect: PDFArray.withContext(sigContext),
     });
 
-    // Add empty rect coordinates
     const newRectArray = newSigField.get(PDFName.of("Rect")) as PDFArray;
     newRectArray.push(PDFNumber.of(0));
     newRectArray.push(PDFNumber.of(0));
@@ -227,7 +211,6 @@ export async function preparePdfForTimestamp(
 
     const newSigFieldRef = sigContext.register(newSigField);
 
-    // Add to AcroForm Fields
     const newFields = newAcroForm.get(PDFName.of("Fields"));
     if (newFields instanceof PDFArray) {
         newFields.push(newSigFieldRef);
@@ -237,7 +220,6 @@ export async function preparePdfForTimestamp(
         newAcroForm.set(PDFName.of("Fields"), freshFields);
     }
 
-    // Add to page annotations
     let newAnnots = sigFirstPage.node.lookup(PDFName.of("Annots")) as PDFArray | undefined;
     if (!newAnnots) {
         newAnnots = PDFArray.withContext(sigContext);
@@ -246,29 +228,24 @@ export async function preparePdfForTimestamp(
     newAnnots.push(newSigFieldRef);
 
     // Mark modified objects for incremental save
-    // Without this, changes to existing objects won't be included in the incremental section
     const acroFormRef = sigPdfDoc.catalog.get(PDFName.of("AcroForm"));
     if (acroFormRef instanceof PDFRef) {
         snapshot.markRefForSave(acroFormRef);
     }
     snapshot.markRefForSave(sigFirstPage.ref);
-    // Also mark the catalog so the reader knows about updated AcroForm
     const catalogRef = sigContext.trailerInfo.Root;
     if (catalogRef instanceof PDFRef) {
         snapshot.markRefForSave(catalogRef);
     }
 
-    // Phase 3: Save incrementally (generates only appended bytes)
     const incrementalBytes = await sigPdfDoc.saveIncremental(snapshot);
 
-    // Phase 4: Concatenate base + incremental bytes
-    const finalBytes = new Uint8Array(basePdfBytes.length + incrementalBytes.length);
-    finalBytes.set(basePdfBytes, 0);
-    finalBytes.set(incrementalBytes, basePdfBytes.length);
+    const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);
+    finalBytes.set(pdfBytes, 0);
+    finalBytes.set(incrementalBytes, pdfBytes.length);
 
-    // Now we need to find the signature dictionary and add ByteRange
-    // We'll do this by searching for the placeholder and calculating offsets
-    return calculateByteRanges(finalBytes, placeholderHexLength);
+    const prepared = calculateByteRanges(finalBytes, placeholderHexLength);
+    return prepared;
 }
 /**
  * Finds the signature placeholder in the PDF and calculates byte ranges.

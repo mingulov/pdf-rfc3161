@@ -35,6 +35,7 @@ describe("Certificate Export", () => {
             fieldName: "Test",
             coversWholeDocument: true,
             verified: true,
+            byteRange: [0, 0, 0, 0],
         };
 
         const result = await verifyTimestamp(timestamp);
