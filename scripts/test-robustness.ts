@@ -50,7 +50,7 @@ function findPdfFiles(dir: string): string[] {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runTest() {
-    console.log(`🔍 Scanning corpus in ${CORPUS_DIR}...`);
+    console.log(`Scanning corpus in ${CORPUS_DIR}...`);
     const files = findPdfFiles(CORPUS_DIR);
     console.log(`Found ${files.length} PDF files.`);
 
@@ -64,13 +64,13 @@ async function runTest() {
 
         // Skip check
         if (SKIP_PATTERNS.some(p => file.toLowerCase().includes(p))) {
-            console.log(`[${i + 1}/${files.length}] ⏭️  SKIP: ${relativePath} (matched skip pattern)`);
+            console.log(`[${i + 1}/${files.length}] SKIP: ${relativePath} (matched skip pattern)`);
             RESULTS.push({ file: relativePath, status: "SKIP", error: "Matched skip pattern" });
             skipped++;
             continue;
         }
 
-        console.log(`[${i + 1}/${files.length}] 🧪 Testing: ${relativePath}...`);
+        console.log(`[${i + 1}/${files.length}] Testing: ${relativePath}...`);
 
         try {
             const pdfBytes = new Uint8Array(readFileSync(file));
@@ -79,7 +79,7 @@ async function runTest() {
             try {
                 await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
             } catch (e) {
-                console.log(`   🔸 SKIP: Could not load PDF (likely encrypted or invalid): ${e}`);
+                console.log(`   SKIP: Could not load PDF (likely encrypted or invalid): ${e}`);
                 RESULTS.push({ file: relativePath, status: "SKIP", error: "Load failed: " + String(e) });
                 skipped++;
                 continue;
@@ -131,7 +131,7 @@ async function runTest() {
 
                     textMatch = textBefore === textAfter;
                     if (!textMatch) {
-                        console.log(`   ⚠️  Text content differs after timestamping`);
+                        console.log(`   WARN: Text content differs after timestamping`);
                     }
                 } catch {
                     // pdftotext not available or failed, skip text comparison
@@ -139,7 +139,7 @@ async function runTest() {
                 }
             } catch (validationError: unknown) {
                 const msg = validationError instanceof Error ? validationError.message : String(validationError);
-                console.log(`   ❌ VALIDATION FAIL: ${msg}`);
+                console.log(`   FAIL: VALIDATION FAILED: ${msg}`);
                 RESULTS.push({
                     file: relativePath,
                     status: "FAIL",
@@ -154,7 +154,7 @@ async function runTest() {
                 continue;
             }
 
-            console.log(`   ✅ PASS (${duration}ms) - Size: ${pdfBytes.length} -> ${result.pdf.length}, Pages: ${pageCountBefore}`);
+            console.log(`   PASS (${duration}ms) - Size: ${pdfBytes.length} -> ${result.pdf.length}, Pages: ${pageCountBefore}`);
             RESULTS.push({
                 file: relativePath,
                 status: "PASS",
@@ -168,7 +168,7 @@ async function runTest() {
             passed++;
 
         } catch (error: any) {
-            console.log(`   ❌ FAIL: ${error.message} (${error.code})`);
+            console.log(`   FAIL: ${error.message} (${error.code})`);
             RESULTS.push({
                 file: relativePath,
                 status: "FAIL",
@@ -185,7 +185,7 @@ async function runTest() {
     }
 
     // Generate Report
-    console.log("\n📊 Generating Report...");
+    console.log("\nGenerating Report...");
     writeFileSync(REPORT_FILE, JSON.stringify(RESULTS, null, 2));
 
     const summary = `

@@ -11,7 +11,7 @@ const CORPUS_DIR = resolve(__dirname, "../.corpus");
 const REPO_DIR = join(CORPUS_DIR, "py-pdf-sample-files");
 
 async function main() {
-    console.log("📂 Preparing PDF corpus...");
+    console.log("Preparing PDF corpus...");
 
     if (!existsSync(CORPUS_DIR)) {
         mkdirSync(CORPUS_DIR);
@@ -35,7 +35,7 @@ async function main() {
         }
     }
 
-    console.log("✅ Corpus ready!");
+    console.log("Corpus ready!");
 }
 
 main().catch((err) => {

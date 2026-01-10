@@ -29,21 +29,21 @@ Thank you for your interest in contributing! This document provides guidelines a
 
 ```
 pdf-rfc3161/
-├── src/
-│   ├── index.ts          # Public API exports
-│   ├── types.ts          # TypeScript interfaces
-│   ├── constants.ts      # OIDs and constants
-│   ├── tsa/              # TSA client layer
-│   │   ├── request.ts    # TimeStampReq creation
-│   │   ├── response.ts   # TimeStampResp parsing
-│   │   └── client.ts     # HTTP communication
-│   └── pdf/              # PDF manipulation layer
-│       ├── prepare.ts    # PDF preparation
-│       └── embed.ts      # Token embedding
-├── test/
-│   ├── unit/             # Unit tests (mocked)
-│   └── integration/      # Integration tests (real TSAs)
-└── examples/             # Usage examples
+|-- src/
+|   |-- index.ts          # Public API exports
+|   |-- types.ts          # TypeScript interfaces
+|   |-- constants.ts      # OIDs and constants
+|   |-- tsa/              # TSA client layer
+|   |   |-- request.ts    # TimeStampReq creation
+|   |   |-- response.ts   # TimeStampResp parsing
+|   |   `-- client.ts     # HTTP communication
+|   `-- pdf/              # PDF manipulation layer
+|       |-- prepare.ts    # PDF preparation
+|       `-- embed.ts      # Token embedding
+|-- test/
+|   |-- unit/             # Unit tests (mocked)
+|   `-- integration/      # Integration tests (real TSAs)
+`-- examples/             # Usage examples
 ```
 
 ## Running Tests

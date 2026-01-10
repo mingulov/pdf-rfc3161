@@ -113,7 +113,7 @@ program
                 // Write output
                 await writeFile(outputFile, result.pdf);
 
-                console.log(`✓ Timestamp added successfully!`);
+                console.log(`SUCCESS: Timestamp added successfully!`);
                 console.log(`  Output:      ${outputFile}`);
                 console.log(`  Time:        ${result.timestamp.genTime.toISOString()}`);
                 console.log(`  Policy:      ${result.timestamp.policy}`);
@@ -123,8 +123,7 @@ program
                     console.log(`  Algorithm:   ${result.timestamp.hashAlgorithm}`);
                     console.log(`  Digest:      ${result.timestamp.messageDigest.slice(0, 32)}...`);
                     console.log(
-                        `  Certificate: ${
-                            result.timestamp.hasCertificate ? "included" : "not included"
+                        `  Certificate: ${result.timestamp.hasCertificate ? "included" : "not included"
                         }`
                     );
                     console.log(`  Input size:  ${pdfBytes.length.toLocaleString()} bytes`);
@@ -180,9 +179,9 @@ program
                 console.log(`  Policy:        ${ts.info.policy}`);
 
                 if (verified.verified) {
-                    console.log(`  Status:        ✓ Verified`);
+                    console.log(`  Status:        [OK] Verified`);
                 } else {
-                    console.log(`  Status:        ✗ Verification failed`);
+                    console.log(`  Status:        [FAIL] Verification failed`);
                     if (verified.verificationError !== undefined) {
                         console.log(`  Error:         ${verified.verificationError}`);
                     }
@@ -205,11 +204,11 @@ program
             const verifiedCount = timestamps.filter((ts) => ts.verified).length;
             if (verifiedCount === timestamps.length) {
                 console.log(
-                    `✓ All ${String(timestamps.length)} timestamp(s) verified successfully.`
+                    `SUCCESS: All ${String(timestamps.length)} timestamp(s) verified successfully.`
                 );
             } else {
                 console.log(
-                    `⚠ ${String(verifiedCount)}/${String(timestamps.length)} timestamp(s) verified.`
+                    `WARN: ${String(verifiedCount)}/${String(timestamps.length)} timestamp(s) verified.`
                 );
                 process.exit(1);
             }
