@@ -25,6 +25,7 @@ import {
     addVRIEnhanced,
     getDSSInfo,
     type LTVData,
+    type CompletedLTVData,
 } from "./pdf/ltv.js";
 
 import { timestampPdfLTA, type ArchiveTimestampOptions } from "./pdf/archive.js";
@@ -223,7 +224,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
             if (enableLTV) {
                 const extracted = extractLTVData(tsResponse.token);
 
-                let completed: any;
+                let completed: CompletedLTVData;
                 if (revocationData) {
                     // Use pre-fetched revocation data instead of network fetching
                     completed = {

@@ -120,13 +120,13 @@ describe("ValidationSession Cache Integration", () => {
         });
 
         // Mock fetcher that returns different responses but cache should return same
-        const mockFetcher = session["options"].fetcher as any;
+        const mockFetcher = session.options.fetcher as any;
         mockFetcher.fetchOCSP = vi.fn().mockResolvedValue(new Uint8Array([0x01, 0x02]));
         mockFetcher.fetchCRL = vi.fn().mockResolvedValue(new Uint8Array([0x03, 0x04]));
 
         // This would normally call fetchOCSP, but we're testing cache integration
         // In a real test, we'd queue certificates and validate
-        expect(session["options"].cache).toBe(cache);
+        expect(session.options.cache).toBe(cache);
     });
 
     it("should export cache statistics", () => {

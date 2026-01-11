@@ -155,6 +155,9 @@ export async function fetchCRL(
                 }
             }
 
+            // Record successful response to potentially reset circuit breaker from HALF_OPEN to CLOSED
+            crlCircuitBreakers.recordSuccess(url);
+
             return responseBytes;
         } catch (error) {
             clearTimeout(timeoutId);

@@ -323,9 +323,8 @@ export async function addVRIEnhanced(
     // Note: PDF 1.x / PAdES requires SHA-1 for VRI key names.
     // SHA-1 here is used as a lookup key, not for cryptographic security.
     const certDer = signingCert.toSchema().toBER(false);
-    const algorithm = options?.hashAlgorithm ?? "SHA-1";
     const vriKey =
-        algorithm === "SHA-256"
+        options.hashAlgorithm === "SHA-256"
             ? await sha256Hex(new Uint8Array(certDer))
             : await sha1Hex(new Uint8Array(certDer));
 
@@ -413,11 +412,11 @@ export async function addVRIEnhanced(
     const vriDict: PDFDict = sigPdfDoc.catalog.has(PDFName.of("VRI"))
         ? (sigPdfDoc.catalog.lookup(PDFName.of("VRI")) as PDFDict)
         : (() => {
-              const newVri = context.obj({});
-              const vriRef = context.register(newVri);
-              sigPdfDoc.catalog.set(PDFName.of("VRI"), vriRef);
-              return newVri;
-          })();
+            const newVri = context.obj({});
+            const vriRef = context.register(newVri);
+            sigPdfDoc.catalog.set(PDFName.of("VRI"), vriRef);
+            return newVri;
+        })();
 
     // Add this VRI entry with the certificate hash as key
     vriDict.set(PDFName.of(vriKey), vriEntry);

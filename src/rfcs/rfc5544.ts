@@ -233,7 +233,7 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
  */
 export function extractDataFromEnvelope(envelope: Uint8Array): Uint8Array | null {
     const parsed = parseTimeStampedData(envelope);
-    return parsed.data || null;
+    return parsed.data ?? null;
 }
 
 /**
@@ -376,15 +376,15 @@ function parseTemporalEvidence(evidenceSeq: asn1js.Sequence): Uint8Array[] {
 
     // Parse tstEvidence [0] TimeStampTokenEvidence
     if (values[0] instanceof asn1js.Constructed) {
-        const tstEvidence = values[0] as asn1js.Constructed;
+        const tstEvidence = values[0];
         if (tstEvidence.valueBlock.value[0] instanceof asn1js.Sequence) {
-            const timeStampTokenEvidence = tstEvidence.valueBlock.value[0] as asn1js.Sequence;
+            const timeStampTokenEvidence = tstEvidence.valueBlock.value[0];
             for (const item of timeStampTokenEvidence.valueBlock.value) {
                 if (
                     item instanceof asn1js.Sequence &&
                     item.valueBlock.value[0] instanceof asn1js.OctetString
                 ) {
-                    const token = item.valueBlock.value[0] as asn1js.OctetString;
+                    const token = item.valueBlock.value[0];
                     tokens.push(new Uint8Array(token.valueBlock.valueHexView));
                 }
             }

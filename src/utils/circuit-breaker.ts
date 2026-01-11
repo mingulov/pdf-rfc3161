@@ -132,7 +132,7 @@ export class CircuitBreaker {
         this._lastFailureTime = 0;
     }
 
-    private onSuccess(): void {
+    public onSuccess(): void {
         if (this._state === CircuitState.HALF_OPEN) {
             this._successCount++;
             if (this._successCount >= this.config.successThreshold) {
@@ -146,7 +146,7 @@ export class CircuitBreaker {
         }
     }
 
-    private onFailure(): void {
+    public onFailure(): void {
         this._failureCount++;
         this._lastFailureTime = Date.now();
 
@@ -228,6 +228,22 @@ export class CircuitBreakerMap {
             breaker.reset();
         }
         this.breakers.clear();
+    }
+
+    /**
+     * Record a success for a specific URL (manually call onSuccess)
+     */
+    recordSuccess(url: string): void {
+        const breaker = this.getBreaker(url);
+        breaker.onSuccess();
+    }
+
+    /**
+     * Record a failure for a specific URL (manually call onFailure)
+     */
+    recordFailure(url: string): void {
+        const breaker = this.getBreaker(url);
+        breaker.onFailure();
     }
 
     /**

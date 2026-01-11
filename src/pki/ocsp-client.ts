@@ -78,6 +78,9 @@ export async function fetchOCSPResponse(url: string, request: Uint8Array): Promi
                 );
             }
 
+            // Record successful response to potentially reset circuit breaker from HALF_OPEN to CLOSED
+            ocspCircuitBreakers.recordSuccess(url);
+
             return responseBytes;
         } catch (error) {
             clearTimeout(timeoutId);

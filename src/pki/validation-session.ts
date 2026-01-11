@@ -179,7 +179,7 @@ export class ValidationSession {
         cert: pkijs.Certificate,
         issuer?: pkijs.Certificate
     ): Promise<Uint8Array> {
-        const issuerCert = issuer || this.findIssuer(cert);
+        const issuerCert = issuer ?? this.findIssuer(cert);
         if (!issuerCert) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
@@ -226,7 +226,6 @@ export class ValidationSession {
     private checkCRLForCert(crlBytes: Uint8Array, cert: pkijs.Certificate): boolean {
         try {
             const crlInfo = parseCRLInfo(crlBytes);
-            if (!crlInfo.crl) return false;
 
             const asn1 = asn1js.fromBER(crlInfo.crl.slice().buffer);
             if (asn1.offset === -1) return false;

@@ -1,11 +1,14 @@
 import { useState } from "react";
-import { ShieldCheck, PenTool, Terminal } from "lucide-react";
+import { ShieldCheck, PenTool, Terminal, Archive } from "lucide-react";
 import VerifyPanel from "./components/VerifyPanel";
 import TimestampPanel from "./components/TimestampPanel";
+import ArchivePanel from "./components/ArchivePanel";
 import { CurlLTVPanel } from "./components/CurlLTVPanel";
 
 function App() {
-    const [activeTab, setActiveTab] = useState<"verify" | "timestamp" | "curl-ltv">("verify");
+    const [activeTab, setActiveTab] = useState<"verify" | "timestamp" | "archive" | "curl-ltv">(
+        "verify"
+    );
 
     return (
         <div className="app text-center">
@@ -38,6 +41,16 @@ function App() {
                     <PenTool size={18} aria-hidden="true" /> Add Timestamp
                 </button>
                 <button
+                    className={`tab ${activeTab === "archive" ? "active" : ""}`}
+                    onClick={() => setActiveTab("archive")}
+                    role="tab"
+                    aria-selected={activeTab === "archive"}
+                    aria-controls="archive-panel"
+                    id="archive-tab"
+                >
+                    <Archive size={18} aria-hidden="true" /> Archive LTA
+                </button>
+                <button
                     className={`tab ${activeTab === "curl-ltv" ? "active" : ""}`}
                     onClick={() => setActiveTab("curl-ltv")}
                     role="tab"
@@ -57,6 +70,10 @@ function App() {
                 ) : activeTab === "timestamp" ? (
                     <div role="tabpanel" id="timestamp-panel" aria-labelledby="timestamp-tab">
                         <TimestampPanel />
+                    </div>
+                ) : activeTab === "archive" ? (
+                    <div role="tabpanel" id="archive-panel" aria-labelledby="archive-tab">
+                        <ArchivePanel />
                     </div>
                 ) : (
                     <div role="tabpanel" id="curl-ltv-panel" aria-labelledby="curl-ltv-tab">

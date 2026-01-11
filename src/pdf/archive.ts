@@ -76,10 +76,6 @@ export async function timestampPdfLTA(options: ArchiveTimestampOptions): Promise
         }
     }
 
-    if (certificates.length === 0 && existingTimestamps.length > 0) {
-        // This shouldn't happen if we have timestamps, but safety first
-    }
-
     // 4. Update the DSS with collected information
     // If no new info was found, we still proceed to add the archive timestamp
     const ltvData: LTVData = {

@@ -36,7 +36,7 @@ export function validateRFC8933Compliance(
         hasAlgorithmProtection: false,
     };
 
-    if (!signedData.signerInfos || signedData.signerInfos.length === 0) {
+    if (signedData.signerInfos.length === 0) {
         result.compliant = false;
         result.issues.push("No signer information found");
         return result;
@@ -87,7 +87,7 @@ export function validateRFC8933Compliance(
 function validateDigestAlgorithmConsistency(signerInfo: pkijs.SignerInfo): boolean {
     try {
         // Get digest algorithm from SignerInfo.digestAlgorithm
-        const signerDigestAlgorithm = signerInfo.digestAlgorithm?.algorithmId;
+        const signerDigestAlgorithm = signerInfo.digestAlgorithm.algorithmId;
         if (!signerDigestAlgorithm) {
             return false; // Cannot determine algorithm
         }
@@ -127,12 +127,16 @@ function hasAlgorithmProtectionAttribute(signerInfo: pkijs.SignerInfo): boolean 
         const CMS_ALGORITHM_PROTECT_OID = "1.2.840.113549.1.9.52";
 
         // Type-safe attribute access
-        const signedAttrs = (signerInfo.signedAttrs as any).attributes || signerInfo.signedAttrs;
+        const signedAttrs =
+            (signerInfo.signedAttrs as unknown as { attributes?: pkijs.Attribute[] }).attributes ??
+            signerInfo.signedAttrs;
         if (!Array.isArray(signedAttrs)) {
             return false;
         }
 
-        return signedAttrs.some((attr: any) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+        return signedAttrs.some(
+            (attr) => attr.type === CMS_ALGORITHM_PROTECT_OID
+        );
     } catch {
         return false;
     }

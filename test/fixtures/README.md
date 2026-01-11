@@ -1,111 +1,64 @@
-# TSA Test Fixtures
+# Test Fixtures
 
-This directory contains real TSA responses for comprehensive offline testing.
+This directory contains pre-generated test data for comprehensive testing without requiring live network connections.
 
-## Structure
+## Directory Structure
 
-- `tsa-responses.ts` - Main fixture file with real TSA responses
-- `index.ts` - Export module
-- `capture-scripts/` - Scripts for capturing new fixtures
-
-## Adding New Fixtures
-
-To capture a new TSA response:
-
-### Using curl (recommended)
-
-```bash
-# Generate a test hash
-TEST_HASH=$(echo -n "test" | sha256sum | cut -d' ' -f1)
-echo "$TEST_HASH"
-
-# Create timestamp request using openssl
-openssl ts -query -data /dev/stdin -sha256 -cert <<< "test" > request.tsq
-
-# Send request and save response
-curl -s -H "Content-Type: application/timestamp-query" \
-     --data-binary @request.tsq \
-     http://timestamp.digicert.com > response.tsr
-
-# Convert to base64 for fixture
-base64 -w 0 response.tsr
+```
+fixtures/
+|-- certs/          # X.509 certificates in PEM format
+|-- ocsp/           # OCSP responses in DER format
+|-- crl/            # Certificate Revocation Lists
+|-- timestamps/     # Timestamp tokens from TSAs
+`-- pdfs/           # Test PDF documents
 ```
 
-### Using the capture script
+## Philosophy
 
-```bash
-npm run fixtures:capture -- --url http://timestamp.digicert.com --name DIGICERT
-```
+- **Real Data**: All fixtures contain actual cryptographic data from real servers
+- **Deterministic**: Tests run the same way every time
+- **Comprehensive**: Cover success cases, error cases, and edge cases
+- **Minimal**: Only include what's needed for testing
 
-## Fixture Format
+## Generation Process
 
-Each fixture contains:
+1. **Certificates**: Generated using OpenSSL with proper chains
+2. **OCSP/CRL**: Captured from real certificate authorities
+3. **Timestamps**: Recorded from live TSA servers
+4. **PDFs**: Created using standard PDF generation tools
+
+## Usage in Tests
 
 ```typescript
-{
-  name: string;           // Human-readable name
-  sourceUrl: string;      // TSA server URL
-  capturedAt: string;     // ISO timestamp
-  trustStatus: "QUALIFIED" | "TRUSTED" | "UNTRUSTED";
-  buffer: Uint8Array;     // DER-encoded TimeStampResp
-  expectedStatus: string; // GRANTED, GRANTED_WITH_MODS, REJECTION
-  hashAlgorithm: string;  // SHA-256, SHA-384, SHA-512
-  includesCertificate: boolean;
-  certificateChain?: {    // Certificate info if included
-    count: number;
-    tsaSubject: string;
-    tsaIssuer: string;
-    serialNumber: string;
-    notBefore: string;
-    notAfter: string;
-  };
-  sizeInfo: {
-    totalBytes: number;
-    tokenBytes: number;
-    certificateBytes: number;
-  };
-  quirks: string[];       // Known quirks or special behaviors
-}
+// Example: Testing with real OCSP response
+import { readFileSync } from "fs";
+import { MockFetcher } from "../mocks/mock-fetcher";
+
+const realOCSPResponse = new Uint8Array(readFileSync("test/fixtures/ocsp/good.der"));
+
+const mockFetcher = new MockFetcher();
+mockFetcher.setOCSPResponse("http://ocsp.example.com", realOCSPResponse);
+
+// Test passes with real cryptographic data
 ```
 
-## Using Fixtures in Tests
+## Updating Fixtures
 
-```typescript
-import { TSA_FIXTURES, getFixturesByTrustStatus } from "./fixtures";
+When real servers change their responses:
 
-describe("TSA Response Parsing", () => {
-    it("should parse qualified TSA responses", () => {
-        const qualified = getFixturesByTrustStatus("QUALIFIED");
-        for (const fixture of qualified) {
-            const result = parseTimestampResponse(fixture.buffer);
-            expect(result.status).toBe(fixture.expectedStatus);
-        }
-    });
+```bash
+# Update OCSP fixtures
+npm run test:update-fixtures
 
-    it("should handle DigiCert responses", () => {
-        const digicert = TSA_FIXTURES.DIGICERT_GRANTED;
-        const result = parseTimestampResponse(digicert.buffer);
-        expect(result.info).toBeDefined();
-        expect(result.token).toBeDefined();
-    });
-});
+# Or manually capture new responses
+curl -H "Content-Type: application/ocsp-request" \
+     --data-binary @ocsp-request.der \
+     http://ocsp.example.com > new-response.der
 ```
 
-## Supported Hash Algorithms
+## Coverage Goals
 
-- SHA-256
-- SHA-384
-- SHA-512
-
-## Trust Status Categories
-
-- **QUALIFIED** - EU eIDAS compliant, on EU Trust List
-- **TRUSTED** - On Adobe Approved Trust List
-- **UNTRUSTED** - Not on any trust list (may still work)
-
-## Error Response Types
-
-- GRANTED (0) - Success
-- GRANTED_WITH_MODS (1) - Success with modifications
-- REJECTION (2) - Request rejected
-- WAITING (3) - Request queued (rare)
+- **100% unit test coverage** using these fixtures
+- **Real cryptographic operations** (not mocked crypto)
+- **Edge case handling** (expired certs, malformed responses, etc.)
+- **Performance testing** with large fixtures
