@@ -73,17 +73,24 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
     let certIdHashAlgorithm: "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512" | undefined;
     let usesESSCertIDv2: boolean | undefined;
 
-    if (signedData.signerInfos && signedData.signerInfos.length > 0) {
-        const signerInfo = signedData.signerInfos[0];
+    if (signedData.signerInfos.length > 0) {
+        const signerInfo = signedData.signerInfos[0] as pkijs.SignerInfo & {
+            signingCertificateV2?: {
+                certs?: {
+                    hashAlgorithm?: { algorithmId: string };
+                }[];
+            };
+            signingCertificate?: unknown;
+        };
 
         // Check for ESSCertIDv2 (RFC 5816) - signingCertificateV2 attribute
-        if ((signerInfo as any).signingCertificateV2) {
+        if (signerInfo.signingCertificateV2) {
             usesESSCertIDv2 = true;
             // Extract hash algorithm from the certID in signingCertificateV2
-            const signingCertV2 = (signerInfo as any).signingCertificateV2;
+            const signingCertV2 = signerInfo.signingCertificateV2;
             if (signingCertV2.certs && signingCertV2.certs.length > 0) {
                 const certID = signingCertV2.certs[0];
-                if (certID.hashAlgorithm && certID.hashAlgorithm.algorithmId) {
+                if (certID.hashAlgorithm?.algorithmId) {
                     const oid = certID.hashAlgorithm.algorithmId;
                     certIdHashAlgorithm = OID_TO_HASH_ALGORITHM[oid] as
                         | "SHA-1"
@@ -94,7 +101,7 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
             }
         }
         // Check for legacy ESSCertID - signingCertificate attribute
-        else if ((signerInfo as any).signingCertificate) {
+        else if (signerInfo.signingCertificate) {
             usesESSCertIDv2 = false;
             // Legacy ESSCertID always uses SHA-1 for certificate identification
             certIdHashAlgorithm = "SHA-1";
@@ -118,14 +125,27 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
  * Parses a raw DER encoded timestamp token and extracts the TimestampInfo.
  */
 export function parseTimestampToken(token: Uint8Array): TimestampInfo {
-    const asn1 = asn1js.fromBER(token.slice().buffer);
-    if (asn1.offset === -1) {
+    try {
+        const asn1 = asn1js.fromBER(token.slice().buffer);
+        if (asn1.offset === -1) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "Failed to parse timestamp token"
+            );
+        }
+
+        const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
+        return extractTimestampInfoFromContentInfo(contentInfo);
+    } catch (error) {
+        if (error instanceof TimestampError) {
+            throw error;
+        }
+        // PKI.js might throw generic Error if schema verification fails
+        // or RangeError if there's a stack overflow on deep structures
+        const message = error instanceof Error ? error.message : "Unknown error";
         throw new TimestampError(
             TimestampErrorCode.INVALID_RESPONSE,
-            "Failed to parse timestamp token"
+            `Failed to parse timestamp token: ${message}`
         );
     }
-
-    const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
-    return extractTimestampInfoFromContentInfo(contentInfo);
 }

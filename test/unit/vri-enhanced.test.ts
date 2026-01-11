@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { PDFDocument, PDFRef } from "pdf-lib-incremental-save";
+import { PDFDocument } from "pdf-lib-incremental-save";
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { addVRIEnhanced } from "../../src/pdf/ltv.js";

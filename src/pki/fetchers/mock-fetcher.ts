@@ -53,7 +53,7 @@ export class MockFetcher implements RevocationDataFetcher {
         if (!response) {
             throw new Error(`No mock OCSP response configured for URL: ${url}`);
         }
-        return response;
+        return Promise.resolve(response);
     }
 
     async fetchCRL(url: string): Promise<Uint8Array> {
@@ -61,6 +61,6 @@ export class MockFetcher implements RevocationDataFetcher {
         if (!response) {
             throw new Error(`No mock CRL response configured for URL: ${url}`);
         }
-        return response;
+        return Promise.resolve(response);
     }
 }

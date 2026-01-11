@@ -144,7 +144,7 @@ describe("RFC 8933 CMS Algorithm Identifier Protection", () => {
         const signedData = createMockSignedData();
 
         // Test with signed attributes present
-        const signerInfo = signedData.signerInfos![0];
+        const signerInfo = signedData.signerInfos[0];
         (signerInfo as any).signedAttrs = {}; // Mock signed attributes
 
         const result = validateRFC8933Compliance(signedData);

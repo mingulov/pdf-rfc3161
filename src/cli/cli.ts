@@ -126,8 +126,7 @@ program
                     console.log(`  Algorithm:   ${result.timestamp.hashAlgorithm}`);
                     console.log(`  Digest:      ${result.timestamp.messageDigest.slice(0, 32)}...`);
                     console.log(
-                        `  Certificate: ${
-                            result.timestamp.hasCertificate ? "included" : "not included"
+                        `  Certificate: ${result.timestamp.hasCertificate ? "included" : "not included"
                         }`
                     );
                     console.log(`  Input size:  ${pdfBytes.length.toLocaleString()} bytes`);
@@ -291,7 +290,7 @@ program
                     }
 
                     // RFC 8933 compliance validation
-                    if (options.rfc8933 && verified.verified && ts.token) {
+                    if (options.rfc8933 && verified.verified) {
                         const rfc8933Result = validateTimestampTokenRFC8933Compliance(ts.token);
                         if (rfc8933Result.compliant) {
                             console.log(`  RFC 8933:      [OK] Compliant`);
@@ -381,4 +380,11 @@ function generateOutputFilename(inputFile: string): string {
     return join(dir, `${base}-timestamped`);
 }
 
-program.parse();
+// Export functions for testing
+export { handleError, generateOutputFilename };
+
+// Only parse command line arguments if not in test mode
+// This allows unit tests to import the CLI module without triggering argument parsing
+if (process.env.CLI_TEST_MODE !== "true") {
+    program.parse();
+}

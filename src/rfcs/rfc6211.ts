@@ -18,23 +18,27 @@ const CMS_ALGORITHM_PROTECT_OID = "1.2.840.113549.1.9.52";
  * @returns True if cmsAlgorithmProtect attribute is present
  */
 export function hasAlgorithmProtectAttribute(signedData: pkijs.SignedData): boolean {
-    if (!signedData.signerInfos || signedData.signerInfos.length === 0) {
+    if (signedData.signerInfos.length === 0) {
         return false;
     }
 
     // Check the first signerInfo for the attribute
     const signerInfo = signedData.signerInfos[0];
-    if (!signerInfo || !signerInfo.signedAttrs) {
+    if (!signerInfo?.signedAttrs) {
         return false;
     }
 
     // Type assertion for pkijs attribute access
-    const signedAttrs = (signerInfo.signedAttrs as any).attributes || signerInfo.signedAttrs;
+    const signedAttrs =
+        (signerInfo.signedAttrs as unknown as { attributes?: pkijs.Attribute[] }).attributes ??
+        signerInfo.signedAttrs;
     if (!Array.isArray(signedAttrs)) {
         return false;
     }
 
-    return signedAttrs.some((attr: any) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+    return signedAttrs.some(
+        (attr) => attr.type === CMS_ALGORITHM_PROTECT_OID
+    );
 }
 
 /**
@@ -44,24 +48,28 @@ export function hasAlgorithmProtectAttribute(signedData: pkijs.SignedData): bool
  * @returns Array of algorithm OIDs, or empty array if attribute not present
  */
 export function getProtectedAlgorithms(signedData: pkijs.SignedData): string[] {
-    if (!signedData.signerInfos || signedData.signerInfos.length === 0) {
+    if (signedData.signerInfos.length === 0) {
         return [];
     }
 
     const signerInfo = signedData.signerInfos[0];
-    if (!signerInfo || !signerInfo.signedAttrs) {
+    if (!signerInfo?.signedAttrs) {
         return [];
     }
 
     // Type assertion for pkijs attribute access
-    const signedAttrs = (signerInfo.signedAttrs as any).attributes || signerInfo.signedAttrs;
+    const signedAttrs =
+        (signerInfo.signedAttrs as unknown as { attributes?: pkijs.Attribute[] }).attributes ??
+        signerInfo.signedAttrs;
     if (!Array.isArray(signedAttrs)) {
         return [];
     }
 
-    const protectAttr = signedAttrs.find((attr: any) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+    const protectAttr = signedAttrs.find(
+        (attr) => attr.type === CMS_ALGORITHM_PROTECT_OID
+    );
 
-    if (!protectAttr || !protectAttr.values || protectAttr.values.length === 0) {
+    if (!protectAttr?.values || protectAttr.values.length === 0) {
         return [];
     }
 
@@ -80,21 +88,19 @@ export function getUsedAlgorithms(signedData: pkijs.SignedData): Set<string> {
     const algorithms = new Set<string>();
 
     // Collect from signerInfos
-    if (signedData.signerInfos) {
-        for (const signerInfo of signedData.signerInfos) {
-            if (signerInfo.digestAlgorithm?.algorithmId) {
-                algorithms.add(signerInfo.digestAlgorithm.algorithmId);
-            }
-            if (signerInfo.signatureAlgorithm?.algorithmId) {
-                algorithms.add(signerInfo.signatureAlgorithm.algorithmId);
-            }
+    for (const signerInfo of signedData.signerInfos) {
+        if (signerInfo.digestAlgorithm.algorithmId) {
+            algorithms.add(signerInfo.digestAlgorithm.algorithmId);
+        }
+        if (signerInfo.signatureAlgorithm.algorithmId) {
+            algorithms.add(signerInfo.signatureAlgorithm.algorithmId);
         }
     }
 
     // Collect from certificates
     if (signedData.certificates) {
         for (const cert of signedData.certificates) {
-            if (cert instanceof pkijs.Certificate && cert.signatureAlgorithm?.algorithmId) {
+            if (cert instanceof pkijs.Certificate && cert.signatureAlgorithm.algorithmId) {
                 algorithms.add(cert.signatureAlgorithm.algorithmId);
             }
         }

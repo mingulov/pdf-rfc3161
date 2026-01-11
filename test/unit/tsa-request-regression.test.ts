@@ -33,7 +33,6 @@ describe("Regression: Timestamp Request Validation", () => {
         expect(tsReq.messageImprint.hashedMessage.valueBlock.valueHexView.length).toBe(32);
         expect(tsReq.certReq).toBe(true);
         expect(tsReq.nonce).toBeDefined();
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         expect(tsReq.nonce!.valueBlock.valueHexView.length).toBe(8);
     });
 
