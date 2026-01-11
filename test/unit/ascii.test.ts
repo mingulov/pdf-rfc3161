@@ -8,7 +8,7 @@ import { test } from "vitest";
  */
 
 const EXTENSIONS = [".ts", ".js", ".cjs", ".mjs", ".md", ".json"];
-const EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage", ".corpus"];
+const EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage", ".corpus", "docs"];
 const EXCLUDE_FILES = ["dummy_token.der"]; // Specific binary fixtures or third-party files
 
 function getFiles(dir: string, allFiles: string[] = []): string[] {

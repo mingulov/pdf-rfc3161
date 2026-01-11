@@ -2,6 +2,15 @@ export { preparePdfForTimestamp, type PreparedPDF, type PrepareOptions } from ".
 
 export { embedTimestampToken, extractBytesToHash } from "./embed.js";
 
-export { extractLTVData, addDSS, type LTVData } from "./ltv.js";
+export {
+    extractLTVData,
+    completeLTVData,
+    addDSS,
+    addVRI,
+    addVRIEnhanced,
+    getDSSInfo,
+    type LTVData,
+    type CompletedLTVData,
+} from "./ltv.js";
 
 export { extractTimestamps, verifyTimestamp, type ExtractedTimestamp } from "./extract.js";

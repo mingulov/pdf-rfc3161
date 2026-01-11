@@ -66,6 +66,22 @@ export interface TimestampOptions {
      * This includes certificates, CRLs, and OCSP responses needed for offline validation.
      */
     enableLTV?: boolean;
+    /**
+     * Pre-fetched revocation data for LTV embedding.
+     * Allows supplying certificates, CRLs, and OCSP responses directly without network calls.
+     * Useful for air-gapped environments or when revocation data is obtained separately.
+     *
+     * When provided, this data is embedded in the DSS instead of fetching from network.
+     * Takes precedence over automatic fetching when enableLTV is true.
+     */
+    revocationData?: {
+        /** DER-encoded certificates to embed */
+        certificates?: Uint8Array[];
+        /** DER-encoded CRLs to embed */
+        crls?: Uint8Array[];
+        /** DER-encoded OCSP responses to embed */
+        ocspResponses?: Uint8Array[];
+    };
 }
 
 /**
@@ -105,6 +121,10 @@ export interface TimestampInfo {
     messageDigest: string;
     /** Whether the TSA certificate was included */
     hasCertificate: boolean;
+    /** Hash algorithm used for ESSCertID (if detectable) */
+    certIdHashAlgorithm?: "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512";
+    /** Whether ESSCertIDv2 (RFC 5816) was used instead of legacy ESSCertID */
+    usesESSCertIDv2?: boolean;
 }
 
 /**

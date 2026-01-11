@@ -272,13 +272,43 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
  * @param pdfBytes - The PDF bytes
  * @param signingCert - The signing certificate (for VRI key generation)
  * @param revocationData - CRLs and OCSP responses to associate with this signature
+ * @param options - Additional options
  * @returns PDF bytes with VRI added incrementally
  */
 export async function addVRI(
     pdfBytes: Uint8Array,
     signingCert: pkijs.Certificate,
     revocationData: { crls?: Uint8Array[]; ocspResponses?: Uint8Array[] },
-    options?: { hashAlgorithm?: "SHA-1" | "SHA-256" } // TODO: PDF 2.0 support
+    options?: { hashAlgorithm?: "SHA-1" | "SHA-256" }
+): Promise<Uint8Array> {
+    return addVRIEnhanced(pdfBytes, signingCert, {
+        revocationData,
+        hashAlgorithm: options?.hashAlgorithm,
+    });
+}
+
+/**
+ * Enhanced VRI creation with proper DSS integration and PAdES compliance.
+ *
+ * This function creates VRI entries that properly reference DSS validation objects
+ * instead of embedding duplicate data, improving PAdES compliance and reducing PDF size.
+ *
+ * @param pdfBytes - The PDF bytes containing DSS
+ * @param signingCert - The signing certificate (for VRI key generation)
+ * @param options - Configuration options
+ * @returns PDF bytes with enhanced VRI added incrementally
+ */
+export async function addVRIEnhanced(
+    pdfBytes: Uint8Array,
+    signingCert: pkijs.Certificate,
+    options: {
+        revocationData?: { crls?: Uint8Array[]; ocspResponses?: Uint8Array[] };
+        dssCertRefs?: PDFRef[];
+        dssCrlRefs?: PDFRef[];
+        dssOcspRefs?: PDFRef[];
+        timestampRef?: PDFRef;
+        hashAlgorithm?: "SHA-1" | "SHA-256";
+    } = {}
 ): Promise<Uint8Array> {
     // Load the PDF
     const sigPdfDoc = await PDFDocument.load(pdfBytes, {
@@ -299,28 +329,57 @@ export async function addVRI(
             ? await sha256Hex(new Uint8Array(certDer))
             : await sha1Hex(new Uint8Array(certDer));
 
-    // Create arrays for CRLs and OCSPs
-    const crlsArray = PDFArray.withContext(context);
-    const ocspsArray = PDFArray.withContext(context);
+    // Get DSS references if available, otherwise create new streams
+    let certRefs: PDFRef[] = [];
+    let crlRefs: PDFRef[] = [];
+    let ocspRefs: PDFRef[] = [];
 
-    // Add CRL references
-    if (revocationData.crls) {
-        for (const crlData of revocationData.crls) {
+    if (options.dssCertRefs) {
+        certRefs = options.dssCertRefs;
+    }
+
+    if (options.dssCrlRefs) {
+        crlRefs = options.dssCrlRefs;
+    } else if (options.revocationData?.crls) {
+        // Create new CRL streams if no DSS refs provided
+        for (const crlData of options.revocationData.crls) {
             const streamDict = context.obj({});
             const crlStream = PDFRawStream.of(streamDict, crlData);
             const crlRef = context.register(crlStream);
-            crlsArray.push(crlRef);
+            crlRefs.push(crlRef);
         }
     }
 
-    // Add OCSP response references
-    if (revocationData.ocspResponses) {
-        for (const ocspData of revocationData.ocspResponses) {
+    if (options.dssOcspRefs) {
+        ocspRefs = options.dssOcspRefs;
+    } else if (options.revocationData?.ocspResponses) {
+        // Create new OCSP streams if no DSS refs provided
+        for (const ocspData of options.revocationData.ocspResponses) {
             const streamDict = context.obj({});
             const ocspStream = PDFRawStream.of(streamDict, ocspData);
             const ocspRef = context.register(ocspStream);
-            ocspsArray.push(ocspRef);
+            ocspRefs.push(ocspRef);
         }
+    }
+
+    // Create VRI entry arrays
+    const certsArray = PDFArray.withContext(context);
+    const crlsArray = PDFArray.withContext(context);
+    const ocspsArray = PDFArray.withContext(context);
+
+    // Add certificate references
+    for (const certRef of certRefs) {
+        certsArray.push(certRef);
+    }
+
+    // Add CRL references
+    for (const crlRef of crlRefs) {
+        crlsArray.push(crlRef);
+    }
+
+    // Add OCSP references
+    for (const ocspRef of ocspRefs) {
+        ocspsArray.push(ocspRef);
     }
 
     // Create the VRI entry dictionary for this signature
@@ -330,12 +389,24 @@ export async function addVRI(
     // Note: In a full implementation, we'd find the exact ref to the cert in Certs array
     // For now, we create a reference that validators can follow
 
-    if (revocationData.crls && revocationData.crls.length > 0) {
+    // Add Cert references if available
+    if (certRefs.length > 0) {
+        vriEntry.set(PDFName.of("Cert"), certsArray);
+    }
+
+    // Add CRL references if available
+    if (crlRefs.length > 0) {
         vriEntry.set(PDFName.of("CRL"), crlsArray);
     }
 
-    if (revocationData.ocspResponses && revocationData.ocspResponses.length > 0) {
+    // Add OCSP references if available
+    if (ocspRefs.length > 0) {
         vriEntry.set(PDFName.of("OCSP"), ocspsArray);
+    }
+
+    // Add timestamp reference if provided (for document timestamps)
+    if (options.timestampRef) {
+        vriEntry.set(PDFName.of("TS"), options.timestampRef);
     }
 
     // Get or create the VRI dictionary in the catalog

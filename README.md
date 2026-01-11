@@ -20,6 +20,7 @@ When embedded in a PDF as a Document Timestamp (DocTimeStamp):
 - LTV (Long-Term Validation) support with certificate chain embedding
 - Support for multiple timestamps from different TSAs
 - Extraction and verification of timestamps from existing PDFs
+- RFC 8933 CMS Algorithm Identifier Protection validation
 - Edge runtime compatible (Cloudflare Workers, Vercel Edge, Deno Deploy)
 - Browser support via the Web Crypto API
 - Full TypeScript type definitions
@@ -276,9 +277,85 @@ The `verifyTimestamp()` function performs cryptographic integrity verification:
 - The document hash matches what was timestamped
 - The timestamp structure is valid
 
+**Modular Network Architecture:**
+
+The library is designed with pluggable network interfaces to support various deployment scenarios:
+
+- **Edge Runtimes**: Cloudflare Workers, Vercel Edge, Deno Deploy (uses Web Fetch API)
+- **Node.js**: Can use HTTP client of choice (fetch, axios, node-fetch, curl via child_process)
+- **Testing**: Deterministic mock responses without network calls
+- **Air-Gapped Environments**: Supply pre-fetched revocation data directly
+
+All network operations use the Fetcher pattern:
+
+```typescript
+// Use custom fetcher for testing
+const mockFetcher = new MockFetcher();
+mockFetcher.setOCSPResponse("http://ocsp.example.com", mockResponse);
+
+// Use custom curl-based fetcher
+import { CurlFetcher } from "pdf-rfc3161/pki/fetchers";
+
+// Supply pre-fetched LTV data (no network needed)
+const result = await timestampPdf({
+    pdf: pdfBytes,
+    tsa: { url: "https://tsa.example.com" },
+    enableLTV: true,
+    // Pre-fetched revocation data
+    revocationData: {
+        certificates: [issuerCert, rootCert],
+        ocspResponses: [preFetchedOCSP],
+        crls: [preFetchedCRL],
+    },
+});
+```
+
+**Session Pattern for Complex Workflows:**
+
+For advanced use cases, use the Session API for step-by-step control:
+
+```typescript
+const session = new TimestampSession(pdfBytes, { enableLTV: true });
+
+// Step 1: Generate request (can send to external TSA)
+const request = await session.createTimestampRequest();
+
+// Step 2: Send request via your preferred method
+const response = await myCustomTSAFetch(request);
+
+// Step 3: Embed response with full LTV
+const finalPdf = await session.embedTimestampToken(response);
+```
+
+**RFC Compliance:**
+
+The library aims to support relevant RFCs for timestamp and validation workflows:
+
+| RFC            | Status        | Description                |
+| -------------- | ------------- | -------------------------- |
+| RFC 3161       | [Full]        | Time-Stamp Protocol (core) |
+| RFC 5816       | [Transparent] | ESSCertIDv2 for SHA-256+   |
+| RFC 5544       | [Planned]     | TimeStampedData envelope   |
+| RFC 6960       | [Implemented] | OCSP certificate status    |
+| ETSI 319 142-1 | [Planned]     | PAdES baseline signatures  |
+| RFC 6211       | [Low Prio]    | CMS Algorithm Protect      |
+
+**Key:**
+
+- [Full] = Complete implementation
+- [Transparent] = Works via dependencies (no code needed)
+- [Implemented] = Core functionality exists
+- [Planned] = On roadmap for near-term
+- [Low Prio] = Lower priority, future consideration
+
 **OCSP/CRL handling:**
 
-For LTV support, the library includes OCSP and CRL fetching. This enables standalone operation. In the future, these could be replaced with specialized libraries if needed.
+For LTV support, the library includes OCSP and CRL fetching via pluggable fetchers. Provide custom fetchers or pre-fetched data for:
+
+- Controlled network access
+- Air-gapped environments
+- Deterministic testing
+- Custom caching strategies
 
 **TrustStore validation:**
 

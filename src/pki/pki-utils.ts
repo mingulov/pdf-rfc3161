@@ -69,6 +69,38 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
     const hasCertificate =
         signedData.certificates !== undefined && signedData.certificates.length > 0;
 
+    // Detect ESSCertID vs ESSCertIDv2 format
+    let certIdHashAlgorithm: "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512" | undefined;
+    let usesESSCertIDv2: boolean | undefined;
+
+    if (signedData.signerInfos && signedData.signerInfos.length > 0) {
+        const signerInfo = signedData.signerInfos[0];
+
+        // Check for ESSCertIDv2 (RFC 5816) - signingCertificateV2 attribute
+        if ((signerInfo as any).signingCertificateV2) {
+            usesESSCertIDv2 = true;
+            // Extract hash algorithm from the certID in signingCertificateV2
+            const signingCertV2 = (signerInfo as any).signingCertificateV2;
+            if (signingCertV2.certs && signingCertV2.certs.length > 0) {
+                const certID = signingCertV2.certs[0];
+                if (certID.hashAlgorithm && certID.hashAlgorithm.algorithmId) {
+                    const oid = certID.hashAlgorithm.algorithmId;
+                    certIdHashAlgorithm = OID_TO_HASH_ALGORITHM[oid] as
+                        | "SHA-1"
+                        | "SHA-256"
+                        | "SHA-384"
+                        | "SHA-512";
+                }
+            }
+        }
+        // Check for legacy ESSCertID - signingCertificate attribute
+        else if ((signerInfo as any).signingCertificate) {
+            usesESSCertIDv2 = false;
+            // Legacy ESSCertID always uses SHA-1 for certificate identification
+            certIdHashAlgorithm = "SHA-1";
+        }
+    }
+
     return {
         genTime: tstInfo.genTime,
         policy: tstInfo.policy,
@@ -77,6 +109,8 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
         hashAlgorithmOID,
         messageDigest,
         hasCertificate,
+        certIdHashAlgorithm,
+        usesESSCertIDv2,
     };
 }
 

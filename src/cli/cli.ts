@@ -8,6 +8,7 @@ import {
     extractTimestamps,
     verifyTimestamp,
     getDSSInfo,
+    validateTimestampTokenRFC8933Compliance,
     KNOWN_TSA_URLS,
     TimestampError,
 } from "../index.js";
@@ -235,87 +236,111 @@ program
     .description("Verify RFC 3161 timestamps in a PDF document")
     .argument("<file>", "PDF file to verify")
     .option("-v, --verbose", "Show detailed timestamp information", false)
-    .action(async (inputFile: string, options: Pick<CliOptions, "verbose">) => {
-        try {
-            if (options.verbose) {
-                console.log(`Verifying: ${inputFile}\n`);
-            }
-
-            // Read input PDF
-            const pdfBytes = await readFile(inputFile);
-            const pdfData = new Uint8Array(pdfBytes);
-
-            // Check for Document Security Store (LTV)
-            const dssInfo = await getDSSInfo(pdfData);
-            if (dssInfo.certs > 0 || dssInfo.crls > 0 || dssInfo.ocsps > 0) {
-                console.log(`Document Security Store (LTV):`);
-                console.log(`  Certificates:   ${String(dssInfo.certs)}`);
-                console.log(`  CRLs:           ${String(dssInfo.crls)}`);
-                console.log(`  OCSP Responses: ${String(dssInfo.ocsps)}`);
-                console.log();
-            }
-
-            // Extract timestamps
-            const timestamps = await extractTimestamps(pdfData);
-
-            if (timestamps.length === 0) {
-                console.log("No RFC 3161 timestamps found in this PDF.");
-                return;
-            }
-
-            console.log(`Found ${timestamps.length.toString()} timestamp(s):\n`);
-
-            for (let i = 0; i < timestamps.length; i++) {
-                const ts = timestamps[i];
-                if (!ts) continue;
-
-                // Verify the timestamp
-                const verified = await verifyTimestamp(ts);
-                timestamps[i] = verified;
-
-                console.log(`Timestamp ${(i + 1).toString()}:`);
-                console.log(`  Field:         ${ts.fieldName}`);
-                console.log(`  Time:          ${ts.info.genTime.toISOString()}`);
-                console.log(`  Policy:        ${ts.info.policy}`);
-
-                if (verified.verified) {
-                    console.log(`  Status:        [OK] Verified`);
-                } else {
-                    console.log(`  Status:        [FAIL] Verification failed`);
-                    if (verified.verificationError !== undefined) {
-                        console.log(`  Error:         ${verified.verificationError}`);
-                    }
-                }
-
+    .option("--rfc8933", "Validate RFC 8933 CMS Algorithm Identifier Protection compliance", false)
+    .action(
+        async (inputFile: string, options: Pick<CliOptions, "verbose"> & { rfc8933: boolean }) => {
+            try {
                 if (options.verbose) {
-                    console.log(`  Serial:        ${ts.info.serialNumber}`);
-                    console.log(`  Algorithm:     ${ts.info.hashAlgorithm}`);
-                    console.log(`  Digest:        ${ts.info.messageDigest.slice(0, 32)}...`);
-                    console.log(
-                        `  Certificate:   ${ts.info.hasCertificate ? "included" : "not included"}`
-                    );
-                    console.log(`  Covers whole:  ${ts.coversWholeDocument ? "yes" : "no"}`);
+                    console.log(`Verifying: ${inputFile}\n`);
                 }
 
-                console.log();
-            }
+                // Read input PDF
+                const pdfBytes = await readFile(inputFile);
+                const pdfData = new Uint8Array(pdfBytes);
 
-            // Summary
-            const verifiedCount = timestamps.filter((ts) => ts.verified).length;
-            if (verifiedCount === timestamps.length) {
-                console.log(
-                    `SUCCESS: All ${String(timestamps.length)} timestamp(s) verified successfully.`
-                );
-            } else {
-                console.log(
-                    `WARN: ${String(verifiedCount)}/${String(timestamps.length)} timestamp(s) verified.`
-                );
-                process.exit(1);
+                // Check for Document Security Store (LTV)
+                const dssInfo = await getDSSInfo(pdfData);
+                if (dssInfo.certs > 0 || dssInfo.crls > 0 || dssInfo.ocsps > 0) {
+                    console.log(`Document Security Store (LTV):`);
+                    console.log(`  Certificates:   ${String(dssInfo.certs)}`);
+                    console.log(`  CRLs:           ${String(dssInfo.crls)}`);
+                    console.log(`  OCSP Responses: ${String(dssInfo.ocsps)}`);
+                    console.log();
+                }
+
+                // Extract timestamps
+                const timestamps = await extractTimestamps(pdfData);
+
+                if (timestamps.length === 0) {
+                    console.log("No RFC 3161 timestamps found in this PDF.");
+                    return;
+                }
+
+                console.log(`Found ${timestamps.length.toString()} timestamp(s):\n`);
+
+                for (let i = 0; i < timestamps.length; i++) {
+                    const ts = timestamps[i];
+                    if (!ts) continue;
+
+                    // Verify the timestamp
+                    const verified = await verifyTimestamp(ts);
+                    timestamps[i] = verified;
+
+                    console.log(`Timestamp ${(i + 1).toString()}:`);
+                    console.log(`  Field:         ${ts.fieldName}`);
+                    console.log(`  Time:          ${ts.info.genTime.toISOString()}`);
+                    console.log(`  Policy:        ${ts.info.policy}`);
+
+                    if (verified.verified) {
+                        console.log(`  Status:        [OK] Verified`);
+                    } else {
+                        console.log(`  Status:        [FAIL] Verification failed`);
+                        if (verified.verificationError !== undefined) {
+                            console.log(`  Error:         ${verified.verificationError}`);
+                        }
+                    }
+
+                    // RFC 8933 compliance validation
+                    if (options.rfc8933 && verified.verified && ts.token) {
+                        const rfc8933Result = validateTimestampTokenRFC8933Compliance(ts.token);
+                        if (rfc8933Result.compliant) {
+                            console.log(`  RFC 8933:      [OK] Compliant`);
+                        } else {
+                            console.log(
+                                `  RFC 8933:      [WARN] ${rfc8933Result.issues.join(", ")}`
+                            );
+                        }
+
+                        if (options.verbose) {
+                            console.log(
+                                `  Digest consistency: ${rfc8933Result.digestAlgorithmConsistency ? "OK" : "FAIL"}`
+                            );
+                            console.log(
+                                `  Algorithm protection: ${rfc8933Result.hasAlgorithmProtection ? "present" : "missing"}`
+                            );
+                        }
+                    }
+
+                    if (options.verbose) {
+                        console.log(`  Serial:        ${ts.info.serialNumber}`);
+                        console.log(`  Algorithm:     ${ts.info.hashAlgorithm}`);
+                        console.log(`  Digest:        ${ts.info.messageDigest.slice(0, 32)}...`);
+                        console.log(
+                            `  Certificate:   ${ts.info.hasCertificate ? "included" : "not included"}`
+                        );
+                        console.log(`  Covers whole:  ${ts.coversWholeDocument ? "yes" : "no"}`);
+                    }
+
+                    console.log();
+                }
+
+                // Summary
+                const verifiedCount = timestamps.filter((ts) => ts.verified).length;
+                if (verifiedCount === timestamps.length) {
+                    console.log(
+                        `SUCCESS: All ${String(timestamps.length)} timestamp(s) verified successfully.`
+                    );
+                } else {
+                    console.log(
+                        `WARN: ${String(verifiedCount)}/${String(timestamps.length)} timestamp(s) verified.`
+                    );
+                    process.exit(1);
+                }
+            } catch (err: unknown) {
+                handleError(err, options.verbose);
             }
-        } catch (err: unknown) {
-            handleError(err, options.verbose);
         }
-    });
+    );
 
 // Add examples section to help text
 program.addHelpText(

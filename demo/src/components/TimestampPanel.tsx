@@ -23,7 +23,7 @@ export default function TimestampPanel() {
     const [file, setFile] = useState<File | null>(null);
     const [mode, setMode] = useState<"direct" | "manual">("manual");
     const [tsaUrl, setTsaUrl] = useState<string>(KNOWN_TSA_URLS.FREETSA);
-    const [enableLTV, setEnableLTV] = useState(true);
+    const [enableLTV, setEnableLTV] = useState(false);
     const [ltvWarning, setLtvWarning] = useState(false);
 
     const [loading, setLoading] = useState(false);

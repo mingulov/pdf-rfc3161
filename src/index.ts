@@ -22,6 +22,7 @@ import {
     completeLTVData,
     addDSS,
     addVRI,
+    addVRIEnhanced,
     getDSSInfo,
     type LTVData,
 } from "./pdf/ltv.js";
@@ -45,7 +46,19 @@ import {
 
 import { TrustStore, SimpleTrustStore } from "./pki/trust-store.js";
 
-export { KNOWN_TSA_URLS } from "./tsa-urls.js";
+export {
+    ValidationSession,
+    type CertificateToValidate,
+    type ValidationResult,
+    type RevocationDataFetcher,
+    type ValidationCache,
+    type ValidationSessionOptions,
+    DefaultFetcher,
+    MockFetcher,
+    InMemoryValidationCache,
+} from "./pki/index.js";
+
+export { KNOWN_TSA_URLS, EXTENDED_TSA_URLS, ALL_KNOWN_TSA_URLS } from "./tsa-urls.js";
 
 export {
     TSA_COMPATIBILITY,
@@ -54,6 +67,26 @@ export {
     getTSACompatibility,
     type TSACompatibilityInfo,
 } from "./tsa-compatibility.js";
+
+// RFC 5544 TimeStampedData support
+export {
+    createTimeStampedData,
+    addTimestampsToEnvelope,
+    parseTimeStampedData,
+    extractDataFromEnvelope,
+    extractTimestampsFromEnvelope,
+    verifyTimeStampedDataEnvelope,
+    type TimeStampedDataOptions,
+    type ParsedTimeStampedData,
+} from "./rfcs/rfc5544.js";
+
+// RFC 8933 CMS Algorithm Identifier Protection
+export {
+    validateRFC8933Compliance,
+    validateTimestampTokenRFC8933Compliance,
+    RFC8933_CONSTANTS,
+    type RFC8933ValidationResult,
+} from "./rfcs/rfc8933.js";
 
 // Re-export standard APIs and Types
 export { TimestampError, TimestampErrorCode, TSAStatus };
@@ -73,6 +106,7 @@ export {
     completeLTVData,
     addDSS,
     addVRI,
+    addVRIEnhanced,
     getDSSInfo,
     timestampPdfLTA,
     SimpleTrustStore,
@@ -102,7 +136,15 @@ export {
  * Main API function to timestamp a PDF with LTV support
  */
 export async function timestampPdf(options: TimestampOptions): Promise<TimestampResult> {
-    const { pdf, tsa, enableLTV = false, signatureSize, optimizePlaceholder, maxSize } = options;
+    const {
+        pdf,
+        tsa,
+        enableLTV = false,
+        signatureSize,
+        optimizePlaceholder,
+        maxSize,
+        revocationData,
+    } = options;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
 
     if (pdf.length > maxPdfSize) {
@@ -180,8 +222,22 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
             let ltvData: TimestampResult["ltvData"] = undefined;
             if (enableLTV) {
                 const extracted = extractLTVData(tsResponse.token);
-                // Fetch missing OCSP data to make LTV complete
-                const completed = await completeLTVData(extracted);
+
+                let completed: any;
+                if (revocationData) {
+                    // Use pre-fetched revocation data instead of network fetching
+                    completed = {
+                        data: {
+                            certificates: revocationData.certificates ?? extracted.certificates,
+                            crls: revocationData.crls ?? [],
+                            ocspResponses: revocationData.ocspResponses ?? [],
+                        },
+                        errors: [],
+                    };
+                } else {
+                    // Fetch missing OCSP data to make LTV complete
+                    completed = await completeLTVData(extracted);
+                }
 
                 ltvData = {
                     certificates: completed.data.certificates,
