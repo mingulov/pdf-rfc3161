@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ShieldCheck, PenTool } from "lucide-react";
+import { ShieldCheck, PenTool, Terminal } from "lucide-react";
 import VerifyPanel from "./components/VerifyPanel";
 import TimestampPanel from "./components/TimestampPanel";
+import { CurlLTVPanel } from "./components/CurlLTVPanel";
 
 function App() {
-    const [activeTab, setActiveTab] = useState<"verify" | "timestamp">("verify");
+    const [activeTab, setActiveTab] = useState<"verify" | "timestamp" | "curl-ltv">("verify");
 
     return (
         <div className="app text-center">
@@ -36,6 +37,16 @@ function App() {
                 >
                     <PenTool size={18} aria-hidden="true" /> Add Timestamp
                 </button>
+                <button
+                    className={`tab ${activeTab === "curl-ltv" ? "active" : ""}`}
+                    onClick={() => setActiveTab("curl-ltv")}
+                    role="tab"
+                    aria-selected={activeTab === "curl-ltv"}
+                    aria-controls="curl-ltv-panel"
+                    id="curl-ltv-tab"
+                >
+                    <Terminal size={18} aria-hidden="true" /> Curl LTV
+                </button>
             </div>
 
             <main className="content text-left">
@@ -43,9 +54,13 @@ function App() {
                     <div role="tabpanel" id="verify-panel" aria-labelledby="verify-tab">
                         <VerifyPanel />
                     </div>
-                ) : (
+                ) : activeTab === "timestamp" ? (
                     <div role="tabpanel" id="timestamp-panel" aria-labelledby="timestamp-tab">
                         <TimestampPanel />
+                    </div>
+                ) : (
+                    <div role="tabpanel" id="curl-ltv-panel" aria-labelledby="curl-ltv-tab">
+                        <CurlLTVPanel />
                     </div>
                 )}
             </main>

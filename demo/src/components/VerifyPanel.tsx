@@ -3,14 +3,23 @@ import {
     extractTimestamps,
     verifyTimestamp,
     getDSSInfo,
+    validateTimestampTokenRFC8933Compliance,
     type ExtractedTimestamp,
 } from "pdf-rfc3161";
 import FileDrop from "./FileDrop";
-import { CheckCircle, AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import { CheckCircle, AlertCircle, Loader2, ShieldCheck, Shield } from "lucide-react";
+
+interface RFC8933Result {
+    compliant: boolean;
+    issues: string[];
+    digestAlgorithmConsistency: boolean;
+    hasAlgorithmProtection: boolean;
+}
 
 export default function VerifyPanel() {
     const [file, setFile] = useState<File | null>(null);
     const [timestamps, setTimestamps] = useState<ExtractedTimestamp[]>([]);
+    const [rfc8933Results, setRfc8933Results] = useState<RFC8933Result[]>([]);
     const [dssInfo, setDssInfo] = useState<{ certs: number; crls: number; ocsps: number } | null>(
         null
     );
@@ -21,6 +30,7 @@ export default function VerifyPanel() {
         setLoading(true);
         setError(null);
         setTimestamps([]);
+        setRfc8933Results([]);
         setDssInfo(null);
         try {
             const buffer = await f.arrayBuffer();
@@ -33,6 +43,18 @@ export default function VerifyPanel() {
             );
 
             setTimestamps(verifiedResults);
+
+            // RFC 8933 compliance validation (only for verified timestamps)
+            const rfc8933Results = await Promise.all(
+                verifiedResults.map((ts) =>
+                    ts.verified && ts.token
+                        ? validateTimestampTokenRFC8933Compliance(ts.token)
+                        : null
+                )
+            );
+
+            setTimestamps(verifiedResults);
+            setRfc8933Results(rfc8933Results as RFC8933Result[]);
 
             const dss = await getDSSInfo(pdfBytes);
             if (dss.certs > 0 || dss.crls > 0 || dss.ocsps > 0) {
@@ -162,6 +184,22 @@ export default function VerifyPanel() {
                                     ? "Cryptographically Valid"
                                     : `Invalid: ${ts.verificationError}`}
                             </div>
+
+                            {ts.verified && rfc8933Results[idx] && (
+                                <>
+                                    <div className="tag">
+                                        <Shield size={14} className="mr1" aria-hidden="true" />
+                                        RFC 8933:
+                                    </div>
+                                    <div
+                                        className={`bold ${rfc8933Results[idx].compliant ? "status-ok" : "status-warn"}`}
+                                    >
+                                        {rfc8933Results[idx].compliant
+                                            ? "Compliant"
+                                            : `Issues: ${rfc8933Results[idx].issues.join(", ")}`}
+                                    </div>
+                                </>
+                            )}
 
                             {ts.certificates && ts.certificates.length > 0 && (
                                 <>
