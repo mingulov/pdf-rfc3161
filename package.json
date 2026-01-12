@@ -9,7 +9,9 @@
         "lint": "pnpm -r run lint",
         "format": "pnpm -r run format",
         "typecheck": "pnpm -r run typecheck",
-        "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
+        "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist",
+        "cli": "tsx packages/cli/src/cli.ts",
+        "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-demo run test:e2e"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.2",
@@ -19,7 +21,7 @@
         "tsup": "^8.5.1",
         "tsx": "^4.21.0",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.52.0"
+        "typescript-eslint": "^8.53.0"
     },
     "engines": {
         "node": ">=18.0.0",

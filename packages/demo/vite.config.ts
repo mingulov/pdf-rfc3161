@@ -13,8 +13,17 @@ export default defineConfig({
   },
   server: {
     fs: {
-      allow: ['..']
-    }
+      allow: [".."],
+    },
+    watch: {
+      ignored: [
+        "**/test-results/**",
+        "**/test.pdf",
+        "**/*.tsq",
+        "**/*.tsr",
+        "**/timestamped-*.pdf"
+      ],
+    },
   },
   build: {
     target: 'esnext', // Use modern JS for smaller bundles (since we support modern browsers)

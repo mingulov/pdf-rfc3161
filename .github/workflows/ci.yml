@@ -83,6 +83,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build
+        run: pnpm build
+
       - name: Run integration tests
         run: pnpm --filter pdf-rfc3161-tests run test:integration
         env:

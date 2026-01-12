@@ -58,3 +58,4 @@ export function generateFetchConsoleScriptOneLiner(url: string, bodyBytes?: Uint
 
     return `fetch("${url}", { method: "${method}", ${headers}${bodyText} }).then(r => r.arrayBuffer()).then(b => { const b64 = btoa(String.fromCharCode(...new Uint8Array(b))); console.log(b64); try { navigator.clipboard.writeText(b64); } catch(e){console.log("Copy manually");} })`;
 }
+

@@ -315,7 +315,10 @@ const result = await timestampPdf({
 For advanced use cases, use the Session API for step-by-step control:
 
 ```typescript
-const session = new TimestampSession(pdfBytes, { enableLTV: true });
+const session = new TimestampSession(pdfBytes, {
+    // enableLTV defaults to true. Set to false for manual/no-network scenarios.
+    enableLTV: true
+});
 
 // Step 1: Generate request (can send to external TSA)
 const request = await session.createTimestampRequest();
