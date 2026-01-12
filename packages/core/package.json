@@ -1,0 +1,65 @@
+{
+    "name": "pdf-rfc3161",
+    "version": "0.1.2",
+    "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
+    "keywords": [
+        "pdf",
+        "timestamp",
+        "rfc3161",
+        "tsa",
+        "pades",
+        "ltv",
+        "digital-signature",
+        "cloudflare-workers",
+        "edge"
+    ],
+    "homepage": "https://github.com/mingulov/pdf-rfc3161#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/mingulov/pdf-rfc3161.git"
+    },
+    "license": "MIT",
+    "author": "Denis Mingulov <denis@mingulov.com>",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.cjs"
+        }
+    },
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint src --fix",
+        "format": "prettier --write \"src/**/*.ts\"",
+        "prepublishOnly": "npm run build"
+    },
+    "dependencies": {
+        "asn1js": "^3.0.7",
+        "pdf-lib-incremental-save": "^1.17.4",
+        "pkijs": "^3.3.3",
+        "pvutils": "^1.1.5"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.39.2",
+        "@types/node": "^25.0.6",
+        "eslint": "^9.39.2",
+        "eslint-plugin-security": "^3.0.1",
+        "prettier": "^3.7.4",
+        "tsup": "^8.5.1",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+        "typescript-eslint": "^8.52.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

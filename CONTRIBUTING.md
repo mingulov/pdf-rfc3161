@@ -4,65 +4,51 @@ Thank you for your interest in contributing! This document provides guidelines a
 
 ## Development Setup
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/mingulov/pdf-rfc3161.git
-   cd pdf-rfc3161
-   ```
+The project is a monorepo managed by `pnpm`.
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+1. Clone and install dependencies:
+
+    ```bash
+    git clone https://github.com/mingulov/pdf-rfc3161.git
+    cd pdf-rfc3161
+    pnpm install
+    ```
+
+2. Build all packages:
+
+    ```bash
+    pnpm -r build
+    ```
 
 3. Run tests:
-   ```bash
-   npm test
-   ```
-
-4. Build the project:
-   ```bash
-   npm run build
-   ```
+    ```bash
+    pnpm -r test
+    ```
 
 ## Project Structure
 
 ```
 pdf-rfc3161/
-|-- src/
-|   |-- index.ts          # Public API exports
-|   |-- types.ts          # TypeScript interfaces
-|   |-- constants.ts      # OIDs and constants
-|   |-- tsa/              # TSA client layer
-|   |   |-- request.ts    # TimeStampReq creation
-|   |   |-- response.ts   # TimeStampResp parsing
-|   |   `-- client.ts     # HTTP communication
-|   `-- pdf/              # PDF manipulation layer
-|       |-- prepare.ts    # PDF preparation
-|       `-- embed.ts      # Token embedding
-|-- test/
-|   |-- unit/             # Unit tests (mocked)
-|   `-- integration/      # Integration tests (real TSAs)
-`-- examples/             # Usage examples
+|-- packages/
+|   |-- core/             # Core library (signing, timestamping, utilities)
+|   |-- cli/              # Command-line interface
+|   |-- tests/            # Test suite (unit & integration)
+|   `-- demo/             # Demo application (Vite/React)
+|-- pnpm-workspace.yaml   # Workspace configuration
+`-- package.json          # Root scripts
 ```
 
 ## Running Tests
 
 ```bash
 # All tests
-npm test
+pnpm -r test
 
-# Watch mode
-npm run test:watch
+# Specific package
+pnpm --filter pdf-rfc3161 test
 
-# With coverage
-npm run test:coverage
-
-# Only unit tests
-npm test -- --filter unit
-
-# Only integration tests (requires network)
-npm test -- --filter integration
+# Watch mode (in package directory)
+pnpm test:watch
 ```
 
 ## Code Style
@@ -87,6 +73,7 @@ npm test -- --filter integration
 ## Reporting Bugs
 
 Please use the GitHub issue tracker and include:
+
 - Node.js version
 - Operating system
 - Steps to reproduce

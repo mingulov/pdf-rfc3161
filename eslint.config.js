@@ -46,9 +46,14 @@ export default tseslint.config(
         },
     },
     {
-        files: ["**/*.test.ts"],
+        files: [
+            "**/*.test.ts",
+            "**/test/utils/**/*",
+            "packages/cli/src/**/*.ts",
+            "**/test/integration/**/*.ts",
+        ],
         rules: {
-            // Relax some rules for tests
+            // Relax some rules for tests and CLI
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-unsafe-assignment": "off",
             "@typescript-eslint/no-unsafe-member-access": "off",

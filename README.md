@@ -329,33 +329,22 @@ const finalPdf = await session.embedTimestampToken(response);
 
 **RFC Compliance:**
 
-The library aims to support relevant RFCs for timestamp and validation workflows:
+The library implements or aims to support the following standards:
 
-| RFC            | Status        | Description                |
-| -------------- | ------------- | -------------------------- |
-| RFC 3161       | [Full]        | Time-Stamp Protocol (core) |
-| RFC 5816       | [Transparent] | ESSCertIDv2 for SHA-256+   |
-| RFC 5544       | [Planned]     | TimeStampedData envelope   |
-| RFC 6960       | [Implemented] | OCSP certificate status    |
-| ETSI 319 142-1 | [Planned]     | PAdES baseline signatures  |
-| RFC 6211       | [Low Prio]    | CMS Algorithm Protect      |
+| RFC | Description |
+| :--- | :--- |
+| **RFC 3161** | Time-Stamp Protocol (Core implementation) |
+| **RFC 5816** | ESSCertIDv2 (Supported via dependencies) |
+| **RFC 6960** | OCSP (Implemented for LTV) |
+| **RFC 5544** | TimeStampedData envelope (Planned) |
+| **ETSI 319 142-1** | PAdES baseline signatures (Planned) |
+| **RFC 6211** | CMS Algorithm Protect (Low Priority) |
 
-**Key:**
+**Revocation & Chain Handling:**
 
-- [Full] = Complete implementation
-- [Transparent] = Works via dependencies (no code needed)
-- [Implemented] = Core functionality exists
-- [Planned] = On roadmap for near-term
-- [Low Prio] = Lower priority, future consideration
+- **OCSP/CRL**: The library handles Online Certificate Status Protocol (OCSP) and Certificate Revocation Lists (CRL) for Long-Term Validation (LTV).
+- **AIA**: Authority Information Access (AIA) extensions are actively used to discover and fetch missing intermediate certificates to construct the full trust chain.
 
-**OCSP/CRL handling:**
-
-For LTV support, the library includes OCSP and CRL fetching via pluggable fetchers. Provide custom fetchers or pre-fetched data for:
-
-- Controlled network access
-- Air-gapped environments
-- Deterministic testing
-- Custom caching strategies
 
 **TrustStore validation:**
 
