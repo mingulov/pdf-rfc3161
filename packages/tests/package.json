@@ -1,0 +1,37 @@
+{
+    "name": "pdf-rfc3161-tests",
+    "private": true,
+    "version": "0.1.2",
+    "description": "Tests for pdf-rfc3161 ecosystem",
+    "type": "module",
+    "scripts": {
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage",
+        "test:integration": "vitest run test/integration",
+        "test:robustness": "tsx scripts/test-robustness.ts",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint test --fix"
+    },
+    "dependencies": {
+        "asn1js": "^3.0.7",
+        "commander": "^14.0.2",
+        "pdf-lib-incremental-save": "^1.17.4",
+        "pdf-rfc3161": "workspace:*",
+        "pdf-rfc3161-cli": "workspace:*",
+        "pkijs": "^3.3.3",
+        "pvutils": "^1.1.5"
+    },
+    "devDependencies": {
+        "@types/node": "^25.0.6",
+        "@vitest/coverage-v8": "^4.0.17",
+        "eslint": "^9.39.2",
+        "pdf-lib": "^1.17.1",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+        "vitest": "^4.0.17"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

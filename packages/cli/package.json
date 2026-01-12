@@ -1,0 +1,34 @@
+{
+    "name": "pdf-rfc3161-cli",
+    "version": "0.1.2",
+    "description": "Command-line interface for pdf-rfc3161",
+    "type": "module",
+    "bin": {
+        "pdf-rfc3161": "dist/cli.cjs"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "start": "tsx src/cli.ts",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint src --fix"
+    },
+    "dependencies": {
+        "commander": "^14.0.2",
+        "pdf-rfc3161": "workspace:*",
+        "pkijs": "^3.3.3"
+    },
+    "devDependencies": {
+        "@types/node": "^25.0.6",
+        "eslint": "^9.39.2",
+        "tsup": "^8.5.1",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}
