@@ -44,10 +44,14 @@ export default function TimestampPanel() {
     };
 
     const handleSuccess = async (pdfBytes: Uint8Array, filename: string) => {
-        const blob = new Blob([pdfBytes as unknown as BlobPart], { type: "application/pdf" });
-        const timestamps = await extractTimestamps(pdfBytes);
-        setResultPdf({ blob, name: filename });
-        setResultTimestamps(timestamps);
+        try {
+            const blob = new Blob([pdfBytes as unknown as BlobPart], { type: "application/pdf" });
+            const timestamps = await extractTimestamps(pdfBytes);
+            setResultPdf({ blob, name: filename });
+            setResultTimestamps(timestamps);
+        } catch (e) {
+            console.error("Error in handleSuccess:", e);
+        }
     };
 
     // DIRECT MODE
@@ -94,6 +98,7 @@ export default function TimestampPanel() {
             // Helper class simplifies the workflow!
             // New: Pass configuration to the constructor
             const session = new TimestampSession(pdfBytes, {
+                enableLTV: false, // Explicitly disable LTV to avoid CORS/Fetch for revocation data
                 prepareOptions: {
                     reason: "Demo Timestamp",
                     location: "Browser",
@@ -115,7 +120,6 @@ export default function TimestampPanel() {
         }
     };
 
-    // MANUAL MODE - Step 2: Embed TSR
     const embedTsr = async (tsrBytes: Uint8Array) => {
         if (!sessionRef.current || !file) return;
         setLoading(true);
@@ -215,6 +219,7 @@ export default function TimestampPanel() {
                             value="direct"
                             checked={mode === "direct"}
                             onChange={() => setMode("direct")}
+                            data-testid="mode-direct"
                         />
                         Direct (Network)
                     </label>
@@ -225,6 +230,7 @@ export default function TimestampPanel() {
                             value="manual"
                             checked={mode === "manual"}
                             onChange={() => setMode("manual")}
+                            data-testid="mode-manual"
                         />
                         Manual (No CORS)
                     </label>
@@ -235,10 +241,12 @@ export default function TimestampPanel() {
                             type="checkbox"
                             checked={showConsole}
                             onChange={(e) => setShowConsole(e.target.checked)}
+                            data-testid="checkbox-advanced-console"
                         />
                         Enable Browser Console Scripts (Advanced)
                     </label>
                 </div>
+
             </div>
 
             {loading && (
@@ -310,6 +318,7 @@ export default function TimestampPanel() {
                             onChange={(e) => setTsaUrl(e.target.value)}
                             className="input"
                             placeholder="https://freetsa.org/tsr"
+                            data-testid="tsa-url-manual"
                         />
                     </div>
                     <button onClick={generateTsq} className="btn wide" data-testid="btn-generate-tsq">
@@ -340,8 +349,7 @@ export default function TimestampPanel() {
                             2. Send to TSA (using curl in terminal):
                         </div>
                         <div className="code" role="presentation">
-                            curl -H "Content-Type: application/timestamp-query" --data-binary
-                            @request.tsq --output response.tsr {tsaUrl}
+                            curl -H "Content-Type: application/timestamp-query" --data-binary @request.tsq --output response.tsr {tsaUrl}
                         </div>
                         {showConsole && (
                             <div className="console-opt mt2 pt2 border-t">
@@ -370,35 +378,37 @@ export default function TimestampPanel() {
                                 embedTsr(new Uint8Array(buf));
                             }}
                             accept=".tsr,.der,.bin"
-                            label="Drop Response here or click to upload"
                             description="Supports .tsr, .der, .bin files"
+                            data-testid="tsr-dropzone"
                         />
-                        {showConsole && (
-                            <div className="mt2">
-                                <div className="text-sm bold mb1">OR Paste Base64 from Console:</div>
-                                <div className="flex gap2">
-                                    <input
-                                        type="text"
-                                        className="input grow"
-                                        placeholder="Paste Base64 string here..."
-                                        value={tsrBase64Input}
-                                        onChange={e => setTsrBase64Input(e.target.value)}
-                                    />
-                                    <button className="btn sec" onClick={async () => {
-                                        try {
-                                            const bytes = base64ToUint8Array(tsrBase64Input);
-                                            await embedTsr(bytes);
-                                            setTsrBase64Input("");
-                                        } catch (e) {
-                                            setError("Invalid Base64 string: " + e);
-                                        }
-                                    }}>Load</button>
-                                </div>
-                            </div>
-                        )}
                     </div>
+                    {showConsole && (
+                        <div className="mt2">
+                            <div className="text-sm bold mb1">OR Paste Base64 from Console:</div>
+                            <div className="flex gap2">
+                                <input
+                                    type="text"
+                                    className="input grow"
+                                    placeholder="Paste Base64 string here..."
+                                    value={tsrBase64Input}
+                                    onChange={e => setTsrBase64Input(e.target.value)}
+                                    data-testid="input-tsr-base64"
+                                />
+                                <button className="btn sec" data-testid="btn-load-base64" onClick={async () => {
+                                    try {
+                                        const bytes = base64ToUint8Array(tsrBase64Input);
+                                        await embedTsr(bytes);
+                                        setTsrBase64Input("");
+                                    } catch (e) {
+                                        setError("Invalid Base64 string: " + e);
+                                    }
+                                }}>Load</button>
+                            </div>
+                        </div>
+                    )}
                 </div>
-            )}
-        </div>
+            )
+            }
+        </div >
     );
 }

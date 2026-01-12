@@ -211,7 +211,7 @@ export default function ValidatorPanel() {
 
             <div className="space-y-4">
                 {results.map((result, idx) => (
-                    <div key={idx} className={`border rounded-lg p-4 ${result.isValid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                    <div key={idx} data-testid="timestamp-result" className={`border rounded-lg p-4 ${result.isValid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
                         <div className="flex items-start justify-between mb-4">
                             <div className="flex items-center gap-3">
                                 {result.isValid ? (

@@ -116,7 +116,7 @@ describe("CLI Integration Tests", () => {
             // CLI shows help on stderr and exits with code 1 when no arguments provided
             expect(result.code).toBe(1);
             expect(result.stderr).toContain("pdf-rfc3161");
-            expect(result.stderr).toContain("Add RFC 3161 trusted timestamps");
+            expect(result.stderr).toContain("CLI tool for adding RFC 3161 timestamps");
         });
 
         it("should show version with --version flag", async () => {

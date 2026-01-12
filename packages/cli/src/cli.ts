@@ -14,8 +14,9 @@ import {
 } from "pdf-rfc3161";
 import * as pkijs from "pkijs";
 
-// Injected by tsup at build time
-declare const VERSION: string;
+// VERSION is injected by tsup at build time (via define: { VERSION: ... })
+// For dev/tsx execution, we handle it via globalThis check.
+
 
 interface CliOptions {
     output?: string;
@@ -34,10 +35,25 @@ interface CliOptions {
 
 const program = new Command();
 
+// Injected by tsup at build time
+declare const VERSION: string;
+
+// Safe check for VERSION injection (handles both build and dev/tsx scenarios)
+
+let cliVersion = 'dev';
+try {
+    if (typeof VERSION !== 'undefined') {
+        cliVersion = VERSION;
+    }
+} catch {
+    // Ignore ReferenceError in dev mode
+}
+
+
 program
-    .name("pdf-rfc3161")
-    .description("Add RFC 3161 trusted timestamps to PDF documents.")
-    .version(VERSION);
+    .name('pdf-rfc3161')
+    .description('CLI tool for adding RFC 3161 timestamps to PDFs')
+    .version(cliVersion);
 
 program
     .command("timestamp")
@@ -127,8 +143,7 @@ program
                     console.log(`  Algorithm:   ${result.timestamp.hashAlgorithm}`);
                     console.log(`  Digest:      ${result.timestamp.messageDigest.slice(0, 32)}...`);
                     console.log(
-                        `  Certificate: ${
-                            result.timestamp.hasCertificate ? "included" : "not included"
+                        `  Certificate: ${result.timestamp.hasCertificate ? "included" : "not included"
                         }`
                     );
                     console.log(`  Input size:  ${pdfBytes.length.toLocaleString()} bytes`);
@@ -416,13 +431,13 @@ function generateOutputFilename(inputFile: string): string {
 function getCommonName(dn: pkijs.RelativeDistinguishedNames): string {
     for (const set of dn.typesAndValues) {
         if (set.type === "2.5.4.3") {
-             
+
             return set.value.valueBlock.value as string;
         }
     }
     const first = dn.typesAndValues[0];
     if (first) {
-         
+
         return first.value.valueBlock.value as string;
     }
     return "Unknown";
