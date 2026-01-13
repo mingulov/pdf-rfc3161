@@ -1,6 +1,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { getLogger } from "../utils/logger.js";
 
 /**
  * OCSP Response Status values (RFC 6960)
@@ -53,7 +54,29 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
     const ocspResponse = new pkijs.OCSPResponse({ schema: asn1.result });
 
     // Check response status - pkijs returns an Enumerated type
-    const statusValue = ocspResponse.responseStatus as unknown as number;
+    // Check response status - pkijs returns an Enumerated type (object)
+    // We need to extract the actual number from it
+    let statusValue: number;
+
+    const rawStatus = ocspResponse.responseStatus as unknown;
+
+    if (typeof rawStatus === "number") {
+        statusValue = rawStatus;
+    } else if (
+        rawStatus &&
+        typeof rawStatus === "object" &&
+        "valueBlock" in rawStatus &&
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+        typeof (rawStatus as any).valueBlock.valueDec === "number"
+    ) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+        statusValue = (rawStatus as any).valueBlock.valueDec as number;
+    } else {
+        // Fallback or error if structure is unexpected
+        // Defaulting to a value that isn't SUCCESSFUL (0) if we can't parse it
+        statusValue = OCSPResponseStatus.INTERNAL_ERROR;
+    }
+
     const status = statusValue as OCSPResponseStatus;
 
     if (status !== OCSPResponseStatus.SUCCESSFUL) {
@@ -103,12 +126,50 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
 
     // Extract certificate status
     let certStatus: CertificateStatus;
-    if (singleResponse.certStatus === null) {
+
+    // Check if it's explicitly null or undefined (though pkijs usually returns an object)
+    if (singleResponse.certStatus === null || singleResponse.certStatus === undefined) {
         certStatus = CertificateStatus.GOOD;
-    } else if ("revocationTime" in singleResponse.certStatus) {
-        certStatus = CertificateStatus.REVOKED;
     } else {
-        certStatus = CertificateStatus.UNKNOWN;
+        // Log what we have to debug "Unknown" status
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const statusAsn1 = singleResponse.certStatus;
+        getLogger().debug(
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            `Inspecting CertStatus: type=${statusAsn1 ? (statusAsn1.constructor.name as string) : "null"}, hasIdBlock=${statusAsn1 ? String("idBlock" in statusAsn1) : "false"}, JSON=${JSON.stringify(statusAsn1, (k, v) => (k === "valueHex" || k === "valueHexView" ? "[hex]" : (v as unknown)))}`
+        );
+
+        if (statusAsn1 && "idBlock" in (statusAsn1 as object)) {
+            // Use ASN.1 tag number to determine status (RFC 6960)
+            // CertStatus ::= CHOICE {
+            //   good        [0]     IMPLICIT NULL,
+            //   revoked     [1]     IMPLICIT RevokedInfo,
+            //   unknown     [2]     IMPLICIT UnknownInfo }
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            const tagNumber = statusAsn1.idBlock.tagNumber as number;
+
+            getLogger().debug(
+                `OCSP CertStatus Tag: ${String(tagNumber)} (0=Good, 1=Revoked, 2=Unknown)`
+            );
+
+            switch (tagNumber) {
+                case 0:
+                    certStatus = CertificateStatus.GOOD;
+                    break;
+                case 1:
+                    certStatus = CertificateStatus.REVOKED;
+                    break;
+                case 2:
+                    certStatus = CertificateStatus.UNKNOWN;
+                    break;
+                default:
+                    certStatus = CertificateStatus.UNKNOWN;
+            }
+        } else {
+            // Fallback for unexpected structure
+            getLogger().warn(`CertStatus missing idBlock: ${JSON.stringify(statusAsn1)}`);
+            certStatus = CertificateStatus.UNKNOWN;
+        }
     }
 
     // Extract timestamps

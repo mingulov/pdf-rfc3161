@@ -210,7 +210,9 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
 
             if (
                 tsResponse.status !== TSAStatus.GRANTED &&
-                tsResponse.status !== TSAStatus.GRANTED_WITH_MODS
+                tsResponse.status !== TSAStatus.GRANTED_WITH_MODS &&
+                tsResponse.status !== TSAStatus.REVOCATION_WARNING &&
+                tsResponse.status !== TSAStatus.REVOCATION_NOTIFICATION
             ) {
                 throw new TimestampError(
                     TimestampErrorCode.TSA_ERROR,

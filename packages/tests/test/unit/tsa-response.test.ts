@@ -62,14 +62,23 @@ describe("TSA Response", () => {
             // Test different invalid status scenarios
             const invalidStatuses = [
                 new Uint8Array([0x30, 0x05, 0x02, 0x01, 0x03]), // status = 3
-                new Uint8Array([0x30, 0x05, 0x02, 0x01, 0x04]), // status = 4
-                new Uint8Array([0x30, 0x05, 0x02, 0x01, 0x05]), // status = 5
                 new Uint8Array([0x30, 0x05, 0x02, 0x01, 0x06]), // status = 6
             ];
 
             invalidStatuses.forEach((invalidResponse) => {
                 expect(() => parseTimestampResponse(invalidResponse)).toThrow(TimestampError);
             });
+        });
+
+        it("should allow status 4 (REVOCATION_WARNING) and 5 (REVOCATION_NOTIFICATION)", () => {
+            // Mock responses with status 4 and 5 (at least 11 bytes to pass size check)
+            // SEQUENCE(0x30) len 0x09 -> PKIStatusInfo SEQUENCE(0x30) len 0x03 -> status(0x02, 0x01, 0x04)
+            // We'll just pad it to 11 bytes.
+            const warningResponse = new Uint8Array([0x30, 0x09, 0x30, 0x03, 0x02, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00]);
+            const notificationResponse = new Uint8Array([0x30, 0x09, 0x30, 0x03, 0x02, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00]);
+
+            expect(() => parseTimestampResponse(warningResponse)).toThrow("no token found");
+            expect(() => parseTimestampResponse(notificationResponse)).toThrow("no token found");
         });
     });
 
