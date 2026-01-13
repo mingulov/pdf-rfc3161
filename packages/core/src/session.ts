@@ -164,7 +164,9 @@ export class TimestampSession {
             // Check if TSA rejected the request
             if (
                 parsed.status !== TSAStatus.GRANTED &&
-                parsed.status !== TSAStatus.GRANTED_WITH_MODS
+                parsed.status !== TSAStatus.GRANTED_WITH_MODS &&
+                parsed.status !== TSAStatus.REVOCATION_WARNING &&
+                parsed.status !== TSAStatus.REVOCATION_NOTIFICATION
             ) {
                 throw new TimestampError(
                     TimestampErrorCode.TSA_ERROR,

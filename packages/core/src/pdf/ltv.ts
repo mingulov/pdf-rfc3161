@@ -18,7 +18,7 @@ import {
 import { fetchOCSPResponse } from "../pki/ocsp-client.js";
 import { getCRLDistributionPoints } from "../pki/crl-utils.js";
 import { fetchCRL } from "../pki/crl-client.js";
-import { getCaIssuers } from "../pki/cert-utils.js";
+import { getCaIssuers, findIssuer } from "../pki/cert-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
 import { bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
@@ -511,17 +511,16 @@ export async function completeLTVData(
         // that is *different* (or if we do, root OCSP is rare/uncommon).
         for (const cert of certs) {
             // Find issuer
-            // Simple check: issuer's subject == cert's issuer
-            // This is O(N^2) but N is small (chain length ~3-4)
-            const issuer = certs.find(
-                (c) =>
-                    c.subject.toString() === cert.issuer.toString() &&
-                    // Basic check to ensure we aren't using the cert as its own issuer (unless self-signed, but then no OCSP usually)
-                    // Serial number check helps avoid self-match for non-root
-                    c.serialNumber.toString() !== cert.serialNumber.toString()
-            );
+            const issuer = findIssuer(cert, certs);
 
             if (!issuer) {
+                // If we can't find the issuer, we can't fetch OCSP (needs issuer hash)
+                // We might find it via AIA later, but for now skip
+                continue;
+            }
+
+            // Avoid using cert as its own issuer for OCSP (unless strictly self-signed root, but OCSP typicaly for end-entity)
+            if (issuer.serialNumber.isEqual(cert.serialNumber)) {
                 continue;
             }
 
@@ -544,7 +543,7 @@ export async function completeLTVData(
                         const parsed = parseOCSPResponse(response);
                         if (parsed.certStatus !== CertificateStatus.GOOD) {
                             errors.push(
-                                `OCSP indicates certificate is not good (Status: ${CertificateStatus[parsed.certStatus]}), skipping for cert serial: ${cert.serialNumber.valueBlock.toString()}`
+                                `OCSP indicates certificate is not good (Status: ${CertificateStatus[parsed.certStatus]}), skipping for cert serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}`
                             );
                             continue;
                         }
@@ -565,7 +564,7 @@ export async function completeLTVData(
                 } catch (e) {
                     // OCSP fetch failed - log error and continue to CRL
                     errors.push(
-                        `Failed to fetch OCSP for certificate (Serial: ${cert.serialNumber.valueBlock.toString()}): ${e instanceof Error ? e.message : String(e)}`
+                        `Failed to fetch OCSP for certificate (Serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}): ${e instanceof Error ? e.message : String(e)}`
                     );
                 }
             }

@@ -11,6 +11,7 @@ import {
     KNOWN_TSA_URLS,
     TimestampError,
     type HashAlgorithm,
+    setLogger,
 } from "pdf-rfc3161";
 import * as pkijs from "pkijs";
 
@@ -108,6 +109,15 @@ program
                 if (options.verbose) {
                     console.log(`Read ${String(pdfBytes.length)} bytes from ${inputFile}`);
                     console.log("Requesting timestamp from TSA...");
+
+                    // Enable verbose logging in core library
+                    const verboseLogger = {
+                        debug: (msg: string, ...args: unknown[]) => console.debug(`[DEBUG] ${msg}`, ...args),
+                        info: (msg: string, ...args: unknown[]) => console.info(`[INFO] ${msg}`, ...args),
+                        warn: (msg: string, ...args: unknown[]) => console.warn(`[WARN] ${msg}`, ...args),
+                        error: (msg: string, ...args: unknown[]) => console.error(`[ERROR] ${msg}`, ...args),
+                    };
+                    setLogger(verboseLogger);
                 }
 
                 // Timestamp the PDF
@@ -213,6 +223,15 @@ program
 
                 if (cmdOptions.verbose) {
                     console.log("Processing document...");
+
+                    // Enable verbose logging in core library
+                    const verboseLogger = {
+                        debug: (msg: string, ...args: unknown[]) => console.debug(`[DEBUG] ${msg}`, ...args),
+                        info: (msg: string, ...args: unknown[]) => console.info(`[INFO] ${msg}`, ...args),
+                        warn: (msg: string, ...args: unknown[]) => console.warn(`[WARN] ${msg}`, ...args),
+                        error: (msg: string, ...args: unknown[]) => console.error(`[ERROR] ${msg}`, ...args),
+                    };
+                    setLogger(verboseLogger);
                 }
 
                 const result = await timestampPdfLTA({

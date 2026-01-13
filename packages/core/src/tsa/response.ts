@@ -8,6 +8,7 @@ import {
     type TimestampInfo,
 } from "../types.js";
 import { bytesToHex } from "../utils.js";
+import { getLogger } from "../utils/logger.js";
 import { extractTimestampInfoFromContentInfo } from "../pki/pki-utils.js";
 
 interface StatusInfo {
@@ -222,12 +223,30 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
             );
         }
 
-        if (status !== TSAStatus.GRANTED && status !== TSAStatus.GRANTED_WITH_MODS) {
+        if (
+            status !== TSAStatus.GRANTED &&
+            status !== TSAStatus.GRANTED_WITH_MODS &&
+            status !== TSAStatus.REVOCATION_WARNING &&
+            status !== TSAStatus.REVOCATION_NOTIFICATION
+        ) {
             return {
                 status,
                 statusString,
                 failInfo,
             };
+        }
+
+        if (
+            status === TSAStatus.REVOCATION_WARNING ||
+            status === TSAStatus.REVOCATION_NOTIFICATION
+        ) {
+            const statusName =
+                status === TSAStatus.REVOCATION_WARNING
+                    ? "REVOCATION_WARNING"
+                    : "REVOCATION_NOTIFICATION";
+            getLogger().warn(
+                `TSA returned ${statusName}: ${statusString ?? "Response is valid but a revocation is pending."}`
+            );
         }
 
         if (!tsResp?.timeStampToken) {
