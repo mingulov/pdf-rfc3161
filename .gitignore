@@ -35,3 +35,6 @@ npm-debug.log*
 .corpus/
 robustness-report.json
 robustness-summary.md
+
+# Per-package changelogs (use root CHANGELOG.md only)
+packages/*/CHANGELOG.md
