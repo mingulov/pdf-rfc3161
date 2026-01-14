@@ -11,9 +11,13 @@
         "typecheck": "pnpm -r run typecheck",
         "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist",
         "cli": "tsx packages/cli/src/cli.ts",
-        "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-demo run test:e2e"
+        "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-demo run test:e2e",
+        " changeset": "changeset",
+        "version": "changeset version",
+        "publish": "pnpm -r publish --access public"
     },
     "devDependencies": {
+        "@changesets/cli": "^2.29.8",
         "@eslint/js": "^9.39.2",
         "eslint": "^9.39.2",
         "eslint-plugin-security": "^3.0.1",

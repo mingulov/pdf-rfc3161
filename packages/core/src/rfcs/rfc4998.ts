@@ -10,12 +10,7 @@
  */
 
 import * as asn1js from "asn1js";
-
-// RFC 4998 OIDs
-const ERS_OIDS = {
-    EVIDENCE_RECORD: "1.2.840.113549.1.9.16.2.21",
-    ARCHIVE_TIMESTAMP: "1.2.840.113549.1.9.16.2.49",
-} as const;
+import { OID } from "../constants.js";
 
 /**
  * Represents an Evidence Record as defined in RFC 4998
@@ -133,4 +128,7 @@ export function extractTimestampsFromEvidence(_evidenceRecord: Uint8Array): Uint
 /**
  * Constants for RFC 4998 support
  */
-export const RFC4998_OIDS = ERS_OIDS;
+export const RFC4998_OIDS = {
+    EVIDENCE_RECORD: OID.EVIDENCE_RECORD,
+    ARCHIVE_TIMESTAMP: OID.ARCHIVE_TIMESTAMP,
+} as const;

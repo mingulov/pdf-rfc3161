@@ -14,9 +14,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-
-// RFC 5544 OID: id-ct-timestampedData
-const TIMESTAMPED_DATA_OID = "1.2.840.113549.1.9.16.1.31";
+import { OID } from "../constants.js";
 
 /**
  * Options for creating TimeStampedData
@@ -100,7 +98,7 @@ export function createTimeStampedData(
 
     // Wrap in CMS ContentInfo
     const contentInfo = new pkijs.ContentInfo({
-        contentType: TIMESTAMPED_DATA_OID,
+        contentType: OID.TIMESTAMPED_DATA,
         content: new asn1js.OctetString({ valueHex: timeStampedData.toBER(false) }),
     });
 
@@ -154,10 +152,10 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
         const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
 
         // Verify content type
-        if (contentInfo.contentType !== TIMESTAMPED_DATA_OID) {
+        if (contentInfo.contentType !== OID.TIMESTAMPED_DATA) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
-                `Invalid content type: expected ${TIMESTAMPED_DATA_OID}, got ${contentInfo.contentType}`
+                `Invalid content type: expected ${OID.TIMESTAMPED_DATA}, got ${contentInfo.contentType}`
             );
         }
 

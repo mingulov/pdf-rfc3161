@@ -8,6 +8,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { OID } from "../constants.js";
 
 /**
  * Validates RFC 8933 compliance for a CMS SignedData structure.
@@ -123,9 +124,6 @@ function hasAlgorithmProtectionAttribute(signerInfo: pkijs.SignerInfo): boolean 
             return false;
         }
 
-        // RFC 6211 OID for cmsAlgorithmProtect
-        const CMS_ALGORITHM_PROTECT_OID = "1.2.840.113549.1.9.52";
-
         // Type-safe attribute access
         const signedAttrs =
             (signerInfo.signedAttrs as unknown as { attributes?: pkijs.Attribute[] }).attributes ??
@@ -134,7 +132,7 @@ function hasAlgorithmProtectionAttribute(signerInfo: pkijs.SignerInfo): boolean 
             return false;
         }
 
-        return signedAttrs.some((attr) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+        return signedAttrs.some((attr) => attr.type === OID.CMS_ALGORITHM_PROTECT);
     } catch {
         return false;
     }

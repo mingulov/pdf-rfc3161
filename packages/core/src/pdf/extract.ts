@@ -17,6 +17,7 @@ import {
 } from "../types.js";
 import { hexToBytes, bytesToHex, extractBytesFromByteRange } from "../utils.js";
 import { parseTimestampToken } from "../pki/pki-utils.js";
+import { OID } from "../constants.js";
 
 /**
  * Information about an extracted timestamp signature from a PDF
@@ -309,7 +310,7 @@ export async function verifyTimestamp(
 
         // Hack: pkijs often refuses to use attached content for non-id-data types (like id-ct-TSTInfo).
         // Best fix: Temporarily set type to id-data so pkijs verifies the hash of eContent content.
-        signedData.encapContentInfo.eContentType = "1.2.840.113549.1.7.1"; // id-data
+        signedData.encapContentInfo.eContentType = OID.DATA;
 
         const crlCount = signedData.crls?.length ?? 0;
         const ocspCount = (signedData as unknown as { ocsps?: unknown[] }).ocsps?.length ?? 0;
@@ -361,10 +362,7 @@ export async function verifyTimestamp(
             if (signerInfo.signedAttrs?.attributes) {
                 for (const attr of signerInfo.signedAttrs.attributes) {
                     const oid = attr.type;
-                    if (
-                        oid === "1.2.840.113549.1.9.16.2.12" ||
-                        oid === "1.2.840.113549.1.9.16.2.47"
-                    ) {
+                    if (oid === OID.SIGNING_CERTIFICATE || oid === OID.SIGNING_CERTIFICATE_V2) {
                         hasESS = true;
                         break;
                     }

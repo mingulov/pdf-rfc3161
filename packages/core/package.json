@@ -26,6 +26,11 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.js",
             "require": "./dist/index.cjs"
+        },
+        "./validation": {
+            "types": "./dist/validation/index.d.ts",
+            "import": "./dist/validation/index.js",
+            "require": "./dist/validation/index.cjs"
         }
     },
     "main": "./dist/index.cjs",

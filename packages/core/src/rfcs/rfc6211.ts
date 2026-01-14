@@ -7,9 +7,7 @@
  */
 
 import * as pkijs from "pkijs";
-
-// RFC 6211 OID for cmsAlgorithmProtect
-const CMS_ALGORITHM_PROTECT_OID = "1.2.840.113549.1.9.52";
+import { OID } from "../constants.js";
 
 /**
  * Checks if a SignedData structure contains cmsAlgorithmProtect attribute.
@@ -36,7 +34,7 @@ export function hasAlgorithmProtectAttribute(signedData: pkijs.SignedData): bool
         return false;
     }
 
-    return signedAttrs.some((attr) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+    return signedAttrs.some((attr) => attr.type === OID.CMS_ALGORITHM_PROTECT);
 }
 
 /**
@@ -63,7 +61,7 @@ export function getProtectedAlgorithms(signedData: pkijs.SignedData): string[] {
         return [];
     }
 
-    const protectAttr = signedAttrs.find((attr) => attr.type === CMS_ALGORITHM_PROTECT_OID);
+    const protectAttr = signedAttrs.find((attr) => attr.type === OID.CMS_ALGORITHM_PROTECT);
 
     if (!protectAttr?.values || protectAttr.values.length === 0) {
         return [];
@@ -135,5 +133,5 @@ export function validateAlgorithmProtectAttribute(signedData: pkijs.SignedData):
  * Constants for RFC 6211 support
  */
 export const RFC6211_OIDS = {
-    CMS_ALGORITHM_PROTECT: CMS_ALGORITHM_PROTECT_OID,
+    CMS_ALGORITHM_PROTECT: OID.CMS_ALGORITHM_PROTECT,
 } as const;

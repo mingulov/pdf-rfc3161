@@ -2,27 +2,29 @@
  * OID constants for hash algorithms and other cryptographic identifiers
  */
 export const OID = {
-    // Hash algorithms
     SHA256: "2.16.840.1.101.3.4.2.1",
     SHA384: "2.16.840.1.101.3.4.2.2",
     SHA512: "2.16.840.1.101.3.4.2.3",
 
-    // Content types
     DATA: "1.2.840.113549.1.7.1",
     SIGNED_DATA: "1.2.840.113549.1.7.2",
     TST_INFO: "1.2.840.113549.1.9.16.1.4",
+    TIMESTAMPED_DATA: "1.2.840.113549.1.9.16.1.31",
 
-    // Signature algorithms
     RSA_ENCRYPTION: "1.2.840.113549.1.1.1",
     SHA256_WITH_RSA: "1.2.840.113549.1.1.11",
     SHA384_WITH_RSA: "1.2.840.113549.1.1.12",
     SHA512_WITH_RSA: "1.2.840.113549.1.1.13",
 
-    // Attributes
     CONTENT_TYPE: "1.2.840.113549.1.9.3",
     MESSAGE_DIGEST: "1.2.840.113549.1.9.4",
     SIGNING_TIME: "1.2.840.113549.1.9.5",
+    SIGNING_CERTIFICATE: "1.2.840.113549.1.9.16.2.12",
     SIGNING_CERTIFICATE_V2: "1.2.840.113549.1.9.16.2.47",
+    CMS_ALGORITHM_PROTECT: "1.2.840.113549.1.9.52",
+
+    EVIDENCE_RECORD: "1.2.840.113549.1.9.16.2.21",
+    ARCHIVE_TIMESTAMP: "1.2.840.113549.1.9.16.2.49",
 } as const;
 
 /**

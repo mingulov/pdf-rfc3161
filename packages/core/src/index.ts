@@ -140,6 +140,9 @@ export {
     CircuitBreakerError,
 } from "./utils/circuit-breaker.js";
 
+// Re-export validation contracts and ChainValidator
+export * from "./validation/index.js";
+
 /**
  * Main API function to timestamp a PDF with LTV support
  */
