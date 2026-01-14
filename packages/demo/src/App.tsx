@@ -78,6 +78,12 @@ function App() {
                     >
                         pdf-rfc3161
                     </a>
+                    <span className="version-info">
+                        {" "}
+                        v{import.meta.env.PDF_RFC3161_VERSION}
+                        {" "}
+                        ({import.meta.env.PDF_RFC3161_GIT_HASH})
+                    </span>
                     <br />
                     &copy; 2026 Denis Mingulov
                 </p>

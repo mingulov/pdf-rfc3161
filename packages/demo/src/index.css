@@ -82,6 +82,15 @@ body {
     font-size: 0.875rem;
 }
 
+.version-info code {
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
+
 .drop {
     border: 2px dashed var(--border);
     border-radius: 8px;
@@ -189,7 +198,7 @@ body {
     padding-bottom: 1rem;
 }
 
-.subhead>.flex:first-child {
+.subhead > .flex:first-child {
     margin-bottom: 1rem;
 }
 
@@ -202,7 +211,7 @@ body {
     margin-bottom: 1rem;
 }
 
-.subhead>.mt2 {
+.subhead > .mt2 {
     margin-top: 0;
     margin-bottom: 0.5rem;
 }
@@ -710,15 +719,15 @@ body {
     justify-content: flex-end;
 }
 
-.space-y-6>*+* {
+.space-y-6 > * + * {
     margin-top: 1.5rem;
 }
 
-.space-y-4>*+* {
+.space-y-4 > * + * {
     margin-top: 1rem;
 }
 
-.space-y-2>*+* {
+.space-y-2 > * + * {
     margin-top: 0.5rem;
 }
 
