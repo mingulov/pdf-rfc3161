@@ -120,9 +120,10 @@ export async function preparePdfForTimestamp(
     // WORKAROUND: correctly track objects from input PDF.
     // Scan bytes to ensure largestObjectNumber matches the actual file content,
     // preserving the object numbering sequence for incremental updates.
+    // We use bounded quantifiers for whitespace to prevent ReDoS.
     const sigContext = sigPdfDoc.context;
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
+    const objMatches = pdfString.matchAll(/(\d{1,20})\s{1,100}\d{1,20}\s{1,100}obj/g);
     let maxObjNum = sigContext.largestObjectNumber;
     for (const match of objMatches) {
         const objNum = parseInt(match[1] ?? "0", 10);
@@ -272,8 +273,9 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
     let tailString = new TextDecoder("latin1").decode(tailBytes);
 
     // Find the Contents hex string - it will look like: /Contents<000000...>
-    // We look for a Contents with our exact placeholder length filled with zeros
-    const contentsPattern = /\/Contents\s*<(0+)>/g;
+    // We look for a Contents with our exact placeholder length filled with zeros.
+    // We use a dynamic RegExp with bounded quantifiers to prevent ReDoS.
+    const contentsPattern = new RegExp(`/Contents\\s{0,100}<(0{${placeholderHexLength}})>`, "g");
     let placeholderMatch: RegExpExecArray | null = null;
 
     // Helper to find match in string
@@ -283,10 +285,8 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         // Reset regex state
         contentsPattern.lastIndex = 0;
         while ((m = contentsPattern.exec(str)) !== null) {
-            if (m[1]?.length === placeholderHexLength) {
-                pMatch = m;
-                // Take the last match (most recently added signature)
-            }
+            pMatch = m;
+            // Take the last match (most recently added signature)
         }
         return pMatch;
     };
@@ -374,9 +374,9 @@ function updateByteRange(
     const searchString = new TextDecoder("latin1").decode(searchRegion);
 
     // Find the ByteRange placeholder
-    // Match any number of values since we use 6 placeholders for padding space
-    // Simplified to avoid security/detect-unsafe-regex warning (catastrophic backtracking)
-    const byteRangePattern = /\/ByteRange\s*\[[\s\d]+\]/;
+    // Match any number of values since we use 6 placeholders for padding space.
+    // We use bounded quantifiers to prevent ReDoS.
+    const byteRangePattern = /\/ByteRange\s{0,100}\[[\s\d]{1,500}\]/;
     const match = byteRangePattern.exec(searchString);
 
     if (!match) {

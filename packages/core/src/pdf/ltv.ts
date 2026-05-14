@@ -152,8 +152,9 @@ export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Ui
     // WORKAROUND: correctly track objects from previous incremental updates.
     // Scan bytes to ensure largestObjectNumber matches the actual file content,
     // preserving the object numbering sequence for incremental updates.
+    // We use bounded quantifiers for whitespace to prevent ReDoS.
     const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
+    const objMatches = pdfString.matchAll(/(\d{1,20})\s{1,100}\d{1,20}\s{1,100}obj/g);
     let maxObjNum = context.largestObjectNumber;
     for (const match of objMatches) {
         const objNum = parseInt(match[1] ?? "0", 10);
