@@ -41,7 +41,7 @@
     },
     "dependencies": {
         "asn1js": "^3.0.6",
-        "commander": "^14.0.2",
+        "commander": "^14.0.3",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.3.3"
     },
