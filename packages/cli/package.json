@@ -46,7 +46,7 @@
         "pkijs": "^3.3.3"
     },
     "devDependencies": {
-        "@types/node": "^22.0.0",
+        "@types/node": "^25.8.0",
         "eslint": "^9.39.2",
         "tsup": "^8.5.1",
         "tsx": "^4.22.0",
