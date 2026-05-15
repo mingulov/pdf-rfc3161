@@ -450,7 +450,7 @@ export async function verifyTimestamp(
         // Strict PAdES/ESS check
         if (options.strictESSValidation) {
             // Check for signing-certificate (1.2.840.113549.1.9.16.2.12) or signing-certificate-v2 (1.2.840.113549.1.9.16.2.47)
-            const signerInfo = signedData.signerInfos[0] as pkijs.SignerInfo | undefined;
+            const signerInfo = signedData.signerInfos[0];
             if (!signerInfo) {
                 return {
                     ...timestamp,

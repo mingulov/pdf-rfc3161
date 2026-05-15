@@ -13,7 +13,7 @@ import type { TimestampOptions } from "../../../core/src/types.js";
 // We don't need a real TSA / valid token; the assertion fires on the
 // constructor arg before the real signing flow runs.
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-return
+ 
 const sessionConstructorSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../core/src/session.js", () => {

@@ -89,7 +89,7 @@ function tryExtractStatusFromASN1(asn1Block: unknown): StatusInfo | null {
             ) {
                 result.status = (hexView as ArrayLike<number>)[0] as TSAStatus;
             } else if (typeof numericValue === "number") {
-                result.status = numericValue as TSAStatus;
+                result.status = numericValue;
             } else {
                 // No identifiable status value -- bail rather than guess.
                 return null;
@@ -282,7 +282,7 @@ export function parseTimestampResponse(responseBytes: Uint8Array): ParsedTimesta
             }
             throw new TimestampError(
                 TimestampErrorCode.MALFORMED_RESPONSE,
-                `TimeStampResp status was extracted (status=${String(status as number)}) but no token found - TSA response may be incomplete or malformed (statusString: ${statusString ?? "none"})`
+                `TimeStampResp status was extracted (status=${String(status)}) but no token found - TSA response may be incomplete or malformed (statusString: ${statusString ?? "none"})`
             );
         }
 

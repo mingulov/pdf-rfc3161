@@ -25,7 +25,7 @@
     "devDependencies": {
         "@types/node": "^25.8.0",
         "@vitest/coverage-v8": "^4.0.17",
-        "eslint": "^9.39.2",
+        "eslint": "^10.4.0",
         "pdf-lib": "^1.17.1",
         "tsx": "^4.22.0",
         "typescript": "^5.9.3",
