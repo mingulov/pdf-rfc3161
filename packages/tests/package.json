@@ -23,7 +23,7 @@
         "pvutils": "^1.1.5"
     },
     "devDependencies": {
-        "@types/node": "^22.0.0",
+        "@types/node": "^25.8.0",
         "@vitest/coverage-v8": "^4.0.17",
         "eslint": "^9.39.2",
         "pdf-lib": "^1.17.1",
