@@ -16,14 +16,14 @@
         "lucide-react": "^0.562.0",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.3.3",
-        "react": "^19.2.3",
+        "react": "^19.2.6",
         "react-dom": "^19.2.3"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.2",
         "@playwright/test": "^1.57.0",
         "@types/node": "^22.0.0",
-        "@types/react": "^19.2.8",
+        "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
         "@vitejs/plugin-react": "^5.1.2",
         "eslint": "^9.39.2",
