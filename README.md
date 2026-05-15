@@ -440,7 +440,7 @@ const verified = await verifyTimestamp(ts, {
 
 ## Requirements
 
-- Node.js 18.0.0 or later
+- Node.js 20.0.0 or later
 - Modern browsers with Web Crypto API support
 - Edge runtimes: Cloudflare Workers, Vercel Edge, Deno Deploy
 

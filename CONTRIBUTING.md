@@ -1,6 +1,6 @@
 # Contributing to pdf-rfc3161
 
-Thanks for your interest! This is a pnpm 10 monorepo targeting Node 18+.
+Thanks for your interest! This is a pnpm 10 monorepo targeting Node 20+.
 
 ## Setup
 
@@ -12,7 +12,7 @@ pnpm -r build
 pnpm test
 ```
 
-You'll need Node 18 or newer (`.nvmrc` pins 24 for CI; older minors are tested in the matrix) and pnpm 10+ (`engines.pnpm`).
+You'll need Node 20 or newer (`.nvmrc` pins 24 for CI; older minors are tested in the matrix) and pnpm 10+ (`engines.pnpm`).
 
 ## Project structure
 
