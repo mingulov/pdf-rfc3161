@@ -65,7 +65,7 @@ jobs:
     # Only run if SNYK_TOKEN is available
     if: ${{ vars.SNYK_ENABLED == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: pnpm/action-setup@v3
         with:
