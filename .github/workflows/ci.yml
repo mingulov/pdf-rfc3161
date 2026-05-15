@@ -46,7 +46,7 @@ jobs:
 
       - name: Upload coverage
         if: matrix.node == '24'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: ./packages/tests/coverage/lcov.info
           fail_ci_if_error: false
