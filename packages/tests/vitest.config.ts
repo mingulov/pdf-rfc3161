@@ -15,6 +15,7 @@ export default defineConfig({
         globals: true,
         environment: "node",
         include: ["test/**/*.test.ts"],
+        setupFiles: ["./test/setup.ts"],
         alias: {
             "pdf-rfc3161/internals": resolve(coreSrc, "internals.ts"),
             "pdf-rfc3161/advanced": resolve(coreSrc, "advanced.ts"),
