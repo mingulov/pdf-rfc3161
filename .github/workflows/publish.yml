@@ -1,43 +1,45 @@
-name: Publish to npm
+# Manual fallback for re-publishing a tagged release without changesets/action.
+# Primary path is .github/workflows/release.yml which fires on push to main.
+name: Publish (manual fallback)
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to publish from"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
+    name: Build and publish to npm
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref }}
 
       - uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
-          registry-url: 'https://registry.npmjs.org'
-          cache: 'pnpm'
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: pnpm -r run typecheck
-
-      - name: Run tests
-        run: pnpm -r run test
-
       - name: Build
-        run: pnpm -r run build
+        run: pnpm -r build
 
       - name: Publish
-        run: pnpm -r publish --no-git-checks --access public
+        run: pnpm -r publish --provenance --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

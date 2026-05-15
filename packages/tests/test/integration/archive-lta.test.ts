@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PDFDocument, PDFName } from "pdf-lib-incremental-save";
 import {
     timestampPdf,
-    timestampPdfLTA,
+    archiveTimestamp,
     KNOWN_TSA_URLS,
     extractTimestamps,
     verifyTimestamp,
@@ -63,7 +63,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
             await delay(1500);
 
             await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
-                // Step 2: Add archive timestamp using timestampPdfLTA
+                // Step 2: Add archive timestamp using archiveTimestamp
                 const initialResult = await timestampPdf({
                     pdf: pdfBytes,
                     tsa: {
@@ -75,7 +75,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
 
                 await delay(1500);
 
-                const archiveResult = await timestampPdfLTA({
+                const archiveResult = await archiveTimestamp({
                     pdf: initialResult.pdf,
                     tsa: {
                         url: KNOWN_TSA_URLS.DIGICERT,
@@ -117,7 +117,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
 
             await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
                 // Add archive timestamp directly
-                const result = await timestampPdfLTA({
+                const result = await archiveTimestamp({
                     pdf: pdfBytes,
                     tsa: {
                         url: KNOWN_TSA_URLS.DIGICERT,
@@ -156,7 +156,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
                 await delay(1500);
 
                 // Add archive timestamp
-                const archiveResult = await timestampPdfLTA({
+                const archiveResult = await archiveTimestamp({
                     pdf: initialResult.pdf,
                     tsa: {
                         url: KNOWN_TSA_URLS.DIGICERT,
@@ -198,7 +198,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
                 await delay(1500);
 
                 // Add archive timestamp WITHOUT collecting existing revocation data
-                const archiveResult = await timestampPdfLTA({
+                const archiveResult = await archiveTimestamp({
                     pdf: initialResult.pdf,
                     tsa: {
                         url: KNOWN_TSA_URLS.DIGICERT,
@@ -228,7 +228,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
             const customFieldName = "MyArchiveTS";
 
             await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
-                const result = await timestampPdfLTA({
+                const result = await archiveTimestamp({
                     pdf: pdfBytes,
                     tsa: {
                         url: KNOWN_TSA_URLS.DIGICERT,

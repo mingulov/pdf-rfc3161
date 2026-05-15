@@ -11,6 +11,7 @@ import {
     verifyTimeStampedDataEnvelope,
     addTimestampsToEnvelope,
 } from "../../../core/src/rfcs/rfc5544.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 
 // Mock timestamp token for testing
 function createMockTimestampToken(): Uint8Array {
@@ -121,6 +122,21 @@ describe("RFC 5544 TimeStampedData", () => {
 
             expect(parsed.metaData?.otherMetaData?.["1.2.3.4"]).toEqual(["custom", "metadata"]);
         });
+
+        it("should throw TimestampError when parsing an invalid envelope", () => {
+            const invalidEnvelope = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
+
+            expect(() => parseTimeStampedData(invalidEnvelope)).toThrow(TimestampError);
+            try {
+                parseTimeStampedData(invalidEnvelope);
+            } catch (error) {
+                expect(error).toBeInstanceOf(TimestampError);
+                expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+                expect((error as TimestampError).message).toContain(
+                    "Failed to parse TimeStampedData"
+                );
+            }
+        });
     });
 
     describe("extractDataFromEnvelope", () => {
@@ -133,8 +149,7 @@ describe("RFC 5544 TimeStampedData", () => {
             expect(extracted).toEqual(testData);
         });
 
-        // Skip this test - parsing logic needs refinement for envelopes without embedded data
-        it.skip("should return null when no data is embedded", () => {
+        it("should return null when no data is embedded", () => {
             const envelope = createTimeStampedData(mockToken, {
                 dataUri: testDataUri,
                 // No data field - should return null
@@ -202,6 +217,72 @@ describe("RFC 5544 TimeStampedData", () => {
             for (const byte of oidBytes) {
                 expect(envelope).toContain(byte);
             }
+        });
+    });
+
+    // Audit D: regression-protect the Task 4.9 disambiguator fix in
+    // `parseTimeStampedData`. RFC 5544 lets `metaData` and `temporalEvidence`
+    // both appear as Sequence-typed children at the same nesting level; the
+    // parser distinguishes by checking the FIRST CHILD of the candidate
+    // Sequence -- metaData starts with a Boolean (hashProtected) while
+    // temporalEvidence starts with a context-specific tag for the CHOICE
+    // between tstEvidence and ersEvidence. Before the fix the parser would
+    // treat the temporalEvidence Sequence as a malformed metaData.
+    describe("metaData/temporalEvidence disambiguator (audit D)", () => {
+        it("envelope without metaData parses temporalEvidence cleanly (dataUri-only)", () => {
+            // Reproduces the Task 4.9 regression: only dataUri set, no
+            // metaData, no embedded data. Before the fix, the parser
+            // mis-identified the temporalEvidence Sequence as a malformed
+            // metaData and threw "Cannot read properties of undefined
+            // (reading 'valueBlock')".
+            const envelope = createTimeStampedData(mockToken, {
+                dataUri: testDataUri,
+            });
+
+            const parsed = parseTimeStampedData(envelope);
+
+            expect(parsed.version).toBe(1);
+            expect(parsed.dataUri).toBe(testDataUri);
+            expect(parsed.metaData).toBeUndefined();
+            expect(parsed.timestampTokens).toHaveLength(1);
+        });
+
+        it("envelope with metaData AND temporalEvidence parses both correctly", () => {
+            // metaData is present (because fileName -> hashProtected
+            // Boolean as first child). temporalEvidence follows. The
+            // disambiguator must direct each Sequence to the right parser.
+            const envelope = createTimeStampedData(mockToken, {
+                data: testData,
+                fileName: "test.pdf",
+                mediaType: "application/pdf",
+            });
+
+            const parsed = parseTimeStampedData(envelope);
+
+            expect(parsed.version).toBe(1);
+            expect(parsed.metaData).toBeDefined();
+            expect(parsed.metaData?.fileName).toBe("test.pdf");
+            expect(parsed.metaData?.mediaType).toBe("application/pdf");
+            expect(parsed.timestampTokens).toHaveLength(1);
+            expect(parsed.data).toEqual(testData);
+        });
+
+        it("envelope with metaData only (no data, no dataUri) still parses", () => {
+            // Edge case: metaData present, no data, no dataUri. The
+            // disambiguator must correctly route the Sequence to metaData
+            // even when the next Sequence (temporalEvidence) follows
+            // immediately.
+            const envelope = createTimeStampedData(mockToken, {
+                fileName: "marker.txt",
+            });
+
+            const parsed = parseTimeStampedData(envelope);
+
+            expect(parsed.metaData).toBeDefined();
+            expect(parsed.metaData?.fileName).toBe("marker.txt");
+            expect(parsed.data).toBeUndefined();
+            expect(parsed.dataUri).toBeUndefined();
+            expect(parsed.timestampTokens).toHaveLength(1);
         });
     });
 });

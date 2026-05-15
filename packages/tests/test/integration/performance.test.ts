@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { timestampPdf, KNOWN_TSA_URLS, preparePdfForTimestamp } from "pdf-rfc3161";
+import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
+import { preparePdfForTimestamp } from "pdf-rfc3161/internals";
 
 // Create test PDFs of various sizes
 function createTestPdf(sizeKB = 1): Uint8Array {

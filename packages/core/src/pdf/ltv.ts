@@ -8,7 +8,7 @@ import {
     PDFRef,
     PDFDict,
 } from "pdf-lib-incremental-save";
-import { TimestampError, TimestampErrorCode } from "../types.js";
+import { TimestampError, TimestampErrorCode, type ExtractOptions } from "../types.js";
 import {
     getOCSPURI,
     createOCSPRequest,
@@ -20,19 +20,23 @@ import { getCRLDistributionPoints } from "../pki/crl-utils.js";
 import { fetchCRL } from "../pki/crl-client.js";
 import { getCaIssuers, findIssuer } from "../pki/cert-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
-import { bytesToHex } from "../utils.js";
+import { restoreLargestObjectNumber } from "./internals.js";
+import { toArrayBuffer, bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
+import { ensureWebCrypto } from "../utils/web-crypto.js";
 
 // SHA-1 hash function for VRI key (required by PDF 1.x / PAdES standards)
 async function sha1Hex(data: Uint8Array): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest("SHA-1", data.slice().buffer);
+    await ensureWebCrypto();
+    const hashBuffer = await crypto.subtle.digest("SHA-1", toArrayBuffer(data));
     const hashArray = new Uint8Array(hashBuffer);
     return bytesToHex(hashArray);
 }
 
 // SHA-256 hash function for VRI key (PDF 2.0 extension level 8)
 async function sha256Hex(data: Uint8Array): Promise<string> {
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data.slice().buffer);
+    await ensureWebCrypto();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", toArrayBuffer(data));
     const hashArray = new Uint8Array(hashBuffer);
     return bytesToHex(hashArray);
 }
@@ -66,11 +70,17 @@ export interface LTVSettings {
  *
  * @param timestampToken - The DER-encoded timestamp token (ContentInfo)
  * @returns LTV data containing certificates and revocation info
+ *
+ * @example
+ * ```typescript
+ * const ltv = extractLTVData(timestamp.token);
+ * console.log(`Certs: ${ltv.certificates.length}, CRLs: ${ltv.crls.length}`);
+ * ```
  */
 export function extractLTVData(timestampToken: Uint8Array): LTVData {
     try {
         // Parse the ContentInfo
-        const asn1 = asn1js.fromBER(timestampToken.slice().buffer);
+        const asn1 = asn1js.fromBER(toArrayBuffer(timestampToken));
         if (asn1.offset === -1) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
@@ -106,9 +116,6 @@ export function extractLTVData(timestampToken: Uint8Array): LTVData {
             }
         }
 
-        // Note: OCSP responses would typically need to be fetched separately
-        // from the certificate's OCSP responder URL
-
         return {
             certificates,
             crls,
@@ -136,38 +143,34 @@ export function extractLTVData(timestampToken: Uint8Array): LTVData {
  *
  * @param pdfBytes - The PDF bytes (should already contain a timestamp)
  * @param ltvData - LTV validation data to embed
+ * @param options - Additional options for PDF loading
  * @returns PDF bytes with DSS added incrementally
+ *
+ * @example
+ * ```typescript
+ * const pdfWithDss = await addDSS(timestampedPdf, {
+ *     certificates: [issuerDer, rootDer],
+ *     crls: [crlBytes],
+ *     ocspResponses: [],
+ * });
+ * ```
  */
-export async function addDSS(pdfBytes: Uint8Array, ltvData: LTVData): Promise<Uint8Array> {
+export async function addDSS(
+    pdfBytes: Uint8Array,
+    ltvData: LTVData,
+    options?: ExtractOptions
+): Promise<Uint8Array> {
     // Load the PDF
     const sigPdfDoc = await PDFDocument.load(pdfBytes, {
         updateMetadata: false,
+        ignoreEncryption: options?.ignoreEncryption ?? false,
     });
 
     // Take snapshot BEFORE modifications for incremental save
     const snapshot = sigPdfDoc.takeSnapshot();
 
     const context = sigPdfDoc.context;
-
-    // WORKAROUND: correctly track objects from previous incremental updates.
-    // Scan bytes to ensure largestObjectNumber matches the actual file content,
-    // preserving the object numbering sequence for incremental updates.
-    const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
-    let maxObjNum = context.largestObjectNumber;
-    for (const match of objMatches) {
-        const objNum = parseInt(match[1] ?? "0", 10);
-        if (objNum > maxObjNum) {
-            maxObjNum = objNum;
-        }
-    }
-    // internal property of PDFContext needed for the workaround
-    interface PDFContextInternal {
-        largestObjectNumber: number;
-    }
-
-    const contextInternal = context as unknown as PDFContextInternal;
-    contextInternal.largestObjectNumber = maxObjNum;
+    restoreLargestObjectNumber(pdfBytes, context);
 
     // Create arrays for certificates, CRLs, and OCSP responses
     const certsArray = PDFArray.withContext(context);
@@ -322,11 +325,13 @@ export async function addVRIEnhanced(
         dssOcspRefs?: PDFRef[];
         timestampRef?: PDFRef;
         hashAlgorithm?: "SHA-1" | "SHA-256";
+        ignoreEncryption?: boolean;
     } = {}
 ): Promise<Uint8Array> {
     // Load the PDF
     const sigPdfDoc = await PDFDocument.load(pdfBytes, {
         updateMetadata: false,
+        ignoreEncryption: options.ignoreEncryption ?? false,
     });
 
     // Take snapshot BEFORE modifications for incremental save
@@ -398,11 +403,6 @@ export async function addVRIEnhanced(
     // Create the VRI entry dictionary for this signature
     const vriEntry = context.obj({});
 
-    // Add reference to the signing certificate itself
-    // Note: In a full implementation, we'd find the exact ref to the cert in Certs array
-    // For now, we create a reference that validators can follow
-
-    // Add Cert references if available
     if (certRefs.length > 0) {
         vriEntry.set(PDFName.of("Cert"), certsArray);
     }
@@ -489,7 +489,7 @@ export async function completeLTVData(
         // Parse all certificates to work with them
         const certs: pkijs.Certificate[] = [];
         for (const certBytes of enrichedData.certificates) {
-            const asn1 = asn1js.fromBER(certBytes.slice().buffer);
+            const asn1 = asn1js.fromBER(toArrayBuffer(certBytes));
             if (asn1.offset !== -1) {
                 certs.push(new pkijs.Certificate({ schema: asn1.result }));
             }
@@ -506,12 +506,21 @@ export async function completeLTVData(
             await buildChainViaAIA(certs, enrichedData, errors, settings);
         }
 
+        // Pre-index certificates by subject to speed up issuer lookups
+        const certsBySubject = new Map<string, pkijs.Certificate[]>();
+        for (const cert of certs) {
+            const subject = cert.subject.toString();
+            const list = certsBySubject.get(subject) ?? [];
+            list.push(cert);
+            certsBySubject.set(subject, list);
+        }
+
         // Iterate over certs to find their issuers and fetch OCSP
         // We skip the root (last one usually, or self-signed) effectively because we won't find an issuer for it
         // that is *different* (or if we do, root OCSP is rare/uncommon).
         for (const cert of certs) {
             // Find issuer
-            const issuer = findIssuer(cert, certs);
+            const issuer = findIssuer(cert, certsBySubject.get(cert.issuer.toString()) ?? []);
 
             if (!issuer) {
                 // If we can't find the issuer, we can't fetch OCSP (needs issuer hash)
@@ -610,15 +619,17 @@ export async function completeLTVData(
  * This indicates how many LTV validation objects are embedded in the document structure.
  *
  * @param pdfBytes - The PDF bytes
+ * @param options - Extraction options
  * @returns Counts of Certs, CRLs, and OCSPs in the DSS
  */
 export async function getDSSInfo(
-    pdfBytes: Uint8Array
+    pdfBytes: Uint8Array,
+    options?: ExtractOptions
 ): Promise<{ certs: number; crls: number; ocsps: number } | null> {
     try {
         const pdfDoc = await PDFDocument.load(pdfBytes, {
             updateMetadata: false,
-            ignoreEncryption: true,
+            ignoreEncryption: options?.ignoreEncryption ?? false,
         });
         const catalog = pdfDoc.catalog;
 
@@ -663,6 +674,12 @@ async function buildChainViaAIA(
     // Serial numbers we already have to avoid duplicates
     const seenSerials = new Set<string>(certs.map((c) => c.serialNumber.valueBlock.toString()));
 
+    // Pre-calculate subject map to avoid O(N^2) searches inside the loop
+    const subjectMap = new Map<string, pkijs.Certificate>();
+    for (const c of certs) {
+        subjectMap.set(c.subject.toString(), c);
+    }
+
     while (madeProgress && depth < MAX_DEPTH) {
         madeProgress = false;
         depth++;
@@ -671,15 +688,16 @@ async function buildChainViaAIA(
         const currentCerts = [...certs];
 
         for (const cert of currentCerts) {
-            // Check if we have the issuer
-            const issuer = certs.find((c) => c.subject.toString() === cert.issuer.toString());
+            const subjectStr = cert.subject.toString();
+            const issuerStr = cert.issuer.toString();
 
-            // If we have issuer, skip (unless we want to verify it? no, just existence)
-            // Note: Self-signed certs match themselves usually, or we check exact match.
             // If cert.subject == cert.issuer, it's a root (or self-signed leaf), stopping point.
-            if (cert.subject.toString() === cert.issuer.toString()) {
+            if (subjectStr === issuerStr) {
                 continue;
             }
+
+            // Check if we have the issuer
+            const issuer = subjectMap.get(issuerStr);
 
             if (issuer) {
                 continue;
@@ -702,7 +720,7 @@ async function buildChainViaAIA(
                         : await fetchCertificate(url);
 
                     // Parse to verify it's a cert and get details
-                    const asn1 = asn1js.fromBER(certBytes.slice().buffer);
+                    const asn1 = asn1js.fromBER(toArrayBuffer(certBytes));
                     if (asn1.offset === -1) {
                         continue;
                     }
@@ -715,6 +733,7 @@ async function buildChainViaAIA(
                             `Found new intermediate certificate: ${newCert.subject.toString()}`
                         );
                         certs.push(newCert);
+                        subjectMap.set(newCert.subject.toString(), newCert);
                         enrichedData.certificates.push(certBytes);
                         seenSerials.add(newSerial);
                         madeProgress = true;

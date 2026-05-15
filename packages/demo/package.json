@@ -1,7 +1,7 @@
 {
     "name": "pdf-rfc3161-demo",
     "private": true,
-    "version": "0.1.4",
+    "version": "0.2.0",
     "type": "module",
     "scripts": {
         "dev": "vite",
@@ -22,7 +22,7 @@
     "devDependencies": {
         "@eslint/js": "^9.39.2",
         "@playwright/test": "^1.57.0",
-        "@types/node": "^25.0.6",
+        "@types/node": "^22.0.0",
         "@types/react": "^19.2.8",
         "@types/react-dom": "^19.2.3",
         "@vitejs/plugin-react": "^5.1.2",

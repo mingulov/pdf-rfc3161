@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseTimestampResponse, validateTimestampResponse } from "../../../core/src/tsa/response.js";
-import { TimestampError, TSAStatus } from "../../../core/src/types.js";
+import { TimestampError, TimestampErrorCode, TSAStatus } from "../../../core/src/types.js";
 
 // A minimal valid TimeStampResp with status=2 (rejection) but no token
 // This is for testing error cases
@@ -79,6 +79,70 @@ describe("TSA Response", () => {
 
             expect(() => parseTimestampResponse(warningResponse)).toThrow("no token found");
             expect(() => parseTimestampResponse(notificationResponse)).toThrow("no token found");
+        });
+
+        // Audit L4 + Task 1.1 regression: granted-class statuses whose token
+        // is missing must throw MALFORMED_RESPONSE (not INVALID_RESPONSE).
+        // INVALID_RESPONSE is reserved for the raw-token-fallback path; if
+        // this regresses, the session.ts catch will silently swallow real
+        // protocol violations and embed garbage.
+        describe("granted-class union behaviour (audit L4)", () => {
+            // Same byte pattern as the test above, but assert the error code.
+            const grantedNoToken = new Uint8Array([
+                0x30, 0x09, 0x30, 0x03, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ]); // status = 0 (GRANTED)
+
+            it("throws MALFORMED_RESPONSE when status is GRANTED but no token follows", () => {
+                let caught: unknown;
+                try {
+                    parseTimestampResponse(grantedNoToken);
+                } catch (e) {
+                    caught = e;
+                }
+                expect(caught).toBeInstanceOf(TimestampError);
+                expect((caught as TimestampError).code).toBe(
+                    TimestampErrorCode.MALFORMED_RESPONSE
+                );
+            });
+
+            it("throws MALFORMED_RESPONSE for REVOCATION_WARNING with no token", () => {
+                const warningNoToken = new Uint8Array([
+                    0x30, 0x09, 0x30, 0x03, 0x02, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00,
+                ]);
+                let caught: unknown;
+                try {
+                    parseTimestampResponse(warningNoToken);
+                } catch (e) {
+                    caught = e;
+                }
+                expect(caught).toBeInstanceOf(TimestampError);
+                expect((caught as TimestampError).code).toBe(
+                    TimestampErrorCode.MALFORMED_RESPONSE
+                );
+            });
+
+            it("throws MALFORMED_RESPONSE for GRANTED_WITH_MODS with no token", () => {
+                const grantedWithModsNoToken = new Uint8Array([
+                    0x30, 0x09, 0x30, 0x03, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
+                ]);
+                let caught: unknown;
+                try {
+                    parseTimestampResponse(grantedWithModsNoToken);
+                } catch (e) {
+                    caught = e;
+                }
+                expect(caught).toBeInstanceOf(TimestampError);
+                expect((caught as TimestampError).code).toBe(
+                    TimestampErrorCode.MALFORMED_RESPONSE
+                );
+            });
+
+            // Positive "granted with valid token -> non-undefined token + info" test
+            // intentionally omitted: requires either a real TimeStampResp DER
+            // fixture or a hand-rolled SignedData with a real Certificate.
+            // pkijs.Certificate.toSchema() trips on bare-constructor certs,
+            // so synthesizing this in-process is non-trivial. A future fixture
+            // file would unlock this assertion (tracked as a follow-up).
         });
     });
 
@@ -212,6 +276,50 @@ describe("TSA Response", () => {
 
             const result = validateTimestampResponse(info, emptyHash, "SHA-256");
             expect(result).toBe(true);
+        });
+
+        describe("nonce verification (H1)", () => {
+            const hash = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+            const expectedNonce = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+            const baseInfo = {
+                genTime: new Date(),
+                policy: "1.2.3",
+                serialNumber: "1234",
+                hashAlgorithm: "SHA-256",
+                hashAlgorithmOID: "2.16.840.1.101.3.4.2.1",
+                messageDigest: "01020304",
+                hasCertificate: true,
+            };
+
+            it("should accept response with matching nonce", () => {
+                const info = { ...baseInfo, nonce: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]) };
+                const result = validateTimestampResponse(info, hash, "SHA-256", expectedNonce);
+                expect(result).toBe(true);
+            });
+
+            it("should reject response with mismatched nonce (replay defence)", () => {
+                const info = { ...baseInfo, nonce: new Uint8Array([9, 9, 9, 9, 9, 9, 9, 9]) };
+                const result = validateTimestampResponse(info, hash, "SHA-256", expectedNonce);
+                expect(result).toBe(false);
+            });
+
+            it("should reject when expected nonce given but response omits nonce", () => {
+                const info = { ...baseInfo }; // no nonce
+                const result = validateTimestampResponse(info, hash, "SHA-256", expectedNonce);
+                expect(result).toBe(false);
+            });
+
+            it("should reject when nonce lengths differ even if prefix matches", () => {
+                const info = { ...baseInfo, nonce: new Uint8Array([1, 2, 3, 4]) };
+                const result = validateTimestampResponse(info, hash, "SHA-256", expectedNonce);
+                expect(result).toBe(false);
+            });
+
+            it("should still accept when no expected nonce is passed (backward-compatible)", () => {
+                const info = { ...baseInfo, nonce: new Uint8Array([1, 2, 3, 4]) };
+                const result = validateTimestampResponse(info, hash, "SHA-256");
+                expect(result).toBe(true);
+            });
         });
     });
 });

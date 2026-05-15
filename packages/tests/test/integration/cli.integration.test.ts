@@ -262,6 +262,74 @@ describe("CLI Integration Tests", () => {
             const result = await runCli(["verify", inputPdf, "--rfc8933"]);
             expect(result.code).toBe(0);
         });
+
+        // Audit C2 regression: --no-require-eku and --no-require-validity
+        // must be accepted (commander's --no-* syntax). These are opt-outs
+        // from the 0.2.0 default-enforce policy.
+        // strictESSValidation library default is `false`, so --strict-ess
+        // remains a positive opt-in (see audit F6 revert).
+        it("should accept --no-require-eku opt-out", async () => {
+            const result = await runCli(["verify", "--no-require-eku", inputPdf]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
+
+        it("should accept --no-require-validity opt-out", async () => {
+            const result = await runCli(["verify", "--no-require-validity", inputPdf]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
+
+        // Audit F6: --strict-ess is a positive opt-in (library default is off).
+        it("should accept --strict-ess positive opt-in", async () => {
+            const result = await runCli(["verify", "--strict-ess", inputPdf]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
+
+        it("--help should advertise the security defaults", async () => {
+            const result = await runCli(["verify", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--no-require-eku");
+            expect(result.stdout).toContain("--no-require-validity");
+            expect(result.stdout).toContain("--strict-ess");
+            // The help text must communicate that EKU/validity are opt-outs
+            // from a 0.2.0 default; strict-ess is a positive opt-in.
+            expect(result.stdout).toContain("default: enforce since 0.2.0");
+            // Commander wraps "off by default" across lines; match the
+            // fragment that doesn't span the wrap boundary.
+            expect(result.stdout).toMatch(/off by/);
+            expect(result.stdout).toMatch(/default: false/);
+        });
+    });
+
+    // Audit C3 regression: `timestamp --ltv` previously defaulted false in the
+    // CLI, overriding the library default `enableLTV: true`. Now uses --no-ltv
+    // opt-out form.
+    describe("CLI Timestamp --ltv default", () => {
+        it("should advertise --no-ltv (LTV on by default since 0.2.0)", async () => {
+            const result = await runCli(["timestamp", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--no-ltv");
+            // Commander wraps long help lines; check for a fragment that
+            // doesn't span the wrap boundary.
+            expect(result.stdout).toMatch(/on by default/);
+            expect(result.stdout).toMatch(/since 0\.2\.0/);
+            // The old --ltv positive flag should no longer appear as a
+            // distinct option line.
+            expect(result.stdout).not.toMatch(/^\s+--ltv\s+/m);
+        });
+
+        it("should accept --no-ltv opt-out", async () => {
+            const result = await runCli([
+                "timestamp",
+                "http://freetsa.org/tsr",
+                inputPdf,
+                "--no-ltv",
+            ]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
     });
 
     describe("CLI Archive Command", () => {
@@ -283,6 +351,109 @@ describe("CLI Integration Tests", () => {
 
             // Command structure should be valid
             expect(result.stderr).not.toContain("Unknown option");
+        });
+
+        // Audit C4 regression: --no-update was a no-op because Commander
+        // stores negated flags under `update`, not `noUpdate`. After the fix,
+        // the verbose log line should reflect the actual flag state.
+        it("should advertise --no-update meaning in --help", async () => {
+            const result = await runCli(["archive", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--no-update");
+            // The help should now describe the actual semantic, not the old
+            // misleading "fetch fresh" wording.
+            expect(result.stdout).toMatch(/harvest revocation data/);
+        });
+
+        it("--no-update verbose log should report 'Use existing only'", async () => {
+            // We don't need the archive to succeed; verbose output streams
+            // BEFORE the network call. The presence of "Use existing only"
+            // confirms the flag is wired (audit C4 -- previously the line
+            // always said "Fetch fresh" because cmdOptions.noUpdate was
+            // always undefined).
+            const result = await runCli([
+                "archive",
+                "http://freetsa.org/tsr",
+                inputPdf,
+                "--no-update",
+                "--verbose",
+            ]);
+            expect(result.stdout).toContain("Use existing only");
+        });
+
+        it("default archive --verbose should report 'Fetch fresh'", async () => {
+            const result = await runCli([
+                "archive",
+                "http://freetsa.org/tsr",
+                inputPdf,
+                "--verbose",
+            ]);
+            expect(result.stdout).toContain("Fetch fresh");
+        });
+    });
+
+    // Audit L3: subprocess coverage for the 0.2.x security flags.
+    // --no-require-eku / --no-require-validity / --strict-ess are
+    // already covered by the Task 1.2 tests under "CLI Verify Command".
+    // --no-ltv is covered by Task 1.3 under "CLI Timestamp --ltv default".
+    // --no-update is covered by Task 1.4 under "CLI Archive Command".
+    // The remaining three -- --trust-store, --reject-on-revocation-warning,
+    // --ignore-encryption -- get their own block here.
+    describe("CLI 0.2.x security flag coverage (audit L3)", () => {
+        it("--reject-on-revocation-warning appears in `timestamp --help`", async () => {
+            const result = await runCli(["timestamp", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--reject-on-revocation-warning");
+        });
+
+        it("`timestamp --reject-on-revocation-warning` parses (no Unknown option)", async () => {
+            const result = await runCli([
+                "timestamp",
+                "http://freetsa.org/tsr",
+                inputPdf,
+                "--reject-on-revocation-warning",
+            ]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
+
+        it("--ignore-encryption appears in `timestamp --help`", async () => {
+            const result = await runCli(["timestamp", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--ignore-encryption");
+        });
+
+        it("`timestamp --ignore-encryption` parses (no Unknown option)", async () => {
+            const result = await runCli([
+                "timestamp",
+                "http://freetsa.org/tsr",
+                inputPdf,
+                "--ignore-encryption",
+            ]);
+            expect(result.stderr).not.toContain("Unknown option");
+            expect(result.stderr).not.toContain("unknown option");
+        });
+
+        it("--trust-store <path> appears in `verify --help`", async () => {
+            const result = await runCli(["verify", "--help"]);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("--trust-store");
+        });
+
+        it("`verify --trust-store /nonexistent.pem` surfaces a file error", async () => {
+            // Behavioural smoke: the flag is wired through to
+            // loadTrustStoreFromPem and the failure surfaces (not a silent
+            // continue with no trust store).
+            const result = await runCli([
+                "verify",
+                "--trust-store",
+                "/nonexistent-trust-store.pem",
+                inputPdf,
+            ]);
+            expect(result.stderr).not.toContain("Unknown option");
+            // Either the file-read error or the no-cert-found error is acceptable
+            // here -- both prove the flag reached loadTrustStoreFromPem.
+            expect(result.code).toBe(1);
         });
     });
 

@@ -1,85 +1,84 @@
 # Contributing to pdf-rfc3161
 
-Thank you for your interest in contributing! This document provides guidelines and information for contributors.
+Thanks for your interest! This is a pnpm 10 monorepo targeting Node 18+.
 
-## Development Setup
+## Setup
 
-The project is a monorepo managed by `pnpm`.
+```bash
+git clone https://github.com/mingulov/pdf-rfc3161.git
+cd pdf-rfc3161
+pnpm install
+pnpm -r build
+pnpm test
+```
 
-1. Clone and install dependencies:
+You'll need Node 18 or newer (`.nvmrc` pins 24 for CI; older minors are tested in the matrix) and pnpm 10+ (`engines.pnpm`).
 
-    ```bash
-    git clone https://github.com/mingulov/pdf-rfc3161.git
-    cd pdf-rfc3161
-    pnpm install
-    ```
-
-2. Build all packages:
-
-    ```bash
-    pnpm -r build
-    ```
-
-3. Run tests:
-    ```bash
-    pnpm -r test
-    ```
-
-## Project Structure
+## Project structure
 
 ```
 pdf-rfc3161/
 |-- packages/
-|   |-- core/             # Core library (signing, timestamping, utilities)
-|   |-- cli/              # Command-line interface
-|   |-- tests/            # Test suite (unit & integration)
-|   `-- demo/             # Demo application (Vite/React)
-|-- pnpm-workspace.yaml   # Workspace configuration
-`-- package.json          # Root scripts
+|   |-- core/    # pdf-rfc3161 — the library
+|   |-- cli/     # pdf-rfc3161-cli — published binary
+|   |-- tests/   # private; aliases pdf-rfc3161 -> ../core/src
+|   `-- demo/    # private; Vite + React 19 + Playwright
+|-- docs/              # maintainer docs
+`-- .changeset/        # pending changesets
 ```
 
-## Running Tests
+## Commands
 
-```bash
-# All tests
-pnpm -r test
+| Command | What it does |
+|---|---|
+| `pnpm test` | Full unit suite across all packages |
+| `pnpm typecheck` | `tsc --noEmit` on every workspace package |
+| `pnpm lint` | ESLint `--fix` on every workspace package |
+| `pnpm format` | Prettier `--write` on every workspace package |
+| `pnpm -r build` | tsup builds for core + cli; Vite build for demo |
+| `pnpm --filter pdf-rfc3161-tests run test:integration` | Hits live TSAs — set `LIVE_TSA_TESTS=true` first |
+| `pnpm --filter pdf-rfc3161-tests run test:robustness` | Long-running adversarial suite |
+| `pnpm --filter pdf-rfc3161-tests run test:coverage` | v8 coverage report |
+| `pnpm --filter pdf-rfc3161-demo dev` | Vite dev server for the demo app |
+| `pnpm cli -- <args>` | Run the CLI from source via tsx |
 
-# Specific package
-pnpm --filter pdf-rfc3161 test
+## Before opening a PR
 
-# Watch mode (in package directory)
-pnpm test:watch
-```
+1. **Add a changeset** describing user-visible changes:
 
-## Code Style
+   ```bash
+   pnpm changeset
+   ```
 
-- Use TypeScript strict mode
-- Follow existing code patterns
-- Add JSDoc comments for public APIs
-- Keep functions small and focused
+   Pick affected packages and bump type. Commit the generated `.changeset/*.md` along with your code. Skip the changeset only for internal-only edits (tests, docs, CI, examples that don't affect published output).
 
-## Pull Request Process
+2. **Run the full check**: `pnpm test && pnpm typecheck && pnpm lint`.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass (`npm test`)
-6. Ensure type checking passes (`npm run typecheck`)
-7. Commit your changes (`git commit -m 'Add amazing feature'`)
-8. Push to your fork (`git push origin feature/amazing-feature`)
-9. Open a Pull Request
+3. **Network-touching changes** (TSA / OCSP / CRL / cert client, verify logic): also run the integration tests. They hit live TSA endpoints, so don't loop them — they're rate-limited.
 
-## Reporting Bugs
+4. **Security-relevant changes**: confirm the threat model was considered. The PR template has a section for this. If you're unsure, ask in the PR description.
 
-Please use the GitHub issue tracker and include:
+## Code style
 
-- Node.js version
-- Operating system
-- Steps to reproduce
-- Expected vs actual behavior
-- Any error messages
+- TypeScript strict + `noUncheckedIndexedAccess` enabled.
+- Prettier: 4-space indent, double quotes, semicolons, 100-col width, LF line endings (see `.editorconfig`).
+- ESLint with `eslint-plugin-security`. ReDoS-prone unbounded regex quantifiers (`\s+`, `\d+`) are flagged — use bounded forms (`\s{1,N}`).
+- Source files are **ASCII-only**, enforced by `packages/tests/test/unit/ascii.test.ts`. Use `--` instead of em-dash, `Sec.` instead of section sign, etc.
+
+## Tests
+
+Tests live in `packages/tests/test/{unit,integration,fixtures,utils}/`. The Vitest config aliases `pdf-rfc3161` → `../core/src/index.ts`, so tests import from source directly and don't require a built `dist/`.
+
+Per-test fake timers are encouraged for retry/backoff logic — see `packages/tests/test/unit/cert-client.test.ts` for the canonical pattern. Do **not** introduce a top-of-file `vi.useFakeTimers()` — that has historically broken fetcher tests.
+
+## Reporting bugs
+
+Use the GitHub issue template: <https://github.com/mingulov/pdf-rfc3161/issues/new/choose>. Include the pdf-rfc3161 version, Node version, runtime (Node / Workers / Deno / Browser), and a minimal reproduction.
+
+## Security issues
+
+Please do **not** file public issues for security problems. See `SECURITY.md` for the disclosure procedure.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing you agree your work is MIT-licensed (see `LICENSE`).

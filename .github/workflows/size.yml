@@ -1,0 +1,50 @@
+name: Bundle size
+
+on:
+  pull_request:
+    paths:
+      - "packages/core/src/**"
+      - "packages/core/tsup.config.ts"
+      - "packages/core/package.json"
+      - ".github/workflows/size.yml"
+
+jobs:
+  size:
+    name: Measure bundle size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core
+        run: pnpm --filter pdf-rfc3161 build
+
+      - name: Report bundle sizes
+        run: |
+          for f in packages/core/dist/index.js packages/core/dist/index.cjs packages/core/dist/index.d.ts packages/core/dist/advanced.js packages/core/dist/rfcs/rfc5544.js packages/core/dist/rfcs/rfc8933.js; do
+            if [ -f "$f" ]; then
+              SIZE=$(stat -c%s "$f")
+              printf '%-50s %10d bytes\n' "$f" "$SIZE"
+            fi
+          done
+
+      - name: Enforce ESM bundle size budget (<= 200 KB)
+        run: |
+          SIZE=$(stat -c%s packages/core/dist/index.js)
+          MAX=204800
+          echo "ESM main bundle: $SIZE bytes (max: $MAX)"
+          if [ "$SIZE" -gt "$MAX" ]; then
+            echo "::error::ESM bundle exceeds 200 KB budget"
+            exit 1
+          fi

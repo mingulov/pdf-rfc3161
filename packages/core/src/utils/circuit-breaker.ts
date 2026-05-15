@@ -175,6 +175,20 @@ export class CircuitBreakerError extends Error {
 /**
  * A map of circuit breakers keyed by service URL.
  * Useful for managing multiple independent services.
+ *
+ * Serverless caveat (L7): when this map is held as a module-level
+ * singleton (which is what `cert-client.ts`, `ocsp-client.ts`,
+ * `crl-client.ts` do), the breaker state may persist across requests
+ * in long-running serverless workers (Cloudflare Workers, AWS Lambda
+ * keep-warm, Vercel Edge). A transient failure during one request can
+ * trip the breaker for every subsequent request handled by the same
+ * isolate until reset() is called or the isolate recycles.
+ *
+ * Mitigations if this matters for your deployment:
+ *   - Call `reset*Circuits()` at the start of each request.
+ *   - Inject your own per-request CircuitBreakerMap via a custom
+ *     fetcher implementation (`RevocationDataFetcher`).
+ *   - Lower `resetTimeoutMs` so OPEN -> HALF_OPEN transition is fast.
  */
 export class CircuitBreakerMap {
     private readonly breakers = new Map<string, CircuitBreaker>();
@@ -193,6 +207,9 @@ export class CircuitBreakerMap {
         }
         const breaker = this.breakers.get(url);
         if (!breaker) {
+            // Internal invariant: we just .set() above, so .get() must return.
+            // Plain Error (not TimestampError) because this is an impossible
+            // bug, not a user-facing condition.
             throw new Error(`Circuit breaker not found for ${url}`);
         }
         return breaker;

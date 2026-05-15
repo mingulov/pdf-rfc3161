@@ -2,10 +2,10 @@ import { useState } from "react";
 import {
     extractTimestamps,
     verifyTimestamp,
-    getDSSInfo,
     validateTimestampTokenRFC8933Compliance,
     type ExtractedTimestamp,
 } from "pdf-rfc3161";
+import { getDSSInfo } from "pdf-rfc3161/internals";
 import FileDrop from "./FileDrop";
 import { CheckCircle, AlertCircle, Loader2, ShieldCheck, Shield } from "lucide-react";
 

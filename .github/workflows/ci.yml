@@ -11,6 +11,7 @@ jobs:
     name: Test on Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node: [18, 20, 22, 24]
 
@@ -38,6 +39,17 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Run tests with coverage
+        if: matrix.node == '24'
+        run: pnpm --filter pdf-rfc3161-tests run test:coverage
+
+      - name: Upload coverage
+        if: matrix.node == '24'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./packages/tests/coverage/lcov.info
+          fail_ci_if_error: false
 
   lint:
     name: Lint

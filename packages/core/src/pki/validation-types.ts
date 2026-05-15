@@ -1,5 +1,4 @@
 import * as pkijs from "pkijs";
-import { CertificateStatus } from "./ocsp-utils.js";
 
 /**
  * Represents a single certificate requiring validation
@@ -9,8 +8,6 @@ export interface CertificateToValidate {
     cert: pkijs.Certificate;
     /** Expected issuer (if known) */
     issuer?: pkijs.Certificate;
-    /** Purpose restrictions */
-    purposes?: string[];
 }
 
 /**
@@ -19,14 +16,22 @@ export interface CertificateToValidate {
 export interface ValidationResult {
     /** Certificate that was validated */
     cert: pkijs.Certificate;
-    /** OCSP status if available */
-    ocspStatus?: CertificateStatus;
     /** Whether certificate is valid */
     isValid: boolean;
     /** Sources used for validation */
-    sources: ("OCSP" | "CRL" | "TRUSTED")[];
+    sources: ("OCSP" | "CRL")[];
     /** Errors encountered */
     errors: string[];
+    /**
+     * DER-encoded OCSP responses fetched while validating this certificate.
+     * Populated so exportLTVData() can embed them in the PDF DSS.
+     */
+    ocspResponses?: Uint8Array[];
+    /**
+     * DER-encoded CRLs fetched while validating this certificate.
+     * Populated so exportLTVData() can embed them in the PDF DSS.
+     */
+    crls?: Uint8Array[];
 }
 
 /**
@@ -35,13 +40,20 @@ export interface ValidationResult {
  *
  * @example
  * ```typescript
- * // Custom curl-based fetcher
- * class CurlFetcher implements RevocationDataFetcher {
+ * // Custom fetch-based implementation
+ * class CustomFetcher implements RevocationDataFetcher {
  *     async fetchOCSP(url: string, request: Uint8Array): Promise<Uint8Array> {
- *         const result = execSync(`curl -s -X POST --data-binary @- -H 'Content-Type: application/ocsp-request' '${url}'`, {
- *             input: Buffer.from(request)
+ *         const response = await fetch(url, {
+ *             method: "POST",
+ *             headers: { "Content-Type": "application/ocsp-request" },
+ *             body: request,
  *         });
- *         return new Uint8Array(result);
+ *         return new Uint8Array(await response.arrayBuffer());
+ *     }
+ *
+ *     async fetchCRL(url: string): Promise<Uint8Array> {
+ *         const response = await fetch(url);
+ *         return new Uint8Array(await response.arrayBuffer());
  *     }
  * }
  * ```
@@ -112,12 +124,6 @@ export interface ValidationSessionOptions {
     fetcher?: RevocationDataFetcher;
     /** Cache for previously fetched data */
     cache?: ValidationCache;
-    /** Timeout for network requests in milliseconds */
-    timeout?: number;
-    /** Maximum retries per request */
-    maxRetries?: number;
     /** Whether to prefer OCSP over CRL (default: true) */
     preferOCSP?: boolean;
-    /** Trusted root certificates for direct trust */
-    trustStore?: pkijs.Certificate[];
 }

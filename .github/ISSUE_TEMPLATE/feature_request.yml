@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a new behaviour, API, or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that the current API makes hard?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: Code sketches welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links to specs / RFCs / similar libraries.

@@ -1,6 +1,6 @@
 {
     "name": "pdf-rfc3161-cli",
-    "version": "0.1.4",
+    "version": "0.2.0",
     "description": "Command-line interface for pdf-rfc3161",
     "keywords": [
         "pdf",
@@ -15,14 +15,22 @@
         "url": "git+https://github.com/mingulov/pdf-rfc3161.git",
         "directory": "packages/cli"
     },
+    "bugs": {
+        "url": "https://github.com/mingulov/pdf-rfc3161/issues"
+    },
     "license": "MIT",
     "author": "Denis Mingulov <denis@mingulov.com>",
     "type": "module",
+    "sideEffects": [
+        "./dist/cli.cjs",
+        "./dist/cli.js"
+    ],
     "bin": {
         "pdf-rfc3161": "dist/cli.cjs"
     },
     "files": [
-        "dist"
+        "dist",
+        "!dist/**/*.map"
     ],
     "scripts": {
         "build": "tsup",
@@ -32,12 +40,13 @@
         "lint": "eslint src --fix"
     },
     "dependencies": {
+        "asn1js": "^3.0.6",
         "commander": "^14.0.2",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.3.3"
     },
     "devDependencies": {
-        "@types/node": "^25.0.6",
+        "@types/node": "^22.0.0",
         "eslint": "^9.39.2",
         "tsup": "^8.5.1",
         "tsx": "^4.21.0",

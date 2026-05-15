@@ -1,5 +1,6 @@
 import type { PreparedPDF } from "./prepare.js";
 import { bufferToHexUpper, extractBytesFromByteRange } from "../utils.js";
+import { TimestampError, TimestampErrorCode } from "../types.js";
 
 /**
  * Embeds a timestamp token into a prepared PDF by replacing the placeholder content.
@@ -7,6 +8,11 @@ import { bufferToHexUpper, extractBytesFromByteRange } from "../utils.js";
  * @param preparedPdf - The prepared PDF with placeholder
  * @param timestampToken - The DER-encoded timestamp token (ContentInfo with SignedData)
  * @returns The final PDF with embedded timestamp
+ * @throws Error with `"Increase signatureSize"` in the message if the
+ *   timestamp token is larger than the reserved placeholder. The signing path
+ *   in `timestampPdf` recognises this and retries with a bigger reservation;
+ *   if you call `embedTimestampToken` directly, raise `signatureSize` in
+ *   `preparePdfForTimestamp` to the suggested byte count.
  */
 export function embedTimestampToken(
     preparedPdf: PreparedPDF,
@@ -17,9 +23,12 @@ export function embedTimestampToken(
     // Convert token to hex string (uppercase as usual in PDF Content)
     const tokenHex = bufferToHexUpper(timestampToken);
 
-    // Check if token fits in placeholder
+    // Check if token fits in placeholder. The error message string is parsed
+    // by the retry loop in index.ts; do not change "Increase signatureSize"
+    // without updating the corresponding `error.message.includes(...)` check.
     if (tokenHex.length > contentsPlaceholderLength) {
-        throw new Error(
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
             `Timestamp token (${tokenHex.length.toString()} hex chars) is larger than placeholder (${contentsPlaceholderLength.toString()} hex chars). ` +
                 `Increase signatureSize to at least ${Math.ceil(timestampToken.length * 1.1).toString()} bytes.`
         );

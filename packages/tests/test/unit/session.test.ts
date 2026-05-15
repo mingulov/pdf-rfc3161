@@ -460,7 +460,7 @@ describe("TimestampSession", () => {
                 threw = true;
                 expect(error).toBeInstanceOf(TimestampError);
                 const tsError = error as TimestampError;
-                expect(tsError.code).toBe("PDF_ERROR");
+                expect(tsError.code).toBe("STATE_ERROR");
                 expect(tsError.message).toContain("disposed");
             }
             expect(threw).toBe(true);

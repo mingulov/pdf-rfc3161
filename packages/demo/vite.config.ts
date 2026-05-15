@@ -37,6 +37,10 @@ export default defineConfig({
     plugins: [react(), versionInfo()],
     resolve: {
         alias: {
+            "pdf-rfc3161/internals": path.resolve(__dirname, "../core/src/internals.ts"),
+            "pdf-rfc3161/advanced": path.resolve(__dirname, "../core/src/advanced.ts"),
+            "pdf-rfc3161/rfcs/rfc5544": path.resolve(__dirname, "../core/src/rfcs/rfc5544.ts"),
+            "pdf-rfc3161/rfcs/rfc8933": path.resolve(__dirname, "../core/src/rfcs/rfc8933.ts"),
             "pdf-rfc3161": path.resolve(__dirname, "../core/src/index.ts"),
         },
     },

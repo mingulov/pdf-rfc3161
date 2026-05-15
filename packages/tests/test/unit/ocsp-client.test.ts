@@ -1,19 +1,30 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
     fetchOCSPResponse,
     getOCSPCircuitState,
     resetOCSPCircuits,
 } from "../../../core/src/pki/ocsp-client.js";
-import { CircuitState } from "../../../core/src/utils/circuit-breaker.js";
+import { CircuitBreakerError, CircuitState } from "../../../core/src/utils/circuit-breaker.js";
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+async function expectRejected<T>(promise: Promise<T>): Promise<unknown> {
+    const captured = promise.catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    return captured;
+}
+
 describe("OCSP Client", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         resetOCSPCircuits(); // Reset circuit breakers between tests
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     describe("fetchOCSPResponse", () => {
@@ -52,13 +63,15 @@ describe("OCSP Client", () => {
                 statusText: "Not Found",
             });
 
-            await expect(fetchOCSPResponse(testUrl, testRequest)).rejects.toThrow();
+            const error = await expectRejected(fetchOCSPResponse(testUrl, testRequest));
+            expect(error).toBeInstanceOf(Error);
         });
 
         it("should handle network errors", async () => {
             mockFetch.mockRejectedValue(new Error("Network error"));
 
-            await expect(fetchOCSPResponse(testUrl, testRequest)).rejects.toThrow();
+            const error = await expectRejected(fetchOCSPResponse(testUrl, testRequest));
+            expect(error).toBeInstanceOf(Error);
         });
 
         it("should retry on failure", async () => {
@@ -72,7 +85,9 @@ describe("OCSP Client", () => {
                     arrayBuffer: () => Promise.resolve(new Uint8Array([0x30, 0x01]).buffer),
                 });
 
-            const result = await fetchOCSPResponse(testUrl, testRequest);
+            const promise = fetchOCSPResponse(testUrl, testRequest);
+            await vi.runAllTimersAsync();
+            const result = await promise;
 
             expect(result).toBeInstanceOf(Uint8Array);
             expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -81,20 +96,23 @@ describe("OCSP Client", () => {
         it("should give up after max retries", async () => {
             mockFetch.mockRejectedValue(new Error("Persistent network error"));
 
-            await expect(fetchOCSPResponse(testUrl, testRequest)).rejects.toThrow();
-            expect(mockFetch).toHaveBeenCalledTimes(4); // 3 retries + 1 initial = 4
+            const error = await expectRejected(fetchOCSPResponse(testUrl, testRequest));
+            expect(error).toBeInstanceOf(Error);
+            expect(mockFetch).toHaveBeenCalledTimes(4); // 3 retries + 1 initial
         });
 
         it("should handle timeout", async () => {
             mockFetch.mockImplementation(
                 () =>
                     new Promise((resolve) => {
-                        // Simulate a long delay that would trigger timeout
+                        // Long delay would trigger the abort timeout under real timers.
+                        // Under fake timers, runAllTimersAsync below fires the abort signal.
                         setTimeout(() => { resolve({ ok: true, status: 200 }); }, 6000);
                     })
             );
 
-            await expect(fetchOCSPResponse(testUrl, testRequest)).rejects.toThrow();
+            const error = await expectRejected(fetchOCSPResponse(testUrl, testRequest));
+            expect(error).toBeInstanceOf(Error);
         });
     });
 
@@ -137,6 +155,36 @@ describe("OCSP Client", () => {
                 resetOCSPCircuits();
 
                 expect(() => { resetOCSPCircuits(); }).not.toThrow();
+            });
+        });
+
+        describe("recordFailure on retry exhaustion (M1)", () => {
+            it("should open after MAX_RETRIES * threshold failures and short-circuit", async () => {
+                const url = "http://ocsp-trip.example.com";
+                mockFetch.mockResolvedValue({
+                    ok: false,
+                    status: 500,
+                    statusText: "Internal Server Error",
+                });
+
+                // Threshold is 3 failures (one per fetchOCSPResponse call after
+                // retries exhaust). Each call should record exactly one failure.
+                for (let i = 0; i < 3; i++) {
+                    const error = await expectRejected(
+                        fetchOCSPResponse(url, new Uint8Array([0x30, 0x01]))
+                    );
+                    expect(error).toBeInstanceOf(Error);
+                }
+
+                expect(getOCSPCircuitState(url)).toBe(CircuitState.OPEN);
+
+                // After OPEN, the next call must short-circuit without hitting fetch.
+                const callsBefore = mockFetch.mock.calls.length;
+                const error = await expectRejected(
+                    fetchOCSPResponse(url, new Uint8Array([0x30, 0x01]))
+                );
+                expect(error).toBeInstanceOf(CircuitBreakerError);
+                expect(mockFetch.mock.calls.length).toBe(callsBefore);
             });
         });
     });

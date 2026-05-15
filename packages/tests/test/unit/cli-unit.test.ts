@@ -1,113 +1,59 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
-// Set test mode to prevent CLI from parsing arguments
-const originalEnv = process.env.CLI_TEST_MODE;
-
-beforeEach(() => {
+// Prevent program.parse() side-effect during import.
+beforeAll(() => {
     process.env.CLI_TEST_MODE = "true";
 });
 
-afterEach(() => {
-    process.env.CLI_TEST_MODE = originalEnv;
-});
+describe("CLI smoke test", () => {
+    it("registers the expected top-level commands", async () => {
+        const { program } = await import("../../../cli/src/cli");
 
-describe("CLI Module Testing", () => {
-    it("should import CLI module without parsing arguments", async () => {
-        // This should work now that CLI_TEST_MODE prevents program.parse()
-        const cliModule = await import("../../../cli/src/cli");
-
-        expect(cliModule).toBeDefined();
-        // CLI module doesn't export functions, just sets up Commander
+        const names = program.commands.map((c) => c.name()).sort();
+        expect(names).toEqual(["archive", "timestamp", "verify"]);
     });
 
-    it("should not parse arguments in test mode", async () => {
-        // The key test: importing the CLI module should not cause process.exit
-        // because CLI_TEST_MODE is set to 'true'
+    it("help output includes program name and key commands", async () => {
+        const { program } = await import("../../../cli/src/cli");
 
-        let exitCalled = false;
-        const originalExit = process.exit;
-        process.exit = vi.fn(() => {
-            exitCalled = true;
-        }) as any;
-
-        try {
-            await import("../../../cli/src/cli");
-            expect(exitCalled).toBe(false); // Should not have called process.exit
-        } finally {
-            process.exit = originalExit;
-        }
+        const help = program.helpInformation();
+        expect(help).toContain("Usage:");
+        expect(help).toContain("pdf-rfc3161");
+        expect(help).toContain("timestamp");
+        expect(help).toContain("archive");
+        expect(help).toContain("verify");
     });
 
-    it("should have CLI setup logic that can be tested", async () => {
-        // Import should succeed without errors
-        const cliModule = await import("../../../cli/src/cli");
-        expect(cliModule).toBeDefined();
+    it("timestamp command exposes --algorithm with SHA-256 default", async () => {
+        const { program } = await import("../../../cli/src/cli");
 
-        // The module should have been processed without calling program.parse()
-        // This verifies that our CLI_TEST_MODE approach works
-    });
-});
-
-describe("CLI Command Definitions", () => {
-    it("should define commands with correct arguments", () => {
-        const { Command } = require("commander");
-
-        const program = new Command();
-
-        // Recreate the CLI structure
-        program
-            .name("pdf-rfc3161")
-            .description("Add RFC 3161 trusted timestamps to PDF documents.");
-
-        const timestampCmd = program
-            .command("timestamp")
-            .argument("<tsa_url>", "TSA server URL")
-            .argument("<file>", "Input PDF file")
-            .argument("[bucket_output]", "Output file path (optional)")
-            .option("-a, --algorithm <alg>", "Hash algorithm", "SHA-256")
-            .option("--ltv", "Enable LTV", false)
-            .option("--timeout <ms>", "Request timeout", "30000");
-
-        expect(timestampCmd.name()).toBe("timestamp");
-        expect(program.name()).toBe("pdf-rfc3161");
+        const cmd = program.commands.find((c) => c.name() === "timestamp");
+        expect(cmd).toBeDefined();
+        const help = cmd!.helpInformation();
+        expect(help).toContain("--algorithm");
+        expect(help).toContain("SHA-256");
+        // 0.2.0: `--ltv` opt-in renamed to `--no-ltv` opt-out (audit C3).
+        expect(help).toContain("--no-ltv");
+        expect(help).toContain("--timeout");
     });
 
-    it("should support all required commands", () => {
-        const { Command } = require("commander");
+    it("verify command exposes --rfc8933 flag", async () => {
+        const { program } = await import("../../../cli/src/cli");
 
-        const program = new Command();
-
-        // Define all commands as in the actual CLI
-        const timestampCmd = program.command("timestamp");
-        const verifyCmd = program.command("verify");
-        const archiveCmd = program.command("archive");
-
-        expect(timestampCmd.name()).toBe("timestamp");
-        expect(verifyCmd.name()).toBe("verify");
-        expect(archiveCmd.name()).toBe("archive");
+        const cmd = program.commands.find((c) => c.name() === "verify");
+        expect(cmd).toBeDefined();
+        const help = cmd!.helpInformation();
+        expect(help).toContain("--rfc8933");
     });
 
-    it("should validate timeout values are reasonable", () => {
-        const defaultTimeout = 30000;
-        expect(defaultTimeout).toBeGreaterThan(0);
-        expect(defaultTimeout).toBeLessThanOrEqual(120000);
+    it("archive command exposes --name option with default", async () => {
+        const { program } = await import("../../../cli/src/cli");
+
+        const cmd = program.commands.find((c) => c.name() === "archive");
+        expect(cmd).toBeDefined();
+        const help = cmd!.helpInformation();
+        expect(help).toContain("--name");
+        expect(help).toContain("ArchiveTimestamp");
     });
 
-    it("should validate retry values are reasonable", () => {
-        const defaultRetry = 3;
-        expect(defaultRetry).toBeGreaterThanOrEqual(0);
-        expect(defaultRetry).toBeLessThanOrEqual(10);
-    });
-
-    it("should have proper program configuration", () => {
-        const { Command } = require("commander");
-
-        const program = new Command()
-            .name("pdf-rfc3161")
-            .description("Add RFC 3161 trusted timestamps to PDF documents.")
-            .version("0.1.0");
-
-        expect(program.name()).toBe("pdf-rfc3161");
-        expect(program.version()).toBe("0.1.0");
-    });
 });

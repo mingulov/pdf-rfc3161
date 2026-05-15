@@ -9,7 +9,7 @@ function createDummyTimestamp(withESS: boolean): Uint8Array {
     const signedData = new pkijs.SignedData({
         version: 3,
         encapContentInfo: new pkijs.EncapsulatedContentInfo({
-            eContentType: "1.2.840.113549.1.7.1", // id-data
+            eContentType: "1.2.840.113549.1.9.16.1.4", // id-ct-TSTInfo (post-H2 fix; was id-data)
             eContent: new asn1js.OctetString({ valueHex: new Uint8Array([0x01]).buffer }),
         }),
         signerInfos: [
@@ -94,7 +94,7 @@ describe("Strict PAdES Validation", () => {
             byteRange: [0, 0, 0, 0],
         };
 
-        const result = await verifyTimestamp(timestamp, { strictESSValidation: true });
+        const result = await verifyTimestamp(timestamp, { strictESSValidation: true, requireTimestampingEKU: false, requireCertValidAtGenTime: false });
 
         expect(result.verified).toBe(false);
         expect(result.verificationError).toContain("Strict validation: Missing");
@@ -122,7 +122,7 @@ describe("Strict PAdES Validation", () => {
             byteRange: [0, 0, 0, 0],
         };
 
-        const result = await verifyTimestamp(timestamp, { strictESSValidation: true });
+        const result = await verifyTimestamp(timestamp, { strictESSValidation: true, requireTimestampingEKU: false, requireCertValidAtGenTime: false });
 
         expect(result.verified).toBe(true);
         expect(result.verificationError).toBeUndefined();
@@ -151,7 +151,7 @@ describe("Strict PAdES Validation", () => {
         };
 
         // Default is false
-        const result = await verifyTimestamp(timestamp, {});
+        const result = await verifyTimestamp(timestamp, { requireTimestampingEKU: false, requireCertValidAtGenTime: false });
 
         expect(result.verified).toBe(true);
 

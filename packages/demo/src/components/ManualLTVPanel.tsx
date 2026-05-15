@@ -3,12 +3,14 @@ import {
     TimestampSession,
     KNOWN_TSA_URLS,
     parseTimestampResponse,
+} from "pdf-rfc3161";
+import {
     getOCSPURI,
     createOCSPRequest,
     getCRLDistributionPoints,
     getCaIssuers,
     addDSS,
-} from "pdf-rfc3161";
+} from "pdf-rfc3161/internals";
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import FileDrop from "./FileDrop";

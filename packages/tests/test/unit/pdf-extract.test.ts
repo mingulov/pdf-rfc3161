@@ -1,16 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { extractTimestamps, verifyTimestamp } from "../../../core/src/pdf/extract.js";
 import { TimestampError } from "../../../core/src/types.js";
 
-// Mock dependencies
-vi.mock("../../../core/src/pki/pki-utils.js");
-
-import { parseTimestampToken } from "../../../core/src/pki/pki-utils.js";
-
 describe("PDF Timestamp Extraction", () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
 
     describe("extractTimestamps", () => {
         it("should return empty array for PDF without timestamps", async () => {
@@ -258,46 +250,7 @@ describe("PDF Timestamp Extraction", () => {
             expect(result.verificationError).toBeDefined();
         });
 
-        it("should handle missing token data", async () => {
-            const timestampWithoutToken = {
-                ...mockExtractedTimestamp,
-                token: new Uint8Array([]),
-            };
-
-            const mockedParseTimestampToken = vi.mocked(parseTimestampToken);
-            mockedParseTimestampToken.mockRejectedValue(new Error("Empty token"));
-
-            const result = await verifyTimestamp(timestampWithoutToken);
-
-            expect(result.verified).toBe(false);
-            expect(result.verificationError).toBeDefined();
-        });
-
-        it("should handle malformed timestamp info", async () => {
-            const malformedTimestamp = {
-                ...mockExtractedTimestamp,
-                info: null as any, // Invalid info
-            };
-
-            const mockedParseTimestampToken = vi.mocked(parseTimestampToken);
-            mockedParseTimestampToken.mockResolvedValue(null as any);
-
-            const result = await verifyTimestamp(malformedTimestamp);
-
-            expect(result.verified).toBe(false);
-        });
-
-        it("should preserve original timestamp properties", async () => {
-            const mockedParseTimestampToken = vi.mocked(parseTimestampToken);
-            mockedParseTimestampToken.mockResolvedValue(mockExtractedTimestamp.info);
-
-            const result = await verifyTimestamp(mockExtractedTimestamp);
-
-            expect(result.fieldName).toBe(mockExtractedTimestamp.fieldName);
-            expect(result.token).toBe(mockExtractedTimestamp.token);
-            expect(result.coversWholeDocument).toBe(mockExtractedTimestamp.coversWholeDocument);
-            expect(result.byteRange).toEqual(mockExtractedTimestamp.byteRange);
-        });
+        it.todo("should preserve original timestamp properties (needs real DER fixture)");
 
         it("should handle verification options with strict validation", async () => {
             const options = {

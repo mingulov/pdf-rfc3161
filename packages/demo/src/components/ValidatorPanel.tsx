@@ -2,10 +2,9 @@ import { useState } from "react";
 import {
     extractTimestamps,
     verifyTimestamp,
-    getDSSInfo,
-    extractLTVData,
     TimestampInfo,
 } from "pdf-rfc3161";
+import { getDSSInfo, extractLTVData } from "pdf-rfc3161/internals";
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import FileDrop from "./FileDrop";

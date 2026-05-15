@@ -2,14 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { sendTimestampRequest } from "../../../core/src/tsa/client.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 
+async function expectRejected<T>(promise: Promise<T>): Promise<unknown> {
+    const captured = promise.catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    return captured;
+}
+
 describe("TSA Client", () => {
     const mockFetch = vi.fn();
 
     beforeEach(() => {
         vi.stubGlobal("fetch", mockFetch);
+        vi.useFakeTimers();
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
         vi.resetAllMocks();
     });
@@ -63,31 +71,30 @@ describe("TSA Client", () => {
         });
 
         it("should throw on HTTP error", async () => {
-            mockFetch.mockResolvedValueOnce({
+            mockFetch.mockResolvedValue({
                 ok: false,
                 status: 500,
                 statusText: "Internal Server Error",
             });
 
-            await expect(
+            const error = await expectRejected(
                 sendTimestampRequest(new Uint8Array([0x30]), {
                     url: "http://timestamp.test.com",
                 })
-            ).rejects.toThrow(TimestampError);
+            );
+            expect(error).toBeInstanceOf(TimestampError);
         });
 
         it("should throw NETWORK_ERROR on fetch failure", async () => {
-            mockFetch.mockRejectedValueOnce(new Error("Network unreachable"));
+            mockFetch.mockRejectedValue(new Error("Network unreachable"));
 
-            try {
-                await sendTimestampRequest(new Uint8Array([0x30]), {
+            const error = await expectRejected(
+                sendTimestampRequest(new Uint8Array([0x30]), {
                     url: "http://timestamp.test.com",
-                });
-                expect.fail("Should have thrown");
-            } catch (error) {
-                expect(error).toBeInstanceOf(TimestampError);
-                expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
-            }
+                })
+            );
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
         });
 
         it("should return response bytes on success", async () => {

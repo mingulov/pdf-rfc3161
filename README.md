@@ -60,6 +60,64 @@ yarn add pdf-rfc3161
 pnpm add pdf-rfc3161
 ```
 
+## Production checklist
+
+Defaults are tuned for compatibility; production workloads should enable the
+stricter options below explicitly. SSRF protection (URL allowlist for AIA /
+OCSP / CRL fetches) is **on by default** and has no opt-out at the public-call
+level.
+
+### Signing path
+
+```typescript
+const result = await timestampPdf({
+    pdf,
+    tsa: { url: KNOWN_TSA_URLS.FREETSA },
+    enableLTV: true,
+    rejectOnRevocationWarning: true,
+});
+```
+
+### Verify path
+
+```typescript
+const verified = await verifyTimestamp(ts, {
+    trustStore,                            // your SimpleTrustStore
+    pdf,                                   // enables PDF-level checks
+    requireTimestampingEKU: true,          // RFC 3161 EKU 1.3.6.1.5.5.7.3.8
+    requireCertValidAtGenTime: true,       // cert valid at signing instant
+    strictESSValidation: true,             // ESS cert identifier must match
+});
+```
+
+### Flag reference
+
+The 0.2.0 release flipped `enableLTV`, `requireTimestampingEKU`, and
+`requireCertValidAtGenTime` to default `true`. See `MIGRATION.md` if you
+need to verify legacy tokens that pre-date the RFC 3161 EKU requirement.
+
+| Flag | Default | Recommended for prod |
+| ---- | ------- | -------------------- |
+| `enableLTV` | `true` (since 0.2.0) | `true` |
+| `rejectOnRevocationWarning` | `false` | `true` |
+| `requireTimestampingEKU` | `true` (since 0.2.0) | `true` |
+| `requireCertValidAtGenTime` | `true` (since 0.2.0) | `true` |
+| `strictESSValidation` | `false` | `true` |
+| `ignoreEncryption` | `false` | leave as `false` |
+
+## Command-line interface
+
+`pdf-rfc3161-cli` ships the same operations as a CLI.
+
+```bash
+npx pdf-rfc3161-cli --help
+npx pdf-rfc3161-cli timestamp https://freetsa.org/tsr input.pdf output.pdf
+npx pdf-rfc3161-cli verify input.pdf -v
+npx pdf-rfc3161-cli archive https://freetsa.org/tsr input.pdf output.pdf
+```
+
+See `npx pdf-rfc3161-cli <command> --help` for the full flag set on each subcommand.
+
 ## Usage
 
 ### Basic Timestamping
@@ -111,12 +169,13 @@ console.log(`Added ${result.timestamps.length} timestamps`);
 
 ### PAdES-LTA Archive Timestamp
 
-For long-term preservation of signed documents, use `timestampPdfLTA`. This fetches fresh revocation data and adds a final document timestamp:
+For long-term preservation of signed documents, use `archiveTimestamp`. This fetches fresh revocation data and adds a final document timestamp:
 
 ```typescript
-import { timestampPdfLTA, KNOWN_TSA_URLS } from "pdf-rfc3161";
+import { archiveTimestamp, KNOWN_TSA_URLS } from "pdf-rfc3161";
+// `timestampPdfLTA` is a deprecated alias for `archiveTimestamp` kept for back-compat.
 
-const result = await timestampPdfLTA({
+const result = await archiveTimestamp({
     pdf: signedPdfBytes,
     tsa: { url: KNOWN_TSA_URLS.FREETSA },
     includeExistingRevocationData: true,
@@ -184,7 +243,7 @@ Options:
 | `tsa.timeout`          | `number`     | No       | Request timeout in ms (default: 30000)                             |
 | `tsa.retry`            | `number`     | No       | Retry attempts (default: 3)                                        |
 | `tsa.retryDelay`       | `number`     | No       | Base retry delay in ms (default: 1000)                             |
-| `enableLTV`            | `boolean`    | No       | Enable Long-Term Validation (default: false)                       |
+| `enableLTV`            | `boolean`    | No       | Enable Long-Term Validation (default: `true` since 0.2.0)          |
 | `maxSize`              | `number`     | No       | Maximum PDF size in bytes (default: 250MB)                         |
 | `signatureSize`        | `number`     | No       | Size reserved for token (default: 8192). Set to `0` for automatic. |
 | `signatureFieldName`   | `string`     | No       | Custom field name (default: "Timestamp")                           |
@@ -193,8 +252,11 @@ Options:
 | `contactInfo`          | `string`     | No       | Contact information                                                |
 | `omitModificationTime` | `boolean`    | No       | Omit /M from signature dictionary                                  |
 | `optimizePlaceholder`  | `boolean`    | No       | Optimize signature size (default: false)                           |
+| `rejectOnRevocationWarning` | `boolean` | No     | Throw if TSA returns REVOCATION_WARNING/_NOTIFICATION status (default: false) |
+| `ignoreEncryption`     | `boolean`    | No       | Process encrypted PDFs (default: false; recommend leaving false)   |
+| `revocationData`       | `LTVData`    | No       | Pre-fetched revocation data; skips network OCSP/CRL fetches        |
 
-Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional `ltvData`.
+Returns a `TimestampResult` with the timestamped PDF, timestamp info, optional `ltvData`, and optional `tsaRevocationWarning` (set when TSA returned a non-fatal status).
 
 Note: When using LTV, `signatureSize: 0` uses a 16KB default. Specify larger value manually if you encounter "token larger than placeholder" errors.
 
@@ -212,11 +274,14 @@ Verifies the cryptographic signature of an extracted timestamp.
 
 Options:
 
-| Name                  | Type         | Required | Description                                  |
-| --------------------- | ------------ | -------- | -------------------------------------------- |
-| `pdf`                 | `Uint8Array` | No       | Original PDF bytes for hash verification     |
-| `trustStore`          | `TrustStore` | No       | Trust store for certificate chain validation |
-| `strictESSValidation` | `boolean`    | No       | Enforce PAdES compliance                     |
+| Name                          | Type                  | Required | Description                                                       |
+| ----------------------------- | --------------------- | -------- | ----------------------------------------------------------------- |
+| `pdf`                         | `Uint8Array`          | No       | Original PDF bytes for hash verification                          |
+| `trustStore`                  | `TrustStore \| null`  | No       | Trust store for chain validation. `null` skips chain check.       |
+| `strictESSValidation`         | `boolean`             | No       | Enforce PAdES ESS-cert-id compliance (default: `false`)           |
+| `requireTimestampingEKU`      | `boolean`             | No       | Require id-kp-timeStamping EKU on TSA cert (default: `true` since 0.2.0) |
+| `requireCertValidAtGenTime`   | `boolean`             | No       | Require TSA cert valid at timestamp instant (default: `true` since 0.2.0) |
+| `ignoreEncryption`            | `boolean`             | No       | Process encrypted PDFs (default: `false`)                         |
 
 ## TSA Servers
 
@@ -226,11 +291,11 @@ Note: Usage is governed by providers' Terms and Conditions. FreeTSA uses a self-
 
 ## Demo
 
-A client-side demo is included in the `demo/` folder. Run it with:
+A client-side demo lives in `packages/demo/`. The repo is a pnpm workspace; run it with:
 
 ```bash
-npm install
-npm run demo:dev
+pnpm install
+pnpm --filter pdf-rfc3161-demo dev
 ```
 
 ## Error Handling
@@ -286,15 +351,18 @@ The library is designed with pluggable network interfaces to support various dep
 - **Testing**: Deterministic mock responses without network calls
 - **Air-Gapped Environments**: Supply pre-fetched revocation data directly
 
-All network operations use the Fetcher pattern:
+All network operations use the Fetcher pattern. The fetcher classes live on
+the `/advanced` subpath since 0.2.0, available via tree-shakable deep import:
 
 ```typescript
+import { MockFetcher, DefaultFetcher } from "pdf-rfc3161/advanced";
+
 // Use custom fetcher for testing
 const mockFetcher = new MockFetcher();
 mockFetcher.setOCSPResponse("http://ocsp.example.com", mockResponse);
 
-// Use custom curl-based fetcher
-import { CurlFetcher } from "pdf-rfc3161/pki/fetchers";
+// Use DefaultFetcher with custom settings
+const customFetcher = new DefaultFetcher({ timeout: 10000 });
 
 // Supply pre-fetched LTV data (no network needed)
 const result = await timestampPdf({
@@ -339,9 +407,9 @@ The library implements or aims to support the following standards:
 | **RFC 3161** | Time-Stamp Protocol (Core implementation) |
 | **RFC 5816** | ESSCertIDv2 (Supported via dependencies) |
 | **RFC 6960** | OCSP (Implemented for LTV) |
-| **RFC 5544** | TimeStampedData envelope (Planned) |
+| **RFC 5544** | TimeStampedData envelope (Implemented; see `pdf-rfc3161/rfcs/rfc5544`) |
+| **RFC 8933** | CMS Algorithm Identifier Protection (Implemented; see `pdf-rfc3161/rfcs/rfc8933`) |
 | **ETSI 319 142-1** | PAdES baseline signatures (Planned) |
-| **RFC 6211** | CMS Algorithm Protect (Low Priority) |
 
 **Revocation & Chain Handling:**
 
@@ -375,6 +443,11 @@ const verified = await verifyTimestamp(ts, {
 - Node.js 18.0.0 or later
 - Modern browsers with Web Crypto API support
 - Edge runtimes: Cloudflare Workers, Vercel Edge, Deno Deploy
+
+## Upgrading
+
+See [MIGRATION.md](./MIGRATION.md) for breaking-change guidance between
+major and minor releases. The [CHANGELOG](./CHANGELOG.md) tracks every release.
 
 ## License
 

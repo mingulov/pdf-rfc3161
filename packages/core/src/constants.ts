@@ -55,6 +55,50 @@ export const DEFAULT_TSA_CONFIG = {
 };
 
 /**
+ * Default CRL configuration values.
+ * CRLs are typically larger and slower to fetch, so we allow more time and retries.
+ */
+export const DEFAULT_CRL_CONFIG = {
+    timeout: 15000, // 15 seconds
+    retry: 3,
+    retryDelay: 1000, // 1 second base delay
+    resetTimeoutMs: 120000, // 2 minutes circuit breaker reset
+    /** H5 cap. Real-world CRLs can be a few MB; 10MB is a generous upper bound. */
+    maxResponseBytes: 10 * 1024 * 1024,
+};
+
+/**
+ * Default OCSP configuration values.
+ * OCSP requests are small and should be fast.
+ */
+export const DEFAULT_OCSP_CONFIG = {
+    timeout: 5000, // 5 seconds
+    retry: 3,
+    retryDelay: 500, // 500ms base delay
+    resetTimeoutMs: 60000, // 1 minute circuit breaker reset
+    /** H5 cap. OCSP responses are typically 1-5 KB; 50 KB is more than enough. */
+    maxResponseBytes: 50 * 1024,
+};
+
+/**
+ * Default Certificate configuration values (AIA).
+ */
+export const DEFAULT_CERT_CONFIG = {
+    timeout: 10000, // 10 seconds
+    retry: 2,
+    retryDelay: 500, // 500ms base delay
+    resetTimeoutMs: 60000, // 1 minute circuit breaker reset
+    /** H5 cap. Single certificates are typically 1-3 KB. 50 KB is the cap. */
+    maxResponseBytes: 50 * 1024,
+};
+
+/**
+ * H5 cap for TSA responses. TimeStampResp bodies hold a single token +
+ * possibly an embedded chain; 100 KB is the cap.
+ */
+export const DEFAULT_TSA_MAX_RESPONSE_BYTES = 100 * 1024;
+
+/**
  * Content-Type headers for TSA communication
  */
 export const TSA_CONTENT_TYPE = {

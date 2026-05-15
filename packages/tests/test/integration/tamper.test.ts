@@ -58,7 +58,7 @@ describe("Tamper Detection", () => {
             tamperedPdf[7] = tamperedPdf[7] === 55 ? 56 : 55;
 
             // 4. Verify it fails now
-            const extractedTampered = await extractTimeStamps(tamperedPdf);
+            const extractedTampered = await extractTimestamps(tamperedPdf);
             expect(extractedTampered.length).toBe(1);
 
             const tampered = extractedTampered[0];
@@ -110,7 +110,3 @@ describe("Tamper Detection", () => {
     );
 });
 
-// Helper for type safety in test
-async function extractTimeStamps(pdf: Uint8Array) {
-    return extractTimestamps(pdf);
-}

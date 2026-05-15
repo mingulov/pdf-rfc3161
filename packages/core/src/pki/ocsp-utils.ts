@@ -2,6 +2,7 @@ import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { getLogger } from "../utils/logger.js";
+import { toArrayBuffer } from "../utils.js";
 
 /**
  * OCSP Response Status values (RFC 6960)
@@ -43,7 +44,7 @@ export interface ParsedOCSPResponse {
  * @throws TimestampError if response is invalid or indicates failure
  */
 export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse {
-    const asn1 = asn1js.fromBER(responseBytes.slice().buffer);
+    const asn1 = asn1js.fromBER(toArrayBuffer(responseBytes));
     if (asn1.offset === -1) {
         throw new TimestampError(
             TimestampErrorCode.INVALID_RESPONSE,
@@ -127,30 +128,17 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
     // Extract certificate status
     let certStatus: CertificateStatus;
 
-    // Check if it's explicitly null or undefined (though pkijs usually returns an object)
     if (singleResponse.certStatus === null || singleResponse.certStatus === undefined) {
         certStatus = CertificateStatus.GOOD;
     } else {
-        // Log what we have to debug "Unknown" status
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const statusAsn1 = singleResponse.certStatus;
-        getLogger().debug(
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            `Inspecting CertStatus: type=${statusAsn1 ? (statusAsn1.constructor.name as string) : "null"}, hasIdBlock=${statusAsn1 ? String("idBlock" in statusAsn1) : "false"}, JSON=${JSON.stringify(statusAsn1, (k, v) => (k === "valueHex" || k === "valueHexView" ? "[hex]" : (v as unknown)))}`
-        );
 
         if (statusAsn1 && "idBlock" in (statusAsn1 as object)) {
-            // Use ASN.1 tag number to determine status (RFC 6960)
-            // CertStatus ::= CHOICE {
-            //   good        [0]     IMPLICIT NULL,
-            //   revoked     [1]     IMPLICIT RevokedInfo,
-            //   unknown     [2]     IMPLICIT UnknownInfo }
+            // CertStatus ::= CHOICE { good [0] NULL, revoked [1] RevokedInfo,
+            // unknown [2] UnknownInfo }  -- RFC 6960
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             const tagNumber = statusAsn1.idBlock.tagNumber as number;
-
-            getLogger().debug(
-                `OCSP CertStatus Tag: ${String(tagNumber)} (0=Good, 1=Revoked, 2=Unknown)`
-            );
 
             switch (tagNumber) {
                 case 0:
@@ -166,8 +154,7 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
                     certStatus = CertificateStatus.UNKNOWN;
             }
         } else {
-            // Fallback for unexpected structure
-            getLogger().warn(`CertStatus missing idBlock: ${JSON.stringify(statusAsn1)}`);
+            getLogger().warn(`OCSP CertStatus missing idBlock; treating as UNKNOWN`);
             certStatus = CertificateStatus.UNKNOWN;
         }
     }
@@ -233,76 +220,6 @@ export function getOCSPURI(cert: pkijs.Certificate): string | null {
  * id-pkix-ocsp-nonce = 1.3.6.1.5.5.7.48.1.2
  */
 const OCSP_NONCE_OID = "1.3.6.1.5.5.7.48.1.2";
-
-/**
- * Parsed OCSP Nonce information
- */
-export interface OCSPNonceInfo {
-    nonce: Uint8Array;
-    includedInRequest: boolean;
-    matchesInResponse: boolean;
-}
-
-/**
- * Extracts and validates the OCSP nonce from a response.
- *
- * @param responseBytes - DER-encoded OCSP Response
- * @param requestNonce - The nonce sent in the request (if any)
- * @returns OCSPNonceInfo with validation results
- */
-export function parseOCSPNonce(
-    responseBytes: Uint8Array,
-    requestNonce?: Uint8Array
-): OCSPNonceInfo {
-    try {
-        const asn1 = asn1js.fromBER(responseBytes.slice().buffer);
-        if (asn1.offset === -1) {
-            return { nonce: new Uint8Array(0), includedInRequest: false, matchesInResponse: false };
-        }
-
-        const ocspResponse = new pkijs.OCSPResponse({ schema: asn1.result });
-
-        if (!ocspResponse.responseBytes?.response) {
-            return { nonce: new Uint8Array(0), includedInRequest: false, matchesInResponse: false };
-        }
-
-        const responseAsn1 = asn1js.fromBER(
-            ocspResponse.responseBytes.response.valueBlock.valueHexView
-        ).result;
-        const basicOCSP = new pkijs.BasicOCSPResponse({ schema: responseAsn1 });
-
-        // Check for nonce extension in tbsResponseData.extensions
-        let responseNonce: Uint8Array | null = null;
-        const tbsData = basicOCSP.tbsResponseData as { extensions?: pkijs.Extension[] };
-        const extensions = tbsData.extensions;
-
-        if (extensions) {
-            const nonceExt = extensions.find((ext) => ext.extnID === OCSP_NONCE_OID);
-            if (nonceExt?.extnValue) {
-                const valueAsn1 = asn1js.fromBER(nonceExt.extnValue.valueBlock.valueHexView).result;
-                if (valueAsn1 instanceof asn1js.OctetString) {
-                    responseNonce = new Uint8Array(valueAsn1.valueBlock.valueHexView);
-                }
-            }
-        }
-
-        // Validate nonce match if request had one
-        let matches = false;
-        if (requestNonce && responseNonce) {
-            matches =
-                requestNonce.length === responseNonce.length &&
-                requestNonce.every((b, i) => b === responseNonce[i]);
-        }
-
-        return {
-            nonce: responseNonce ?? new Uint8Array(0),
-            includedInRequest: !!requestNonce,
-            matchesInResponse: matches,
-        };
-    } catch {
-        return { nonce: new Uint8Array(0), includedInRequest: false, matchesInResponse: false };
-    }
-}
 
 /**
  * Creates a raw DER-encoded OCSP Request for a given certificate and its issuer.

@@ -3,17 +3,20 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
     timestampPdf,
-    timestampPdfLTA,
+    archiveTimestamp,
     extractTimestamps,
     verifyTimestamp,
-    getDSSInfo,
     validateTimestampTokenRFC8933Compliance,
     KNOWN_TSA_URLS,
     TimestampError,
+    SimpleTrustStore,
     type HashAlgorithm,
+    type TrustStore,
     setLogger,
 } from "pdf-rfc3161";
+import { getDSSInfo } from "pdf-rfc3161/internals";
 import * as pkijs from "pkijs";
+import * as asn1js from "asn1js";
 
 // VERSION is injected by tsup at build time (via define: { VERSION: ... })
 // For dev/tsx execution, we handle it via globalThis check.
@@ -68,7 +71,14 @@ program
             .choices(["SHA-256", "SHA-384", "SHA-512"])
             .default("SHA-256")
     )
-    .option("--ltv", "Enable LTV (Long-Term Validation) - adds DSS/VRI dictionaries", false)
+    // Library defaults enableLTV to true since 0.2.0. Use commander's --no-
+    // syntax so the destructured `options.ltv` field defaults to true and
+    // --no-ltv flips it to false. Passing the field verbatim keeps the CLI
+    // aligned with the library default. See audit C3.
+    .option(
+        "--no-ltv",
+        "Disable LTV (DSS/VRI). LTV is on by default since 0.2.0 -- pass --no-ltv to opt out for a basic signature."
+    )
     .option("--reason <text>", "Reason for the timestamp")
     .option("--location <text>", "Location where the timestamp occurs")
     .option("--contact-info <text>", "Contact info for the signer")
@@ -78,12 +88,21 @@ program
     .option("-v, --verbose", "Verbose output", false)
     .option("--optimize", "Optimize signature size (2-pass)", false)
     .option("--omit-m", "Omit modification time (/M) from signature dictionary", false)
+    .option(
+        "--reject-on-revocation-warning",
+        "Reject TSA responses returning REVOCATION_WARNING/_NOTIFICATION",
+        false
+    )
+    .option("--ignore-encryption", "Process encrypted PDFs (off by default)", false)
     .action(
         async (
             tsaUrl: string,
             inputFile: string,
             bucketOutput: string | undefined,
-            options: CliOptions
+            options: CliOptions & {
+                rejectOnRevocationWarning: boolean;
+                ignoreEncryption: boolean;
+            }
         ) => {
             try {
                 // Handle output file logic: explicit argument > -o flag > auto-generated
@@ -136,6 +155,8 @@ program
                     optimizePlaceholder: options.optimize,
                     omitModificationTime: options.omitM,
                     enableLTV: options.ltv,
+                    rejectOnRevocationWarning: options.rejectOnRevocationWarning,
+                    ignoreEncryption: options.ignoreEncryption,
                 };
 
                 const result = await timestampPdf(timestampOptions);
@@ -191,7 +212,14 @@ program
             .choices(["SHA-256", "SHA-384", "SHA-512"])
             .default("SHA-256")
     )
-    .option("--no-update", "Do not fetch fresh revocation data for existing signatures", false)
+    // Commander's --no-* syntax stores the negated flag under the un-negated
+    // name (`update`), defaulting to true. The previous code read
+    // `cmdOptions.noUpdate` which is always undefined, so the flag was a
+    // no-op. See audit C4.
+    .option(
+        "--no-update",
+        "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)"
+    )
     .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
     .option("--retry <n>", "Number of retry attempts", "3")
@@ -201,7 +229,7 @@ program
             tsaUrl: string,
             inputFile: string,
             bucketOutput: string | undefined,
-            cmdOptions: CliOptions & { noUpdate: boolean }
+            cmdOptions: CliOptions & { update: boolean }
         ) => {
             try {
                 const outputFile =
@@ -213,7 +241,7 @@ program
                     console.log(`Output:    ${outputFile}`);
                     console.log(`TSA:       ${tsaUrl}`);
                     console.log(
-                        `Update:    ${!cmdOptions.noUpdate ? "Fetch fresh revocation data" : "Use existing only"}`
+                        `Update:    ${cmdOptions.update ? "Fetch fresh revocation data" : "Use existing only"}`
                     );
                     console.log();
                 }
@@ -234,7 +262,7 @@ program
                     setLogger(verboseLogger);
                 }
 
-                const result = await timestampPdfLTA({
+                const result = await archiveTimestamp({
                     pdf: pdfData,
                     tsa: {
                         url: tsaUrl,
@@ -243,7 +271,7 @@ program
                         retry: parseInt(cmdOptions.retry, 10),
                     },
                     signatureFieldName: cmdOptions.name,
-                    includeExistingRevocationData: !cmdOptions.noUpdate,
+                    includeExistingRevocationData: cmdOptions.update,
                 });
 
                 await writeFile(outputFile, result.pdf);
@@ -272,11 +300,40 @@ program
     .argument("<file>", "PDF file to verify")
     .option("-v, --verbose", "Show detailed timestamp information", false)
     .option("--rfc8933", "Validate RFC 8933 CMS Algorithm Identifier Protection compliance", false)
+    // The library defaults `requireTimestampingEKU` and
+    // `requireCertValidAtGenTime` to `true` since 0.2.0. Use commander's
+    // --no- syntax: each option's destructured field defaults to `true`;
+    // --no-* flips to `false`. Passing the field verbatim keeps the CLI
+    // aligned with the library default. See audit C2.
+    .option("--no-require-eku", "Skip the id-kp-timeStamping EKU check on the TSA cert (default: enforce since 0.2.0)")
+    .option("--no-require-validity", "Skip the cert-valid-at-genTime check on the TSA cert (default: enforce since 0.2.0)")
+    // strictESSValidation library default is `false` (not flipped in 0.2.0).
+    // Keep this flag as a positive opt-in so the CLI matches the library
+    // default. Audit F6 reverted the earlier over-correction to --no-strict-ess.
+    .option("--strict-ess", "Enforce strict PAdES ESS-cert-id matching (off by default)", false)
+    .option("--trust-store <path>", "Path to PEM file with trusted CA certificates")
     .action(
-        async (inputFile: string, options: Pick<CliOptions, "verbose"> & { rfc8933: boolean }) => {
+        async (
+            inputFile: string,
+            options: Pick<CliOptions, "verbose"> & {
+                rfc8933: boolean;
+                requireEku: boolean;
+                requireValidity: boolean;
+                strictEss: boolean;
+                trustStore?: string;
+            }
+        ) => {
             try {
                 if (options.verbose) {
                     console.log(`Verifying: ${inputFile}\n`);
+                }
+
+                let trustStore: TrustStore | undefined;
+                if (options.trustStore) {
+                    trustStore = await loadTrustStoreFromPem(options.trustStore);
+                    if (options.verbose) {
+                        console.log(`Trust store loaded from ${options.trustStore}`);
+                    }
                 }
 
                 // Read input PDF
@@ -308,7 +365,13 @@ program
                     if (!ts) continue;
 
                     // Verify the timestamp
-                    const verified = await verifyTimestamp(ts);
+                    const verified = await verifyTimestamp(ts, {
+                        pdf: pdfData,
+                        trustStore,
+                        requireTimestampingEKU: options.requireEku,
+                        requireCertValidAtGenTime: options.requireValidity,
+                        strictESSValidation: options.strictEss,
+                    });
                     timestamps[i] = verified;
 
                     console.log(`Timestamp ${(i + 1).toString()}:`);
@@ -419,6 +482,30 @@ KNOWN TSA SERVERS:
 `
 );
 
+async function loadTrustStoreFromPem(path: string): Promise<TrustStore> {
+    const pem = await readFile(path, "utf-8");
+    const certs: pkijs.Certificate[] = [];
+    const blocks = pem.match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/g) ?? [];
+    for (const block of blocks) {
+        const base64 = block
+            .replace(/-----BEGIN CERTIFICATE-----/, "")
+            .replace(/-----END CERTIFICATE-----/, "")
+            .replace(/\s/g, "");
+        const der = Buffer.from(base64, "base64");
+        const asn1 = asn1js.fromBER(der.buffer.slice(der.byteOffset, der.byteOffset + der.byteLength));
+        if (asn1.offset === -1) {
+            throw new Error(`Failed to parse certificate in ${path}`);
+        }
+        certs.push(new pkijs.Certificate({ schema: asn1.result }));
+    }
+    if (certs.length === 0) {
+        throw new Error(`No PEM certificates found in ${path}`);
+    }
+    const store = new SimpleTrustStore();
+    for (const c of certs) store.addCertificate(c);
+    return store;
+}
+
 function handleError(err: unknown, verbose: boolean): void {
     if (err instanceof TimestampError) {
         console.error(`Error [${err.code.toString()}]: ${err.message}`);
@@ -462,8 +549,8 @@ function getCommonName(dn: pkijs.RelativeDistinguishedNames): string {
     return "Unknown";
 }
 
-// Export functions for testing
-export { handleError, generateOutputFilename };
+// Export functions and the program for testing
+export { handleError, generateOutputFilename, program };
 
 // Only parse command line arguments if not in test mode
 // This allows unit tests to import the CLI module without triggering argument parsing

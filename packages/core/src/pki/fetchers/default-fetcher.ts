@@ -1,5 +1,6 @@
-import { TimestampError, TimestampErrorCode } from "../../types.js";
 import type { RevocationDataFetcher } from "../validation-types.js";
+import { fetchBytesWithRetry } from "../../utils/fetch-with-retry.js";
+import { DEFAULT_OCSP_CONFIG, DEFAULT_CRL_CONFIG } from "../../constants.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_RETRIES = 3;
@@ -19,128 +20,32 @@ export class DefaultFetcher implements RevocationDataFetcher {
     }
 
     async fetchOCSP(url: string, request: Uint8Array): Promise<Uint8Array> {
-        let lastError: unknown;
-
-        for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => {
-                controller.abort();
-            }, this.timeout);
-
-            try {
-                const response = await fetch(url, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/ocsp-request",
-                    },
-                    body: request as unknown as BodyInit,
-                    signal: controller.signal,
-                });
-
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    if (response.status >= 500) {
-                        throw new Error(`HTTP ${String(response.status)}: ${response.statusText}`);
-                    }
-                    throw new TimestampError(
-                        TimestampErrorCode.NETWORK_ERROR,
-                        `OCSP responder returned HTTP ${String(response.status)}: ${response.statusText}`
-                    );
-                }
-
-                const arrayBuffer = await response.arrayBuffer();
-                const responseBytes = new Uint8Array(arrayBuffer);
-
-                if (responseBytes.length === 0) {
-                    throw new TimestampError(
-                        TimestampErrorCode.INVALID_RESPONSE,
-                        "Empty OCSP response received"
-                    );
-                }
-
-                return responseBytes;
-            } catch (error) {
-                clearTimeout(timeoutId);
-                lastError = error;
-
-                if (attempt < this.maxRetries) {
-                    const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
-                    await new Promise((resolve) => setTimeout(resolve, delay));
-                    continue;
-                }
-            }
-        }
-
-        if (lastError instanceof TimestampError) {
-            throw lastError;
-        }
-
-        throw new TimestampError(
-            TimestampErrorCode.NETWORK_ERROR,
-            `Failed to fetch OCSP response after ${String(this.maxRetries + 1)} attempts`,
-            lastError
-        );
+        return fetchBytesWithRetry({
+            url,
+            method: "POST",
+            headers: { "Content-Type": "application/ocsp-request" },
+            body: request as unknown as BodyInit,
+            config: {
+                retry: this.maxRetries,
+                retryDelay: INITIAL_BACKOFF_MS,
+                timeout: this.timeout,
+                maxResponseBytes: DEFAULT_OCSP_CONFIG.maxResponseBytes,
+            },
+            serviceLabel: "OCSP responder",
+        });
     }
 
     async fetchCRL(url: string): Promise<Uint8Array> {
-        let lastError: unknown;
-
-        for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => {
-                controller.abort();
-            }, this.timeout);
-
-            try {
-                const response = await fetch(url, {
-                    method: "GET",
-                    signal: controller.signal,
-                });
-
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    if (response.status >= 500) {
-                        throw new Error(`HTTP ${String(response.status)}: ${response.statusText}`);
-                    }
-                    throw new TimestampError(
-                        TimestampErrorCode.NETWORK_ERROR,
-                        `CRL server returned HTTP ${String(response.status)}: ${response.statusText}`
-                    );
-                }
-
-                const arrayBuffer = await response.arrayBuffer();
-                const responseBytes = new Uint8Array(arrayBuffer);
-
-                if (responseBytes.length === 0) {
-                    throw new TimestampError(
-                        TimestampErrorCode.INVALID_RESPONSE,
-                        "Empty CRL received"
-                    );
-                }
-
-                return responseBytes;
-            } catch (error) {
-                clearTimeout(timeoutId);
-                lastError = error;
-
-                if (attempt < this.maxRetries) {
-                    const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
-                    await new Promise((resolve) => setTimeout(resolve, delay));
-                    continue;
-                }
-            }
-        }
-
-        if (lastError instanceof TimestampError) {
-            throw lastError;
-        }
-
-        throw new TimestampError(
-            TimestampErrorCode.NETWORK_ERROR,
-            `Failed to fetch CRL from ${url} after ${String(this.maxRetries + 1)} attempts`,
-            lastError
-        );
+        return fetchBytesWithRetry({
+            url,
+            method: "GET",
+            config: {
+                retry: this.maxRetries,
+                retryDelay: INITIAL_BACKOFF_MS,
+                timeout: this.timeout,
+                maxResponseBytes: DEFAULT_CRL_CONFIG.maxResponseBytes,
+            },
+            serviceLabel: "CRL server",
+        });
     }
 }

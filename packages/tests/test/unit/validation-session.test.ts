@@ -87,8 +87,6 @@ describe("ValidationSession", () => {
 
         it("should accept custom options", () => {
             const session = new ValidationSession({
-                timeout: 10000,
-                maxRetries: 5,
                 preferOCSP: false,
             });
             expect(session).toBeDefined();
@@ -114,11 +112,9 @@ describe("ValidationSession", () => {
             }).not.toThrow();
         });
 
-        it("should queue certificate with purposes", () => {
+        it("should queue certificate with issuer option only", () => {
             expect(() => {
-                session.queueCertificate(mockCert, {
-                    purposes: ["digitalSignature", "keyEncipherment"],
-                });
+                session.queueCertificate(mockCert, { issuer: mockIssuer });
             }).not.toThrow();
         });
 

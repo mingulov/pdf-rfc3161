@@ -4,15 +4,18 @@ import { Command, Option } from "commander";
 // Mock all the dependencies that the CLI uses
 vi.mock("../../../core/src/index.js", () => ({
     timestampPdf: vi.fn(),
-    timestampPdfLTA: vi.fn(),
+    archiveTimestamp: vi.fn(),
     extractTimestamps: vi.fn(),
     verifyTimestamp: vi.fn(),
-    getDSSInfo: vi.fn(),
     validateTimestampTokenRFC8933Compliance: vi.fn(),
     KNOWN_TSA_URLS: {
         DIGICERT: "http://timestamp.digicert.com",
         SECTIGO: "https://timestamp.sectigo.com",
     },
+}));
+
+vi.mock("../../../core/src/internals.js", () => ({
+    getDSSInfo: vi.fn(),
 }));
 
 vi.mock("../../../core/src/utils/circuit-breaker.js", () => ({

@@ -54,19 +54,13 @@ describe('TimestampSession Regression Tests', () => {
         const dummyToken = new Uint8Array(2000);
         dummyToken.fill(1);
 
-        // We need to bypass `parseTimestampResponse` check in `embedTimestampToken` 
-        // or ensure our dummy bytes don't throw "TSA rejected request".
-        // `embedTimestampToken` implementation tries to parse, but catches errors. 
-        // If it catches, it throws ONLY if it was a valid response with REJECTION status.
-        // Garbage bytes will cause a parse error, which is caught and ignored (fallback to raw bytes).
-        // So passing garbage dummyToken allows us to proceed to embedding.
-
-        // Execute embedding
+        // Post audit F1 fix (Phase 4.3): the `looksLikeTimeStampResp`
+        // pre-detection in session.embedTimestampToken now correctly
+        // identifies these bytes (`0x01` x 2000) as a raw token, not a TSR.
+        // parseTimestampResponse is skipped, raw bytes flow to embed, and
+        // (since enableLTV: false) no LTV pipeline runs. The original
+        // assertion holds: no network fetch should occur.
         await session.embedTimestampToken(dummyToken);
-
-        // Verification:
-        // 1. Fetch should NOT have been called (since we didn't ask to fetch LTV data)
-        // Note: It might be called for other reasons? No.
         expect(fetchSpy).not.toHaveBeenCalled();
 
         fetchSpy.mockRestore();
@@ -84,9 +78,14 @@ describe('TimestampSession Regression Tests', () => {
         const dummyToken = new Uint8Array(2000);
         dummyToken.fill(1);
 
-        // This should throw INVALID_RESPONSE because it tries to parse LTV data from garbage
-        await expect(session.embedTimestampToken(dummyToken))
-            .rejects.toThrow(/Failed to extract LTV data/);
+        // Post audit F1 fix: pre-detection treats the garbage bytes as a raw
+        // token, embed succeeds, then the default-LTV pipeline runs
+        // extractLTVData(token) which throws on the garbage bytes. The
+        // regression we still want to protect: garbage bytes are not
+        // silently embedded with LTV side-effects (a fetch).
+        await expect(session.embedTimestampToken(dummyToken)).rejects.toThrow(
+            /Failed to extract LTV data/
+        );
 
         fetchSpy.mockRestore();
     });

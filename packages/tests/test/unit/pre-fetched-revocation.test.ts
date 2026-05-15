@@ -68,6 +68,40 @@ describe("InMemoryValidationCache", () => {
         expect(cache.getOCSP(url, request1)).toEqual(response1);
         expect(cache.getOCSP(url, request2)).toEqual(response2);
     });
+
+    it("should distinguish between different URLs for same OCSP request", () => {
+        const url1 = "http://ocsp1.example.com";
+        const url2 = "http://ocsp2.example.com";
+        const request = new Uint8Array([1, 2, 3]);
+        const response = new Uint8Array([4, 5, 6]);
+
+        cache.setOCSP(url1, request, response);
+        expect(cache.getOCSP(url2, request)).toBeNull();
+    });
+
+    it("should key OCSP cache by only the first 32 bytes of the request", () => {
+        // Two requests differing only past index 31 should collide; this is by
+        // design in memory-cache.ts (`request.subarray(0, 32)`).
+        const url = "http://ocsp.example.com";
+        const request1 = new Uint8Array(40).fill(1);
+        const request2 = new Uint8Array(40).fill(1);
+        request2[35] = 2;
+        const response = new Uint8Array([4, 5, 6]);
+
+        cache.setOCSP(url, request1, response);
+        expect(cache.getOCSP(url, request2)).toEqual(response);
+    });
+
+    it("should overwrite an existing OCSP entry on repeated set", () => {
+        const url = "http://ocsp.example.com";
+        const request = new Uint8Array([1, 2, 3]);
+        const response1 = new Uint8Array([4, 5, 6]);
+        const response2 = new Uint8Array([7, 8, 9]);
+
+        cache.setOCSP(url, request, response1);
+        cache.setOCSP(url, request, response2);
+        expect(cache.getOCSP(url, request)).toEqual(response2);
+    });
 });
 
 describe("Pre-fetched Revocation Data API", () => {

@@ -14,6 +14,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { toArrayBuffer } from "../utils.js";
 
 // RFC 5544 OID: id-ct-timestampedData
 const TIMESTAMPED_DATA_OID = "1.2.840.113549.1.9.16.1.31";
@@ -63,6 +64,16 @@ export interface ParsedTimeStampedData {
  * @param timestampTokens - DER-encoded RFC 3161 timestamp token(s)
  * @param options - Additional options for the envelope
  * @returns DER-encoded TimeStampedData CMS content
+ *
+ * @example
+ * ```typescript
+ * import { createTimeStampedData } from "pdf-rfc3161/rfcs/rfc5544";
+ * const envelope = createTimeStampedData(tsToken, {
+ *     data: fileBytes,
+ *     fileName: "contract.pdf",
+ *     mediaType: "application/pdf",
+ * });
+ * ```
  */
 export function createTimeStampedData(
     timestampTokens: Uint8Array | Uint8Array[],
@@ -139,11 +150,18 @@ export function addTimestampsToEnvelope(envelope: Uint8Array, newTokens: Uint8Ar
  *
  * @param envelope - DER-encoded TimeStampedData CMS content
  * @returns Parsed TimeStampedData structure
+ *
+ * @example
+ * ```typescript
+ * import { parseTimeStampedData } from "pdf-rfc3161/rfcs/rfc5544";
+ * const parsed = parseTimeStampedData(envelopeBytes);
+ * console.log(parsed.metaData?.fileName, parsed.timestampTokens.length);
+ * ```
  */
 export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedData {
     try {
         // Parse CMS ContentInfo
-        const asn1 = asn1js.fromBER(envelope.slice().buffer);
+        const asn1 = asn1js.fromBER(toArrayBuffer(envelope));
         if (asn1.offset === -1) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
@@ -188,8 +206,15 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
         }
 
         // Parse metaData (optional)
+        // metaData and temporalEvidence are both Sequences -- disambiguate by
+        // looking at the first child: metaData starts with a Boolean
+        // (hashProtected), while temporalEvidence starts with a context-specific
+        // tag for the CHOICE between tstEvidence/ersEvidence.
         let metaData: ParsedTimeStampedData["metaData"];
-        if (values[index] instanceof asn1js.Sequence) {
+        if (
+            values[index] instanceof asn1js.Sequence &&
+            (values[index] as asn1js.Sequence).valueBlock.value[0] instanceof asn1js.Boolean
+        ) {
             metaData = parseMetaData(values[index++] as asn1js.Sequence);
         }
 

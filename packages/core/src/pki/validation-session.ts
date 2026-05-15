@@ -14,6 +14,7 @@ import { createOCSPRequest } from "./ocsp-utils.js";
 import { parseOCSPResponse, CertificateStatus as ParsedCertificateStatus } from "./ocsp-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { toArrayBuffer, bytesToHex } from "../utils.js";
 
 /**
  * Session for managing certificate validation with OCSP/CRL.
@@ -53,26 +54,29 @@ export class ValidationSession {
         this.options = {
             fetcher: options.fetcher ?? new DefaultFetcher(),
             cache: options.cache ?? new InMemoryValidationCache(),
-            timeout: options.timeout ?? 5000,
-            maxRetries: options.maxRetries ?? 3,
             preferOCSP: options.preferOCSP ?? true,
-            trustStore: options.trustStore ?? [],
         };
     }
 
     /**
-     * Queue a certificate for validation
+     * Queue a certificate for validation. Must be called before `validateAll()`;
+     * throws once validation has started.
+     *
+     * @param cert - The certificate to validate.
+     * @param options.issuer - Optional issuer to use instead of resolving by
+     *   subject; useful when the issuer is already in hand.
+     * @throws TimestampError with code `STATE_ERROR` if called after
+     *   `validateAll()` has started.
      */
     queueCertificate(
         cert: pkijs.Certificate,
         options?: {
             issuer?: pkijs.Certificate;
-            purposes?: string[];
         }
     ): void {
         if (this.state !== "initialized") {
             throw new TimestampError(
-                TimestampErrorCode.PDF_ERROR,
+                TimestampErrorCode.STATE_ERROR,
                 "Cannot queue certificates after validation started"
             );
         }
@@ -80,12 +84,18 @@ export class ValidationSession {
         this.certificates.push({
             cert,
             issuer: options?.issuer,
-            purposes: options?.purposes,
         });
     }
 
     /**
-     * Queue multiple certificates from a chain
+     * Queue every certificate in a chain. Each cert is validated against the
+     * other members of the chain as candidate issuers (subject-issuer match,
+     * not strict signature verification -- the real signature check happens in
+     * `validateAll()`).
+     *
+     * @param chain - The chain to queue (any order; root included).
+     * @throws TimestampError with code `STATE_ERROR` if called after
+     *   `validateAll()` has started.
      */
     queueChain(chain: pkijs.Certificate[]): void {
         for (const cert of chain) {
@@ -99,12 +109,18 @@ export class ValidationSession {
     }
 
     /**
-     * Execute validation for all queued certificates
+     * Execute validation for all queued certificates. Each certificate is
+     * validated against the configured trust store and revocation policy.
+     *
+     * @returns One `ValidationResult` per queued certificate, in the order
+     *   they were queued.
+     * @throws TimestampError with code `STATE_ERROR` if called twice on the same
+     *   session, or while another `validateAll()` is in flight.
      */
     async validateAll(): Promise<ValidationResult[]> {
         if (this.state !== "initialized") {
             throw new TimestampError(
-                TimestampErrorCode.PDF_ERROR,
+                TimestampErrorCode.STATE_ERROR,
                 "Validation already in progress or completed"
             );
         }
@@ -147,16 +163,25 @@ export class ValidationSession {
                     result.errors.push("OCSP: Certificate status unknown");
                 }
                 result.sources.push("OCSP");
+                // M2: capture the OCSP bytes for downstream exportLTVData
+                (result.ocspResponses ??= []).push(ocspResponse);
             } catch (e) {
                 result.errors.push(`OCSP failed: ${e instanceof Error ? e.message : String(e)}`);
             }
         }
 
+        // Priority model (M3): OCSP is authoritative when it succeeded.
+        // CRL is consulted only as a fallback when OCSP did not run or did not
+        // produce a valid (non-revoked) answer. CRL never resets isValid back
+        // to true after OCSP says revoked -- this is intentional. If you need
+        // CRL to override OCSP, build a separate flow that calls only CRL.
         if (!result.sources.includes("OCSP") || !result.isValid) {
             const crlUrls = getCRLDistributionPoints(req.cert);
             for (const url of crlUrls) {
                 try {
                     const crl = await this.fetchCRLWithCache(url);
+                    // M2: capture the CRL bytes for downstream exportLTVData
+                    (result.crls ??= []).push(crl);
                     if (this.checkCRLForCert(crl, req.cert)) {
                         result.isValid = false;
                         result.sources.push("CRL");
@@ -227,7 +252,7 @@ export class ValidationSession {
         try {
             const crlInfo = parseCRLInfo(crlBytes);
 
-            const asn1 = asn1js.fromBER(crlInfo.crl.slice().buffer);
+            const asn1 = asn1js.fromBER(toArrayBuffer(crlInfo.crl));
             if (asn1.offset === -1) return false;
 
             const crl = new pkijs.CertificateRevocationList({ schema: asn1.result });
@@ -257,7 +282,7 @@ export class ValidationSession {
     getResults(): ValidationResult[] {
         if (this.state !== "completed") {
             throw new TimestampError(
-                TimestampErrorCode.PDF_ERROR,
+                TimestampErrorCode.STATE_ERROR,
                 "Validation not completed - call validateAll() first"
             );
         }
@@ -270,7 +295,7 @@ export class ValidationSession {
     getResultForCert(cert: pkijs.Certificate): ValidationResult | undefined {
         if (this.state !== "completed") {
             throw new TimestampError(
-                TimestampErrorCode.PDF_ERROR,
+                TimestampErrorCode.STATE_ERROR,
                 "Validation not completed - call validateAll() first"
             );
         }
@@ -291,12 +316,35 @@ export class ValidationSession {
         const crls: Uint8Array[] = [];
         const ocsps: Uint8Array[] = [];
 
+        // Dedupe by byte-identical content so the same CRL fetched for
+        // multiple certs in the chain isn't embedded twice.
+        const seenCrls = new Set<string>();
+        const seenOcsps = new Set<string>();
+        const fingerprint = (bytes: Uint8Array): string => {
+            const sample = bytes.subarray(0, Math.min(bytes.length, 64));
+            return `${bytes.length.toString()}:${bytesToHex(sample)}`;
+        };
+
         for (const result of this.results) {
             try {
                 const der = result.cert.toSchema().toBER(false);
                 certs.push(new Uint8Array(der));
             } catch {
                 // Skip certificates that can't be serialized
+            }
+            for (const crl of result.crls ?? []) {
+                const fp = fingerprint(crl);
+                if (!seenCrls.has(fp)) {
+                    seenCrls.add(fp);
+                    crls.push(crl);
+                }
+            }
+            for (const ocsp of result.ocspResponses ?? []) {
+                const fp = fingerprint(ocsp);
+                if (!seenOcsps.has(fp)) {
+                    seenOcsps.add(fp);
+                    ocsps.push(ocsp);
+                }
             }
         }
 

@@ -37,4 +37,44 @@ describe("Utility Functions", () => {
         // Range 2: [5, 3] -> 5, 6, 7
         expect(result).toEqual(new Uint8Array([0, 1, 5, 6, 7]));
     });
+
+    describe("extractBytesFromByteRange security", () => {
+        test("should throw when given large lengths (DoS protection)", () => {
+            const data = new Uint8Array(10);
+            const hugeLength = 2 * 1024 * 1024 * 1024 - 1; // ~2GB
+            const byteRange: [number, number, number, number] = [0, hugeLength, 0, 0];
+
+            expect(() => extractBytesFromByteRange(data, byteRange)).toThrow(/Invalid ByteRange/);
+        });
+
+        test("should throw on out of bounds instead of padding", () => {
+            const data = new Uint8Array(10);
+            const byteRange: [number, number, number, number] = [0, 20, 0, 0];
+
+            expect(() => extractBytesFromByteRange(data, byteRange)).toThrow(/out of bounds/);
+        });
+
+        test("should throw on negative values", () => {
+            const data = new Uint8Array(10);
+            const byteRange: [number, number, number, number] = [0, -1, 0, 0];
+
+            expect(() => extractBytesFromByteRange(data, byteRange)).toThrow(/non-negative numbers/);
+        });
+
+        test("should throw on NaN values", () => {
+            const data = new Uint8Array(10);
+            const byteRange: [number, number, number, number] = [0, NaN, 0, 0];
+
+            expect(() => extractBytesFromByteRange(data, byteRange)).toThrow(/non-negative numbers/);
+        });
+
+        test("should throw when combined length exceeds PDF length", () => {
+            // Crafted overlap: both ranges are individually valid (within bounds)
+            // but together allocate more than the PDF itself.
+            const data = new Uint8Array(10);
+            const byteRange: [number, number, number, number] = [0, 8, 0, 8];
+
+            expect(() => extractBytesFromByteRange(data, byteRange)).toThrow(/combined length/);
+        });
+    });
 });

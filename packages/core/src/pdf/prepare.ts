@@ -10,6 +10,37 @@ import {
     PDFObject,
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
+import { TimestampError, TimestampErrorCode } from "../types.js";
+import { restoreLargestObjectNumber } from "./internals.js";
+
+/**
+ * L5: caps how long a single user-supplied PDF string (reason / location /
+ * contactInfo) may be. Anything past this is rejected. 2048 is what most
+ * PDF viewers accept comfortably; longer strings serve no signal purpose
+ * and bloat the incremental update.
+ */
+const MAX_PDF_STRING_LENGTH = 2048;
+
+/**
+ * Strip embedded NUL bytes and validate length on a user-supplied PDF
+ * string. NULs in PDF strings can confuse legacy readers, and unbounded
+ * strings let callers grow signature dictionaries arbitrarily.
+ */
+function sanitizePdfString(value: string, fieldName: string): string {
+    if (value.length > MAX_PDF_STRING_LENGTH) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `${fieldName} exceeds maximum length of ${MAX_PDF_STRING_LENGTH.toString()} characters (got ${value.length.toString()})`
+        );
+    }
+    if (value.includes("\x00")) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `${fieldName} contains embedded NUL character`
+        );
+    }
+    return value;
+}
 
 /**
  * Result of preparing a PDF for timestamping.
@@ -43,6 +74,11 @@ export interface PrepareOptions {
     signatureFieldName?: string;
     /** Whether to omit the modification time (/M) from the signature dictionary */
     omitModificationTime?: boolean;
+    /**
+     * Whether to ignore PDF encryption when loading the document.
+     * @default false
+     */
+    ignoreEncryption?: boolean;
 }
 
 /**
@@ -115,28 +151,13 @@ export async function preparePdfForTimestamp(
     const placeholderHex = "0".repeat(placeholderHexLength);
 
     // Load the PDF document
-    const sigPdfDoc = await PDFDocument.load(pdfBytes, { updateMetadata: false });
+    const sigPdfDoc = await PDFDocument.load(pdfBytes, {
+        updateMetadata: false,
+        ignoreEncryption: options.ignoreEncryption ?? false,
+    });
 
-    // WORKAROUND: correctly track objects from input PDF.
-    // Scan bytes to ensure largestObjectNumber matches the actual file content,
-    // preserving the object numbering sequence for incremental updates.
     const sigContext = sigPdfDoc.context;
-    const pdfString = new TextDecoder("latin1").decode(pdfBytes);
-    const objMatches = pdfString.matchAll(/(\d{1,20})\s+\d{1,20}\s+obj/g);
-    let maxObjNum = sigContext.largestObjectNumber;
-    for (const match of objMatches) {
-        const objNum = parseInt(match[1] ?? "0", 10);
-        if (objNum > maxObjNum) {
-            maxObjNum = objNum;
-        }
-    }
-    // internal property of PDFContext needed for the workaround
-    interface PDFContextInternal {
-        largestObjectNumber: number;
-    }
-
-    const sigContextInternal = sigContext as unknown as PDFContextInternal;
-    sigContextInternal.largestObjectNumber = maxObjNum;
+    restoreLargestObjectNumber(pdfBytes, sigContext);
 
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();
@@ -164,14 +185,24 @@ export async function preparePdfForTimestamp(
     newByteRangeArr.push(PDFNumber.of(111111111111));
     newByteRangeArr.push(PDFNumber.of(111111111111));
 
-    if (options.reason) {
-        newSigDict.set(PDFName.of("Reason"), PDFString.of(options.reason));
+    // L5: sanitize and length-cap user-supplied PDF strings before passing them
+    // to pdf-lib. pdf-lib's PDFString.of handles encoding, but rejects nothing
+    // up front: extremely long strings bloat the signature dictionary and
+    // embedded NULs / control chars confuse some PDF readers.
+    if (options.reason !== undefined) {
+        newSigDict.set(PDFName.of("Reason"), PDFString.of(sanitizePdfString(options.reason, "reason")));
     }
-    if (options.location) {
-        newSigDict.set(PDFName.of("Location"), PDFString.of(options.location));
+    if (options.location !== undefined) {
+        newSigDict.set(
+            PDFName.of("Location"),
+            PDFString.of(sanitizePdfString(options.location, "location"))
+        );
     }
-    if (options.contactInfo) {
-        newSigDict.set(PDFName.of("ContactInfo"), PDFString.of(options.contactInfo));
+    if (options.contactInfo !== undefined) {
+        newSigDict.set(
+            PDFName.of("ContactInfo"),
+            PDFString.of(sanitizePdfString(options.contactInfo, "contactInfo"))
+        );
     }
 
     const newSigRef = sigContext.register(newSigDict);
@@ -195,7 +226,7 @@ export async function preparePdfForTimestamp(
     const sigPages = sigPdfDoc.getPages();
     const sigFirstPage = sigPages[0];
     if (!sigFirstPage) {
-        throw new Error("PDF has no pages");
+        throw new TimestampError(TimestampErrorCode.PDF_ERROR, "PDF has no pages");
     }
 
     const sigPageRef = sigFirstPage.ref;
@@ -272,8 +303,13 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
     let tailString = new TextDecoder("latin1").decode(tailBytes);
 
     // Find the Contents hex string - it will look like: /Contents<000000...>
-    // We look for a Contents with our exact placeholder length filled with zeros
-    const contentsPattern = /\/Contents\s*<(0+)>/g;
+    // We look for a Contents with our exact placeholder length filled with zeros.
+    // We use a dynamic RegExp with bounded quantifiers to prevent ReDoS.
+    // eslint-disable-next-line security/detect-non-literal-regexp
+    const contentsPattern = new RegExp(
+        `/Contents\\s{0,100}<(0{${String(placeholderHexLength)}})>`,
+        "g"
+    );
     let placeholderMatch: RegExpExecArray | null = null;
 
     // Helper to find match in string
@@ -283,10 +319,8 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         // Reset regex state
         contentsPattern.lastIndex = 0;
         while ((m = contentsPattern.exec(str)) !== null) {
-            if (m[1]?.length === placeholderHexLength) {
-                pMatch = m;
-                // Take the last match (most recently added signature)
-            }
+            pMatch = m;
+            // Take the last match (most recently added signature)
         }
         return pMatch;
     };
@@ -295,7 +329,6 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
 
     // If not found in tail, search the whole file (expensive but necessary fallback)
     if (!placeholderMatch?.[1]) {
-        // console.warn("Signature placeholder not found in tail, scanning entire file...");
         searchStartOffset = 0;
         tailBytes = pdfBytes;
         tailString = new TextDecoder("latin1").decode(tailBytes);
@@ -303,7 +336,10 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
     }
 
     if (!placeholderMatch?.[1]) {
-        throw new Error("Could not find signature placeholder in PDF tail");
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            "Could not find signature placeholder in PDF tail"
+        );
     }
 
     // Now find the enclosing dictionary by searching backwards from the placeholder
@@ -374,9 +410,9 @@ function updateByteRange(
     const searchString = new TextDecoder("latin1").decode(searchRegion);
 
     // Find the ByteRange placeholder
-    // Match any number of values since we use 6 placeholders for padding space
-    // Simplified to avoid security/detect-unsafe-regex warning (catastrophic backtracking)
-    const byteRangePattern = /\/ByteRange\s*\[[\s\d]+\]/;
+    // Match any number of values since we use 6 placeholders for padding space.
+    // We use bounded quantifiers to prevent ReDoS.
+    const byteRangePattern = /\/ByteRange\s{0,100}\[[\s\d]{1,500}\]/;
     const match = byteRangePattern.exec(searchString);
 
     if (!match) {
@@ -406,7 +442,8 @@ function replaceByteRangeAt(
     )} ${String(byteRange[3])}]`;
 
     if (basicStr.length > oldLength) {
-        throw new Error(
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
             `ByteRange placeholder too small! Need ${String(basicStr.length)} chars, found ${String(
                 oldLength
             )}. ` + `Please increase placeholder size in preparePdfForTimestamp.`

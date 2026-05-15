@@ -14,9 +14,12 @@ import {
     TimestampErrorCode,
     type TimestampInfo,
     type VerificationOptions,
+    type ExtractOptions,
 } from "../types.js";
-import { hexToBytes, bytesToHex, extractBytesFromByteRange } from "../utils.js";
-import { parseTimestampToken } from "../pki/pki-utils.js";
+import { toArrayBuffer, hexToBytes, bytesToHex, extractBytesFromByteRange } from "../utils.js";
+import { ensureWebCrypto } from "../utils/web-crypto.js";
+import { parsePdfDate } from "../utils/pdf-date.js";
+import { parseTimestampToken, hasTimestampingEKU, isCertValidAtTime } from "../pki/pki-utils.js";
 
 /**
  * Information about an extracted timestamp signature from a PDF
@@ -59,14 +62,18 @@ export interface ExtractedTimestamp {
  * Extracts all RFC 3161 document timestamps from a PDF.
  *
  * @param pdfBytes - The PDF document bytes
+ * @param options - Extraction options
  * @returns Array of extracted timestamps
  */
-export async function extractTimestamps(pdfBytes: Uint8Array): Promise<ExtractedTimestamp[]> {
+export async function extractTimestamps(
+    pdfBytes: Uint8Array,
+    options?: ExtractOptions
+): Promise<ExtractedTimestamp[]> {
     let pdfDoc;
     try {
         pdfDoc = await PDFDocument.load(pdfBytes, {
             updateMetadata: false,
-            ignoreEncryption: true, // Try to load even if encrypted (though signatures might fail)
+            ignoreEncryption: options?.ignoreEncryption ?? false,
         });
     } catch (error) {
         throw new TimestampError(
@@ -186,43 +193,7 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
             let m: Date | undefined;
             const mObj = sigValue.get(PDFName.of("M"));
             if (mObj) {
-                const mStr = mObj
-                    .toString()
-                    .replace(/^\(/, "")
-                    .replace(/\)$/, "")
-                    .replace("D:", "");
-                // Format: YYYYMMDDHHmmSSOHH'mm' e.g. 20230101120000+00'00'
-                // Simple parser attempt
-                try {
-                    const year = parseInt(mStr.substring(0, 4));
-                    const month = parseInt(mStr.substring(4, 6)) - 1;
-                    const day = parseInt(mStr.substring(6, 8));
-                    const hour = parseInt(mStr.substring(8, 10));
-                    const min = parseInt(mStr.substring(10, 12));
-                    const sec = parseInt(mStr.substring(12, 14));
-                    // Basic UTC Date if no timezone logic for now, or just use Date.parse logic if compatible?
-                    // PDF dates are notoriously tricky. Let's try to construct a valid ISO string.
-                    // YYYY-MM-DDTHH:mm:ss
-                    // TZ info: OHH'mm' e.g. +02'00' or Z
-                    let iso = `${String(year)}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-
-                    if (mStr.length > 14) {
-                        const rest = mStr.substring(14);
-                        // Handle Z
-                        if (rest === "Z") iso += "Z";
-                        else {
-                            // Handle offset +HH'mm' -> +HH:mm
-                            const cleanOffset = rest.replace(/^([+-]\d{2})'(\d{2})'$/, "$1:$2");
-                            iso += cleanOffset;
-                        }
-                    } else {
-                        iso += "Z"; // Assume UTC if missing
-                    }
-                    m = new Date(iso);
-                    if (isNaN(m.getTime())) m = undefined;
-                } catch {
-                    // Ignore date parse error
-                }
+                m = parsePdfDate(mObj.toString());
             }
 
             timestamps.push({
@@ -247,11 +218,60 @@ export async function extractTimestamps(pdfBytes: Uint8Array): Promise<Extracted
 }
 
 /**
- * Verifies an extracted timestamp's cryptographic signature.
+ * Verifies an extracted timestamp's cryptographic signature and trust
+ * properties.
  *
- * @param timestamp - The extracted timestamp to verify
- * @param options - Verification options (including optional pdf bytes for hash verification)
- * @returns The timestamp with verification status updated
+ * The verification runs in order:
+ *   1. (optional, when `options.pdf` is supplied) The document's
+ *      ByteRange hash matches the messageImprint inside the TSTInfo.
+ *   2. The SignedData's `eContentType` is `id-ct-TSTInfo` (1.2.840.113549.1.9.16.1.4)
+ *      -- not the bare `id-data` workaround value (H2 guard).
+ *   3. pkijs `signedData.verify(...)` confirms the signature math.
+ *   4. (optional, when `options.trustStore` is supplied) The certificate
+ *      chain validates against the supplied trust store.
+ *   5. (optional, when `options.requireTimestampingEKU`) The signing
+ *      certificate carries `id-kp-timeStamping` (1.3.6.1.5.5.7.3.8) or
+ *      `anyExtendedKeyUsage` (G1).
+ *   6. (optional, when `options.requireCertValidAtGenTime`) The signing
+ *      certificate is valid at the genTime in the token (G2).
+ *   7. (optional, when `options.strictESSValidation`) The ESS / ESSv2
+ *      signing-certificate attribute is present.
+ *
+ * @param timestamp - The {@link ExtractedTimestamp} to verify.
+ * @param options - Optional {@link VerificationOptions}.
+ * @returns The same `timestamp` object with `verified` and possibly
+ *   `verificationError` and `certificates` populated.
+ *
+ * @example
+ * Basic verify (signature math only):
+ * ```typescript
+ * const verified = await verifyTimestamp(extracted);
+ * if (!verified.verified) throw new Error(verified.verificationError);
+ * ```
+ *
+ * @example
+ * Strict verification with chain + opt-in PAdES ESS check:
+ * ```typescript
+ * // Since 0.2.0, requireTimestampingEKU and requireCertValidAtGenTime
+ * // default to `true`. The only remaining opt-in is strictESSValidation.
+ * const verified = await verifyTimestamp(extracted, {
+ *     trustStore: myTSARoots,
+ *     pdf: originalPdfBytes,
+ *     strictESSValidation: true,
+ * });
+ * ```
+ *
+ * @example
+ * Lenient verification for a legacy token whose TSA cert lacks the
+ * id-kp-timeStamping EKU (or had expired by signing time):
+ * ```typescript
+ * const verified = await verifyTimestamp(extracted, {
+ *     trustStore: myTSARoots,
+ *     pdf: originalPdfBytes,
+ *     requireTimestampingEKU: false,
+ *     requireCertValidAtGenTime: false,
+ * });
+ * ```
  */
 export async function verifyTimestamp(
     timestamp: ExtractedTimestamp,
@@ -260,10 +280,11 @@ export async function verifyTimestamp(
     try {
         // Step 1: Verify document hash if PDF is provided
         if (options.pdf) {
+            await ensureWebCrypto();
             const dataToHash = extractBytesFromByteRange(options.pdf, timestamp.byteRange);
             const hashBuffer = await crypto.subtle.digest(
                 timestamp.info.hashAlgorithm,
-                dataToHash.slice().buffer
+                toArrayBuffer(dataToHash)
             );
             const actualHash = bytesToHex(hashBuffer);
 
@@ -277,7 +298,7 @@ export async function verifyTimestamp(
         }
 
         // Step 2: Verify cryptographic signature of the token
-        const asn1 = asn1js.fromBER(timestamp.token.slice().buffer);
+        const asn1 = asn1js.fromBER(toArrayBuffer(timestamp.token));
         if (asn1.offset === -1) {
             return {
                 ...timestamp,
@@ -307,8 +328,26 @@ export async function verifyTimestamp(
             }
         }
 
-        // Hack: pkijs often refuses to use attached content for non-id-data types (like id-ct-TSTInfo).
-        // Best fix: Temporarily set type to id-data so pkijs verifies the hash of eContent content.
+        // H2 guard: an attacker could craft a SignedData whose eContentType is
+        // id-data (1.2.840.113549.1.7.1) with arbitrary content and a valid
+        // signature -- without this check, the override below would silently
+        // accept it as a "valid timestamp". A legitimate RFC 3161 token MUST
+        // declare eContentType = id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4).
+        const TSTINFO_OID = "1.2.840.113549.1.9.16.1.4";
+        const originalEContentType = signedData.encapContentInfo.eContentType;
+        if (originalEContentType !== TSTINFO_OID) {
+            return {
+                ...timestamp,
+                verified: false,
+                verificationError: `Invalid content type: expected id-ct-TSTInfo (${TSTINFO_OID}), got ${originalEContentType}`,
+                certificates,
+            };
+        }
+
+        // Workaround: pkijs refuses to use attached content for non-id-data types
+        // (including id-ct-TSTInfo). Temporarily set the type to id-data so pkijs
+        // verifies the hash of the eContent. The H2 guard above ensures we only
+        // reach this point for legitimate TSTInfo content.
         signedData.encapContentInfo.eContentType = "1.2.840.113549.1.7.1"; // id-data
 
         const crlCount = signedData.crls?.length ?? 0;
@@ -339,6 +378,70 @@ export async function verifyTimestamp(
                     ...timestamp,
                     verified: false,
                     verificationError: "Certificate chain not trusted",
+                    certificates,
+                };
+            }
+        }
+
+        // G1: enforce id-kp-timeStamping ExtendedKeyUsage on the signing cert
+        // (RFC 3161 Sec. 2.3). Defaults to `true` since 0.2.0 -- callers who
+        // need to verify legacy tokens that pre-date the EKU requirement can
+        // opt out with `requireTimestampingEKU: false`. The first cert in
+        // `signedData.certificates` is by convention the signing TSA cert.
+        const requireEKU = options.requireTimestampingEKU ?? true;
+        if (requireEKU) {
+            const signingCert = certificates[0];
+            if (!signingCert) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError:
+                        "requireTimestampingEKU: no signing certificate available to check",
+                    certificates,
+                };
+            }
+            if (!hasTimestampingEKU(signingCert)) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError:
+                        "Signing certificate is missing id-kp-timeStamping (1.3.6.1.5.5.7.3.8) ExtendedKeyUsage required by RFC 3161 Sec. 2.3",
+                    certificates,
+                };
+            }
+        }
+
+        // G2: enforce that the signing TSA cert is valid at genTime.
+        // Otherwise an expired or not-yet-valid TSA cert can mint timestamps.
+        // Defaults to `true` since 0.2.0; opt out with
+        // `requireCertValidAtGenTime: false`.
+        const requireValidity = options.requireCertValidAtGenTime ?? true;
+        if (requireValidity) {
+            const signingCert = certificates[0];
+            const genTime = timestamp.info.genTime;
+            if (!signingCert) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError:
+                        "requireCertValidAtGenTime: no signing certificate available to check",
+                    certificates,
+                };
+            }
+            if (!(genTime instanceof Date)) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError:
+                        "requireCertValidAtGenTime: token has no genTime to compare against",
+                    certificates,
+                };
+            }
+            if (!isCertValidAtTime(signingCert, genTime)) {
+                return {
+                    ...timestamp,
+                    verified: false,
+                    verificationError: `Signing certificate was not valid at genTime ${genTime.toISOString()} (notBefore=${signingCert.notBefore.value instanceof Date ? signingCert.notBefore.value.toISOString() : "unknown"}, notAfter=${signingCert.notAfter.value instanceof Date ? signingCert.notAfter.value.toISOString() : "unknown"})`,
                     certificates,
                 };
             }
@@ -396,4 +499,34 @@ export async function verifyTimestamp(
             verificationError: error instanceof Error ? error.message : String(error),
         };
     }
+}
+
+/**
+ * Extracts and verifies every RFC 3161 timestamp in a PDF in one call.
+ *
+ * Equivalent to `extractTimestamps(pdf, extractOptions)` followed by
+ * `Promise.all` over `verifyTimestamp(ts, verifyOptions)`. The original PDF
+ * bytes are automatically forwarded to `verifyTimestamp` so document-hash
+ * checks run by default.
+ *
+ * @param pdfBytes - The PDF document to inspect.
+ * @param options - Combined extract+verify options (all optional).
+ * @returns One `ExtractedTimestamp` per signature, each with `verified`
+ *   reflecting the verify-step outcome.
+ *
+ * @example
+ * ```typescript
+ * // EKU enforcement is on by default since 0.2.0; just pass trustStore.
+ * const verified = await verifyPdfTimestamps(pdf, { trustStore });
+ * console.log(`${verified.filter(t => t.verified).length}/${verified.length} valid`);
+ * ```
+ */
+export async function verifyPdfTimestamps(
+    pdfBytes: Uint8Array,
+    options: ExtractOptions & VerificationOptions = {}
+): Promise<ExtractedTimestamp[]> {
+    const timestamps = await extractTimestamps(pdfBytes, options);
+    return Promise.all(
+        timestamps.map((ts) => verifyTimestamp(ts, { pdf: pdfBytes, ...options }))
+    );
 }

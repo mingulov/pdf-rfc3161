@@ -1,3 +1,4 @@
+import { bytesToHex } from "../../utils.js";
 import type { ValidationCache } from "../validation-types.js";
 
 /**
@@ -11,18 +12,14 @@ export class InMemoryValidationCache implements ValidationCache {
 
     getOCSP(url: string, request: Uint8Array): Uint8Array | null {
         // Create a simple cache key from URL and request hash
-        const requestHash = Array.from(new Uint8Array(request.slice(0, 32)))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("");
+        const requestHash = bytesToHex(request.subarray(0, 32));
         const cacheKey = `${url}:${requestHash}`;
         return this.ocspCache.get(cacheKey) ?? null;
     }
 
     setOCSP(url: string, request: Uint8Array, response: Uint8Array): void {
         // Create a simple cache key from URL and request hash
-        const requestHash = Array.from(new Uint8Array(request.slice(0, 32)))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("");
+        const requestHash = bytesToHex(request.subarray(0, 32));
         const cacheKey = `${url}:${requestHash}`;
         this.ocspCache.set(cacheKey, response);
     }

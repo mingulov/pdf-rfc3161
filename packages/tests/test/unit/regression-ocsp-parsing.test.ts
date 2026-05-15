@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseOCSPResponse } from "pdf-rfc3161";
+import { parseOCSPResponse } from "../../../core/src/internals.js";
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 

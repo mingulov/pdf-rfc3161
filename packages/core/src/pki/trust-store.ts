@@ -1,6 +1,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { toArrayBuffer } from "../utils.js";
 
 /**
  * Trust Store for Certificate Chain Validation
@@ -66,7 +67,7 @@ export class SimpleTrustStore implements TrustStore {
         if (cert instanceof pkijs.Certificate) {
             this.trustedCerts.push(cert);
         } else {
-            const asn1 = asn1js.fromBER(cert.slice().buffer);
+            const asn1 = asn1js.fromBER(toArrayBuffer(cert));
             if (asn1.offset === -1) {
                 throw new TimestampError(
                     TimestampErrorCode.INVALID_RESPONSE,
@@ -86,7 +87,7 @@ export class SimpleTrustStore implements TrustStore {
         // Convert input chain to pkijs.Certificate objects
         const certChain = chain.map((c) => {
             if (c instanceof pkijs.Certificate) return c;
-            const asn1 = asn1js.fromBER(c.slice().buffer);
+            const asn1 = asn1js.fromBER(toArrayBuffer(c));
             return new pkijs.Certificate({ schema: asn1.result });
         });
 

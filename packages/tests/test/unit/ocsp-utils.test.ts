@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import {
     parseOCSPResponse,
     createOCSPRequest,
-    parseOCSPNonce,
     getOCSPURI,
     OCSPResponseStatus,
     CertificateStatus,
@@ -233,44 +232,6 @@ describe("OCSP Utils", () => {
         });
     });
 
-    describe("parseOCSPNonce", () => {
-        it("should return false values for invalid input", () => {
-            const result = parseOCSPNonce(new Uint8Array([0x00, 0x01]));
-
-            expect(result.nonce.length).toBe(0);
-            expect(result.includedInRequest).toBe(false);
-            expect(result.matchesInResponse).toBe(false);
-        });
-
-        it("should handle empty input gracefully", () => {
-            const result = parseOCSPNonce(new Uint8Array(0));
-
-            expect(result.nonce.length).toBe(0);
-            expect(result.includedInRequest).toBe(false);
-            expect(result.matchesInResponse).toBe(false);
-        });
-
-        it("should handle truncated OCSP response", () => {
-            const truncatedResponse = new Uint8Array([0x30, 0x03]);
-
-            const result = parseOCSPNonce(truncatedResponse);
-
-            expect(result.nonce.length).toBe(0);
-            expect(result.includedInRequest).toBe(false);
-            expect(result.matchesInResponse).toBe(false);
-        });
-
-        it("should handle request nonce parameter when response is invalid", () => {
-            const requestNonce = new Uint8Array([0x01, 0x02, 0x03]);
-
-            const result = parseOCSPNonce(new Uint8Array(0), requestNonce);
-
-            expect(result.nonce.length).toBe(0);
-            expect(result.includedInRequest).toBe(false);
-            expect(result.matchesInResponse).toBe(false);
-        });
-    });
-
     describe("createOCSPRequest", () => {
         it("should be defined as a function", () => {
             expect(typeof createOCSPRequest).toBe("function");
@@ -327,5 +288,28 @@ describe("OCSP Utils", () => {
 
             expect(() => parseOCSPResponse(noResponseBytes)).toThrow();
         });
+    });
+
+    // Audit C: the "missing idBlock" warn-fallback in parseOCSPResponse
+    // (ocsp-utils.ts:156-159) is defensive code meant to absorb future
+    // pkijs representation changes. Direct coverage was attempted via
+    // `vi.spyOn(pkijs, "BasicOCSPResponse")` to inject a malformed
+    // SingleResponse, but pkijs's exports are non-configurable -- the
+    // spy throws "Cannot redefine property". Other approaches (DER-level
+    // crafting, vi.mock of the whole pkijs module) either fail pkijs
+    // schema validation or break unrelated tests.
+    //
+    // The fallback path remains uncovered. This is a known gap; the
+    // branch is defence-in-depth for a hypothetical pkijs major-version
+    // shape change. Two follow-ups would unblock real coverage:
+    //   1. Extract the certStatus -> CertificateStatus mapping into a
+    //      pure function so it can be unit-tested directly.
+    //   2. Refactor parseOCSPResponse to accept a pluggable response
+    //      decoder so tests can inject controlled SingleResponse shapes.
+    //
+    // Until then, the audit gap is documented here so it doesn't
+    // silently re-appear in future audits.
+    describe.skip("missing idBlock fallback (audit C, requires refactor)", () => {
+        it.todo("warns and returns UNKNOWN when certStatus lacks idBlock");
     });
 });

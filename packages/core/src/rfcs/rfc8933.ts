@@ -8,6 +8,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import { toArrayBuffer } from "../utils.js";
 
 /**
  * Validates RFC 8933 compliance for a CMS SignedData structure.
@@ -19,6 +20,13 @@ import { TimestampError, TimestampErrorCode } from "../types.js";
  * @param signedData - The SignedData structure to validate
  * @param options - Validation options
  * @returns Validation result
+ *
+ * @example
+ * ```typescript
+ * import { validateRFC8933Compliance } from "pdf-rfc3161/rfcs/rfc8933";
+ * const report = validateRFC8933Compliance(signedData, { strict: true });
+ * if (!report.compliant) console.warn("RFC 8933 issues:", report.issues);
+ * ```
  */
 export function validateRFC8933Compliance(
     signedData: pkijs.SignedData,
@@ -156,7 +164,7 @@ export function validateTimestampTokenRFC8933Compliance(
 ): RFC8933ValidationResult {
     try {
         // Parse the timestamp token to get SignedData
-        const asn1 = asn1js.fromBER(timestampToken.slice().buffer);
+        const asn1 = asn1js.fromBER(toArrayBuffer(timestampToken));
         if (asn1.offset === -1) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,

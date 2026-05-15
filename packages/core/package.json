@@ -1,6 +1,6 @@
 {
     "name": "pdf-rfc3161",
-    "version": "0.1.4",
+    "version": "0.2.0",
     "description": "A pure JS library to add RFC 3161 trusted timestamps to PDFs. Edge-ready, works in Node.js, Cloudflare Workers, and Browsers without native dependencies.",
     "keywords": [
         "pdf",
@@ -18,21 +18,75 @@
         "type": "git",
         "url": "git+https://github.com/mingulov/pdf-rfc3161.git"
     },
+    "bugs": {
+        "url": "https://github.com/mingulov/pdf-rfc3161/issues"
+    },
     "license": "MIT",
     "author": "Denis Mingulov <denis@mingulov.com>",
     "type": "module",
+    "sideEffects": [
+        "./dist/index.cjs",
+        "./dist/index.js"
+    ],
     "exports": {
         ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.cjs"
-        }
+            "import": {
+                "types": "./dist/index.d.ts",
+                "default": "./dist/index.js"
+            },
+            "require": {
+                "types": "./dist/index.d.cts",
+                "default": "./dist/index.cjs"
+            }
+        },
+        "./advanced": {
+            "import": {
+                "types": "./dist/advanced.d.ts",
+                "default": "./dist/advanced.js"
+            },
+            "require": {
+                "types": "./dist/advanced.d.cts",
+                "default": "./dist/advanced.cjs"
+            }
+        },
+        "./internals": {
+            "import": {
+                "types": "./dist/internals.d.ts",
+                "default": "./dist/internals.js"
+            },
+            "require": {
+                "types": "./dist/internals.d.cts",
+                "default": "./dist/internals.cjs"
+            }
+        },
+        "./rfcs/rfc5544": {
+            "import": {
+                "types": "./dist/rfcs/rfc5544.d.ts",
+                "default": "./dist/rfcs/rfc5544.js"
+            },
+            "require": {
+                "types": "./dist/rfcs/rfc5544.d.cts",
+                "default": "./dist/rfcs/rfc5544.cjs"
+            }
+        },
+        "./rfcs/rfc8933": {
+            "import": {
+                "types": "./dist/rfcs/rfc8933.d.ts",
+                "default": "./dist/rfcs/rfc8933.js"
+            },
+            "require": {
+                "types": "./dist/rfcs/rfc8933.d.cts",
+                "default": "./dist/rfcs/rfc8933.cjs"
+            }
+        },
+        "./package.json": "./package.json"
     },
     "main": "./dist/index.cjs",
     "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "files": [
-        "dist"
+        "dist",
+        "!dist/**/*.map"
     ],
     "scripts": {
         "build": "tsup",
@@ -45,12 +99,11 @@
     "dependencies": {
         "asn1js": "^3.0.7",
         "pdf-lib-incremental-save": "^1.17.4",
-        "pkijs": "^3.3.3",
-        "pvutils": "^1.1.5"
+        "pkijs": "^3.3.3"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.2",
-        "@types/node": "^25.0.6",
+        "@types/node": "^22.0.0",
         "eslint": "^9.39.2",
         "eslint-plugin-security": "^3.0.1",
         "prettier": "^3.7.4",

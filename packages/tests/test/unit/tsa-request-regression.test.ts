@@ -6,7 +6,7 @@ import {
     createTimestampRequestFromHash,
 } from "../../../core/src/tsa/request.js";
 
-const TEST_CONFIG = { url: "http://timestamp.test.com" };
+const TEST_CONFIG = {};
 
 describe("Regression: Timestamp Request Validation", () => {
     beforeEach(() => {
@@ -21,7 +21,7 @@ describe("Regression: Timestamp Request Validation", () => {
 
     it("should generate valid timestamp request", async () => {
         const data = new Uint8Array([1, 2, 3, 4, 5]);
-        const request = await createTimestampRequest(data, TEST_CONFIG);
+        const { request } = await createTimestampRequest(data, TEST_CONFIG);
 
         expect(request.length).toBeGreaterThanOrEqual(60);
         expect(request[0]).toBe(0x30);
@@ -42,21 +42,21 @@ describe("Regression: Timestamp Request Validation", () => {
     it("should work with different hash algorithms", async () => {
         const data = new Uint8Array([1, 2, 3, 4, 5]);
 
-        const sha256 = await createTimestampRequest(data, {
+        const { request: sha256 } = await createTimestampRequest(data, {
             ...TEST_CONFIG,
             hashAlgorithm: "SHA-256",
         });
         expect(sha256.length).toBeGreaterThanOrEqual(60);
         expect(sha256[0]).toBe(0x30);
 
-        const sha384 = await createTimestampRequest(data, {
+        const { request: sha384 } = await createTimestampRequest(data, {
             ...TEST_CONFIG,
             hashAlgorithm: "SHA-384",
         });
         expect(sha384.length).toBeGreaterThanOrEqual(76);
         expect(sha384[0]).toBe(0x30);
 
-        const sha512 = await createTimestampRequest(data, {
+        const { request: sha512 } = await createTimestampRequest(data, {
             ...TEST_CONFIG,
             hashAlgorithm: "SHA-512",
         });
@@ -67,12 +67,12 @@ describe("Regression: Timestamp Request Validation", () => {
     it("should handle large and small inputs", async () => {
         const largeData = new Uint8Array(1024 * 1024);
         crypto.getRandomValues(largeData);
-        const largeRequest = await createTimestampRequest(largeData, TEST_CONFIG);
+        const { request: largeRequest } = await createTimestampRequest(largeData, TEST_CONFIG);
         expect(largeRequest.length).toBeGreaterThanOrEqual(60);
         expect(largeRequest[0]).toBe(0x30);
 
         const minimalData = new Uint8Array([0xff]);
-        const minimalRequest = await createTimestampRequest(minimalData, TEST_CONFIG);
+        const { request: minimalRequest } = await createTimestampRequest(minimalData, TEST_CONFIG);
         expect(minimalRequest.length).toBeGreaterThanOrEqual(60);
         expect(minimalRequest[0]).toBe(0x30);
     });
@@ -80,7 +80,7 @@ describe("Regression: Timestamp Request Validation", () => {
     it("should work with pre-computed hash", () => {
         const hash = new Uint8Array(32);
         crypto.getRandomValues(hash);
-        const request = createTimestampRequestFromHash(hash, "SHA-256", TEST_CONFIG);
+        const { request } = createTimestampRequestFromHash(hash, "SHA-256", TEST_CONFIG);
 
         expect(request.length).toBeGreaterThanOrEqual(60);
         expect(request[0]).toBe(0x30);
@@ -96,7 +96,7 @@ describe("Regression: Timestamp Request Validation", () => {
 
     it("should survive encode-decode round-trip", async () => {
         const data = new Uint8Array([1, 2, 3, 4, 5]);
-        const request = await createTimestampRequest(data, TEST_CONFIG);
+        const { request } = await createTimestampRequest(data, TEST_CONFIG);
 
         const asn1 = asn1js.fromBER(request.slice().buffer);
         const tsReq = new pkijs.TimeStampReq({ schema: asn1.result });
@@ -112,7 +112,7 @@ describe("Regression: Timestamp Request Validation", () => {
         const expectedHashBuffer = await crypto.subtle.digest("SHA-256", data);
         const expectedHash = new Uint8Array(expectedHashBuffer);
 
-        const request = await createTimestampRequest(data, TEST_CONFIG);
+        const { request } = await createTimestampRequest(data, TEST_CONFIG);
         const asn1 = asn1js.fromBER(request.slice().buffer);
         const tsReq = new pkijs.TimeStampReq({ schema: asn1.result });
 

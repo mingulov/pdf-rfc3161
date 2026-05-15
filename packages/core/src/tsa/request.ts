@@ -1,20 +1,25 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { HASH_ALGORITHM_TO_OID } from "../constants.js";
-import { type HashAlgorithm, type TSAConfig } from "../types.js";
+import {
+    TimestampError,
+    TimestampErrorCode,
+    type HashAlgorithm,
+    type TimestampRequestOptions,
+} from "../types.js";
+import { toArrayBuffer } from "../utils.js";
+import { ensureWebCrypto } from "../utils/web-crypto.js";
 
-// Polyfill for Node.js environments (e.g. tests) where globalThis.crypto might be missing
-if (typeof globalThis.crypto === "undefined") {
-    try {
-        const nodeCrypto = (require as unknown as (id: string) => { webcrypto?: Crypto })(
-            "node:crypto"
-        );
-        if (nodeCrypto.webcrypto) {
-            globalThis.crypto = nodeCrypto.webcrypto;
-        }
-    } catch {
-        // Ignore if require or node:crypto is not available (e.g. in browser/worker)
-    }
+/**
+ * A TimeStampReq DER bundled with the random nonce that was embedded inside it.
+ * Callers must keep the nonce around to verify the TimeStampResp on the way back
+ * (RFC 3161 §2.4.2 replay defence).
+ */
+export interface TimestampRequest {
+    /** The DER-encoded TimeStampReq, ready to send to the TSA */
+    request: Uint8Array;
+    /** The 8-byte random nonce embedded in the request */
+    nonce: Uint8Array;
 }
 
 /**
@@ -22,104 +27,100 @@ if (typeof globalThis.crypto === "undefined") {
  *
  * @param data - The data to be timestamped (will be hashed)
  * @param config - TSA configuration
- * @returns The DER-encoded TimeStampReq
+ * @returns The DER-encoded TimeStampReq paired with the nonce embedded inside it.
+ *
+ * @example
+ * ```typescript
+ * const { request, nonce } = await createTimestampRequest(data, { hashAlgorithm: "SHA-256" });
+ * const responseBytes = await sendTimestampRequest(request, { url: tsaUrl });
+ * const info = parseTimestampResponse(responseBytes);
+ * validateTimestampResponse(info, hash, "SHA-256", nonce); // verify echoed nonce
+ * ```
  */
 export async function createTimestampRequest(
     data: Uint8Array,
-    config: Omit<TSAConfig, "url"> & { url?: string }
-): Promise<Uint8Array> {
-    const hashAlgorithm: HashAlgorithm = config.hashAlgorithm ?? "SHA-256";
+    options: TimestampRequestOptions = {}
+): Promise<TimestampRequest> {
+    await ensureWebCrypto();
+    const hashAlgorithm: HashAlgorithm = options.hashAlgorithm ?? "SHA-256";
 
     // Hash the data using Web Crypto API (edge-compatible)
-    // Use slice() to get a proper ArrayBuffer from Uint8Array
-    const hashBuffer = await crypto.subtle.digest(hashAlgorithm, data.slice().buffer);
+    const hashBuffer = await crypto.subtle.digest(hashAlgorithm, toArrayBuffer(data));
 
-    // Generate random nonce for replay protection
-    const nonce = new Uint8Array(8);
-    crypto.getRandomValues(nonce);
-
-    // Get OID for the hash algorithm
-    const algorithmOID = HASH_ALGORITHM_TO_OID[hashAlgorithm];
-    if (!algorithmOID) {
-        throw new Error(`Unsupported hash algorithm: ${hashAlgorithm} `);
-    }
-
-    // Create MessageImprint structure
-    const messageImprint = new pkijs.MessageImprint({
-        hashAlgorithm: new pkijs.AlgorithmIdentifier({
-            algorithmId: algorithmOID,
-        }),
-        hashedMessage: new asn1js.OctetString({ valueHex: hashBuffer }),
-    });
-
-    // Build the TimeStampReq
-    const tsReq = new pkijs.TimeStampReq({
-        version: 1,
-        messageImprint,
-        certReq: config.requestCertificate ?? true,
-        nonce: new asn1js.Integer({ valueHex: nonce.slice().buffer }),
-    });
-
-    // Add policy OID if specified
-    if (config.policy) {
-        tsReq.reqPolicy = config.policy;
-    }
-
-    // Encode to DER
-    const schema = tsReq.toSchema();
-    const berBuffer = schema.toBER(false);
-
-    return new Uint8Array(berBuffer);
+    return buildRequest(hashBuffer, hashAlgorithm, options);
 }
 
 /**
- * Creates a TimeStampReq for a pre-computed hash.
- * Useful when the caller has already hashed the data.
+ * Creates a TimeStampReq for a pre-computed hash. Useful when the caller has
+ * already hashed the data, or when running in a context where Web Crypto's
+ * `subtle.digest` is unavailable.
+ *
+ * **Sync-crypto constraint (audit M10):** unlike {@link createTimestampRequest},
+ * this function is synchronous and does NOT `await ensureWebCrypto()`. It still
+ * calls `globalThis.crypto.getRandomValues(nonce)` directly, which is always
+ * available on Node 18+ (the library's engines floor), Cloudflare Workers,
+ * Deno, and modern browsers.
+ *
+ * If you are on an environment where `globalThis.crypto` is lazy-initialised
+ * (some embedded runtimes), call `await ensureWebCrypto()` from
+ * `pdf-rfc3161/internals` once at startup before the first call. This avoids
+ * a sync/async signature break for the vast majority of callers who don't
+ * need the polyfill.
  *
  * @param hash - The pre-computed hash
  * @param hashAlgorithm - The algorithm used to compute the hash
- * @param config - TSA configuration (hashAlgorithm in config is ignored)
- * @returns The DER-encoded TimeStampReq
+ * @param options - Request-shaping options (policy, certReq). `hashAlgorithm`
+ *   on the options object is ignored in favour of the explicit positional arg.
+ * @returns The DER-encoded TimeStampReq paired with its nonce.
+ *
+ * @example
+ * ```typescript
+ * // note: sync, unlike createTimestampRequest
+ * const { request, nonce } = createTimestampRequestFromHash(precomputedSha256, "SHA-256");
+ * ```
  */
 export function createTimestampRequestFromHash(
     hash: Uint8Array,
     hashAlgorithm: HashAlgorithm,
-    config: Omit<TSAConfig, "hashAlgorithm">
-): Uint8Array {
-    // Generate random nonce for replay protection
+    options: Omit<TimestampRequestOptions, "hashAlgorithm"> = {}
+): TimestampRequest {
+    return buildRequest(toArrayBuffer(hash), hashAlgorithm, options);
+}
+
+function buildRequest(
+    hashBuffer: ArrayBuffer,
+    hashAlgorithm: HashAlgorithm,
+    options: TimestampRequestOptions
+): TimestampRequest {
     const nonce = new Uint8Array(8);
     crypto.getRandomValues(nonce);
 
-    // Get OID for the hash algorithm
     const algorithmOID = HASH_ALGORITHM_TO_OID[hashAlgorithm];
     if (!algorithmOID) {
-        throw new Error(`Unsupported hash algorithm: ${hashAlgorithm} `);
+        throw new TimestampError(
+            TimestampErrorCode.UNSUPPORTED_ALGORITHM,
+            `Unsupported hash algorithm: ${hashAlgorithm}`
+        );
     }
 
-    // Create MessageImprint structure
     const messageImprint = new pkijs.MessageImprint({
-        hashAlgorithm: new pkijs.AlgorithmIdentifier({
-            algorithmId: algorithmOID,
-        }),
-        hashedMessage: new asn1js.OctetString({ valueHex: hash.slice().buffer }),
+        hashAlgorithm: new pkijs.AlgorithmIdentifier({ algorithmId: algorithmOID }),
+        hashedMessage: new asn1js.OctetString({ valueHex: hashBuffer }),
     });
 
-    // Build the TimeStampReq
     const tsReq = new pkijs.TimeStampReq({
         version: 1,
         messageImprint,
-        certReq: config.requestCertificate ?? true,
-        nonce: new asn1js.Integer({ valueHex: nonce.slice().buffer }),
+        certReq: options.requestCertificate ?? true,
+        nonce: new asn1js.Integer({ valueHex: toArrayBuffer(nonce) }),
     });
 
-    // Add policy OID if specified
-    if (config.policy) {
-        tsReq.reqPolicy = config.policy;
+    if (options.policy) {
+        tsReq.reqPolicy = options.policy;
     }
 
-    // Encode to DER
     const schema = tsReq.toSchema();
     const berBuffer = schema.toBER(false);
 
-    return new Uint8Array(berBuffer);
+    return { request: new Uint8Array(berBuffer), nonce };
 }
