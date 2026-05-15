@@ -24,12 +24,12 @@
     },
     "devDependencies": {
         "@types/node": "^25.8.0",
-        "@vitest/coverage-v8": "^4.0.17",
+        "@vitest/coverage-v8": "^4.1.6",
         "eslint": "^9.39.2",
         "pdf-lib": "^1.17.1",
         "tsx": "^4.22.0",
         "typescript": "^5.9.3",
-        "vitest": "^4.0.17"
+        "vitest": "^4.1.6"
     },
     "engines": {
         "node": ">=18.0.0"
