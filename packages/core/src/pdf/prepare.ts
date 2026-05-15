@@ -310,8 +310,6 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         `/Contents\\s{0,100}<(0{${String(placeholderHexLength)}})>`,
         "g"
     );
-    let placeholderMatch: RegExpExecArray | null = null;
-
     // Helper to find match in string
     const findMatch = (str: string) => {
         let m;
@@ -325,7 +323,7 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         return pMatch;
     };
 
-    placeholderMatch = findMatch(tailString);
+    let placeholderMatch: RegExpExecArray | null = findMatch(tailString);
 
     // If not found in tail, search the whole file (expensive but necessary fallback)
     if (!placeholderMatch?.[1]) {

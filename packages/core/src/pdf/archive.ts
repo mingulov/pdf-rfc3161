@@ -162,9 +162,8 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
 
     // 4. Update the DSS with collected information
     // Fetch missing revocation data (best effort)
-    let completeData = ltvData;
     const ltvResult = await completeLTVData(ltvData);
-    completeData = ltvResult.data;
+    const completeData = ltvResult.data;
 
     // Log any errors encountered during LTV enrichment (for debugging)
     if (ltvResult.errors.length > 0) {

@@ -1,10 +1,6 @@
 // Internal helpers for working around pdf-lib-incremental-save quirks.
 // Not part of the public API.
 
-interface PDFContextInternal {
-    largestObjectNumber: number;
-}
-
 /**
  * Scans the raw PDF bytes for object headers (`N G obj`) and forces
  * `context.largestObjectNumber` to at least that maximum. pdf-lib-incremental-save
@@ -25,5 +21,5 @@ export function restoreLargestObjectNumber(
             maxObjNum = objNum;
         }
     }
-    (context as unknown as PDFContextInternal).largestObjectNumber = maxObjNum;
+    context.largestObjectNumber = maxObjNum;
 }

@@ -78,7 +78,7 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
         statusValue = OCSPResponseStatus.INTERNAL_ERROR;
     }
 
-    const status = statusValue as OCSPResponseStatus;
+    const status: OCSPResponseStatus = statusValue;
 
     if (status !== OCSPResponseStatus.SUCCESSFUL) {
         const statusNames: Record<number, string> = {
