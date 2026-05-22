@@ -18,7 +18,7 @@
         "@eslint/js": "^10.0.1",
         "eslint": "^10.4.0",
         "eslint-plugin-security": "^4.0.0",
-        "prettier": "^3.7.4",
+        "prettier": "^3.8.3",
         "tsup": "^8.5.1",
         "tsx": "^4.22.3",
         "typescript": "^5.9.3",
