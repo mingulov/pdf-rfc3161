@@ -39,8 +39,8 @@ importers:
   packages/cli:
     dependencies:
       asn1js:
-        specifier: ^3.0.6
-        version: 3.0.7
+        specifier: ^3.0.10
+        version: 3.0.10
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -70,8 +70,8 @@ importers:
   packages/core:
     dependencies:
       asn1js:
-        specifier: ^3.0.7
-        version: 3.0.7
+        specifier: ^3.0.10
+        version: 3.0.10
       pdf-lib-incremental-save:
         specifier: ^1.17.4
         version: 1.17.4
@@ -110,8 +110,8 @@ importers:
   packages/demo:
     dependencies:
       asn1js:
-        specifier: ^3.0.7
-        version: 3.0.7
+        specifier: ^3.0.10
+        version: 3.0.10
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.6)
@@ -177,8 +177,8 @@ importers:
   packages/tests:
     dependencies:
       asn1js:
-        specifier: ^3.0.7
-        version: 3.0.7
+        specifier: ^3.0.10
+        version: 3.0.10
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -1199,8 +1199,8 @@ packages:
     resolution: {integrity: sha512-HGyxoOTYUyCM6stUe6EJgnd4EoewAI7zMdfqO+kGjnlZmBDz/cR5pf8r/cR4Wq60sL/p0IkcjUEEPwS3GFrIyw==}
     engines: {node: '>=8'}
 
-  asn1js@3.0.7:
-    resolution: {integrity: sha512-uLvq6KJu04qoQM6gvBfKFjlh6Gl0vOKQuR5cJMDHQkmwfMOQeN3F3SHCv9SNYSL+CRoHvOGFfllDlVz03GQjvQ==}
+  asn1js@3.0.10:
+    resolution: {integrity: sha512-S2s3aOytiKdFRdulw2qPE51MzjzVOisppcVv7jVFR+Kw0kxwvFrDcYA0h7Ndqbmj0HkMIXYWaoj7fli8kgx1eg==}
     engines: {node: '>=12.0.0'}
 
   assertion-error@2.0.1:
@@ -3219,7 +3219,7 @@ snapshots:
 
   array-union@2.1.0: {}
 
-  asn1js@3.0.7:
+  asn1js@3.0.10:
     dependencies:
       pvtsutils: 1.3.6
       pvutils: 1.1.5
@@ -3872,7 +3872,7 @@ snapshots:
   pkijs@3.3.3:
     dependencies:
       '@noble/hashes': 1.4.0
-      asn1js: 3.0.7
+      asn1js: 3.0.10
       bytestreamjs: 2.0.1
       pvtsutils: 1.3.6
       pvutils: 1.1.5

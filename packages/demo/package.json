@@ -12,7 +12,7 @@
         "test:e2e": "playwright test"
     },
     "dependencies": {
-        "asn1js": "^3.0.7",
+        "asn1js": "^3.0.10",
         "lucide-react": "^0.562.0",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.3.3",

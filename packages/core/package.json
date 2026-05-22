@@ -97,7 +97,7 @@
         "prepublishOnly": "npm run build"
     },
     "dependencies": {
-        "asn1js": "^3.0.7",
+        "asn1js": "^3.0.10",
         "pdf-lib-incremental-save": "^1.17.4",
         "pkijs": "^3.3.3"
     },
