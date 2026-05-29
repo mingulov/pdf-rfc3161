@@ -50,7 +50,7 @@
         "eslint": "^10.4.0",
         "tsup": "^8.5.1",
         "tsx": "^4.22.3",
-        "typescript": "^5.9.3"
+        "typescript": "^6.0.3"
     },
     "engines": {
         "node": ">=20.0.0"
