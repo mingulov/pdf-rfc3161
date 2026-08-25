@@ -117,13 +117,25 @@ afterEach(() => {
 });
 
 describe("manual validation scripts", () => {
-    it("keeps the documented PowerShell paths and cleanup separators compatible", () => {
+    it("keeps the transferred-artifact and cleanup paths compatible", () => {
         const document = readFileSync(MANUAL_VALIDATION_DOCUMENT, "utf8");
 
         expect(document).not.toContain("Split-Path -LiteralPath $artifactDirectory -Parent");
+        expect(document).not.toContain("& corepack pnpm@10.30.3");
+        expect(document).toContain("containing the five transferred public files");
+        expect(document).toContain('Join-Path $artifactDirectory "request.tsq"');
+        expect(document).toContain("Get-FileHash -LiteralPath $_ -Algorithm SHA256");
         expect(document).toContain(
-            "$artifactParent = [System.IO.Path]::GetDirectoryName($artifactDirectory)"
+            "for FILE_NAME in timestamped.pdf root.pem response.tsr covered.bin request.tsq"
         );
+        expect(document).toContain(
+            '"timestamped.pdf", "root.pem", "response.tsr", "covered.bin", "request.tsq"'
+        );
+        expect(document).toContain("$unexpectedEntries");
+        expect(document).not.toContain(
+            "Remove-Item -LiteralPath $resolvedArtifactDirectory -Recurse"
+        );
+        expect(document).toContain("Remove-Item -LiteralPath $resolvedArtifactDirectory");
         expect(document).not.toContain(
             '$trimmedArtifactDirectory = $resolvedArtifactDirectory.TrimEnd([char[]]@("\\\\", "/"))'
         );
@@ -284,7 +296,7 @@ describe("manual validation scripts", () => {
         expect(valid.error).toBeUndefined();
         expect(valid.status).toBe(0);
         expect(commandOutput(valid)).toContain("cryptographic consistency PASS");
-        expect(commandOutput(valid)).toContain("Trust policy / H3: NOT EVALUATED");
+        expect(commandOutput(valid)).toContain("TSA trust: NOT EVALUATED");
 
         const tampered = runScript(VERIFY_SCRIPT, [fixtures.tamperedPath]);
         expect(tampered.error).toBeUndefined();

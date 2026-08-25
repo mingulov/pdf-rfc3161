@@ -1,6 +1,10 @@
 # Security Policy
 
-This library handles cryptographic timestamps and processes potentially-untrusted PDFs. We take security reports seriously.
+This library handles cryptographic timestamps and PDF bytes. Its supported signing workflow
+expects callers to supply clean, structurally valid PDFs from a trusted source or a separately
+validated intake process; it is not a PDF sanitizer or repair tool. Deployments may choose to
+accept untrusted PDFs only with an appropriate resource-limited isolation boundary. We take
+security reports seriously.
 
 ## Supported versions
 
@@ -19,9 +23,9 @@ This project uses the official `pdf-lib-incremental-save@1.17.4` loader. Its kno
 indirect-Length, physical object-stream, and unbounded decode behaviors mean that an
 input byte-size limit alone is not a safe CPU or memory boundary for hostile PDFs. See
 [pdf-lib-incremental-save 1.17.4 limitations](docs/pdf-lib-incremental-save-limitations.md)
-before processing untrusted PDFs, and use a resource-limited sandbox where hostile
-inputs are in scope. The local incremental-write guards reduce object-number collision
-risk; they do not make the upstream loader a hardened parser.
+before broadening the supported clean-input assumption, and use a resource-limited sandbox
+where hostile inputs are in scope. The local incremental-write guards reduce object-number
+collision risk; they do not make the upstream loader a hardened parser.
 
 ## Reporting a vulnerability
 

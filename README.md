@@ -78,7 +78,7 @@ stricter options below explicitly. SSRF protection (URL allowlist for AIA /
 OCSP / CRL fetches) is **on by default** and has no opt-out at the public-call
 level.
 
-PAdES-safe timestamp metadata is the default: `/M`, `Reason`, `Location`, and
+Minimal timestamp metadata is the default: `/M`, `Reason`, `Location`, and
 `ContactInfo` are omitted unless explicitly requested. `omitModificationTime:
 false` restores `/M` for a compatibility use case; metadata opt-ins can take a
 file outside baseline recommendations.
@@ -119,7 +119,8 @@ const verified = await verifyTimestamp(ts, {
 
 The unreleased next-major work flips `enableLTV`, `requireTimestampingEKU`,
 and `requireCertValidAtGenTime` to default `true`. See `MIGRATION.md` if you
-need to verify legacy tokens that pre-date the RFC 3161 EKU requirement.
+need to verify legacy or non-conforming tokens whose certificates do not satisfy the
+RFC 3161 EKU requirement.
 
 | Flag                        | Default                        | Recommended for prod                              |
 | --------------------------- | ------------------------------ | ------------------------------------------------- |
@@ -163,7 +164,7 @@ const result = await timestampPdf({
 The default output omits `/M`, `Reason`, `Location`, and `ContactInfo`. If a
 legacy workflow requires metadata, set `omitModificationTime: false` and the
 metadata fields deliberately; do not treat that compatibility shape as the
-PAdES-safe default.
+default output profile.
 
 ### LTV (Long-Term Validation)
 
@@ -206,7 +207,7 @@ const updatedPdf = await addVRIForSignature(
 ```
 
 `addVRI` and `addVRIEnhanced` are deprecated transition wrappers. See
-[MIGRATION.md](./MIGRATION.md) for the safe replacement. Archive renewal never
+[MIGRATION.md](./MIGRATION.md) for the supported field-bound replacement. Archive renewal never
 creates VRI entries automatically.
 
 ### Multiple Timestamps
@@ -490,8 +491,8 @@ The library implements or aims to support the following standards:
 **TrustStore validation:**
 
 For production chain validation, pass a caller-owned `TrustStore` with the roots you accept to
-`verifyTimestamp()`. H3 remains in effect: the library's default trust store is empty, so it does
-not provide an implicit TSA trust anchor or full chain validation policy:
+`verifyTimestamp()`. The library's default trust store is empty, so it does not provide an
+implicit TSA trust anchor or full chain-validation policy:
 
 ```typescript
 import { verifyTimestamp, SimpleTrustStore } from "pdf-rfc3161";
@@ -509,21 +510,28 @@ const verified = await verifyTimestamp(ts, {
 
 - Encrypted/password-protected PDFs are not supported (pdf-lib limitation)
 - The library creates document timestamps, not signature timestamps on existing signatures
+- The signer expects a clean, structurally valid input PDF. It preserves existing bytes and
+  is not a PDF sanitizer, repair tool, or hostile-file validation gateway.
 - The official `pdf-lib-incremental-save@1.17.4` loader has separate hostile-PDF
   resource and parsing limitations. Read
   [pdf-lib-incremental-save limitations](./docs/pdf-lib-incremental-save-limitations.md)
-  and use a resource-limited sandbox for hostile inputs.
+  before broadening a deployment to untrusted input; use a resource-limited sandbox when
+  hostile inputs are in scope.
 
 ## Maintainer validation
 
-The offline conformance and packed-consumer gates complement unit tests. They
+The offline interoperability and packed-consumer gates complement unit tests. They
 use a local TSA/root and do not require a public TSA, Acrobat Reader, or a
-default trust anchor:
+default trust anchor. On a clean Ubuntu 24.04 AMD64 runner, first install the
+locked Python and binary tools using
+[the clean-run recipe](./docs/pades-oracle-tools.md#run-from-a-clean-checkout),
+then run:
 
 ```bash
-pnpm build
-pnpm --filter pdf-rfc3161-tests test:conformance
-pnpm --filter pdf-rfc3161-tests test:package
+corepack pnpm@10.30.3 build
+PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
+  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
+corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:package
 ```
 
 For the tool-role boundaries and license cautions, see

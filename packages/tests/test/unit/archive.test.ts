@@ -525,7 +525,7 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
         });
     });
 
-    // Audit L6: `timestampPdfLTA` is the deprecated historical name for
+    // `timestampPdfLTA` is the deprecated historical name for
     // document-timestamp renewal. It must retain the same call shape. If the
     // alias line in archive.ts (`export const timestampPdfLTA = archiveTimestamp`)
     // is ever removed or mistyped, deep imports that still use the old name

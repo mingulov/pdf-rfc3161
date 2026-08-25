@@ -40,10 +40,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install pinned PAdES oracles
+      - name: Install pinned PAdES validation tools
         run: pnpm --filter pdf-rfc3161-tests run install:pades-oracles
 
-      - name: Verify pinned PAdES oracle versions
+      - name: Verify pinned PAdES validation-tool versions
         run: pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
 
       - name: Install pyHanko
@@ -58,8 +58,8 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Offline PAdES conformance
-        run: pnpm --filter pdf-rfc3161-tests test:conformance
+      - name: Offline PAdES interoperability checks
+        run: pnpm --filter pdf-rfc3161-tests test:interoperability
 
       - name: Packed consumer test
         run: pnpm --filter pdf-rfc3161-tests test:package

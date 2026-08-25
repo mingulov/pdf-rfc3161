@@ -8,6 +8,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
+        "test:interoperability": "tsx scripts/offline-pades-conformance.ts",
         "test:conformance": "tsx scripts/offline-pades-conformance.ts",
         "install:pades-oracles": "tsx scripts/install-pades-oracles.ts",
         "assert:pades-oracles": "tsx scripts/assert-pades-oracles.ts",

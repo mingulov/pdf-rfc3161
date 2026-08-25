@@ -8,7 +8,7 @@ function printHelp(stream = process.stdout) {
     stream.write("Verify RFC 3161 document timestamps with the built pdf-rfc3161 public API.\n\n");
     stream.write("The script checks document ByteRange binding, CMS signature consistency, ");
     stream.write("timestamp EKU and generation-time validity. It does not establish TSA trust: ");
-    stream.write("the default trust store is intentionally empty (H3).\n\n");
+    stream.write("the default trust store is intentionally empty.\n\n");
     stream.write("Options:\n");
     stream.write("  -h, --help  Show this help and exit\n");
 }
@@ -85,7 +85,7 @@ async function verifyPdf(library, pdfPath) {
     }
 
     process.stdout.write(
-        "  Trust policy / H3: NOT EVALUATED (supply a caller-owned trust store for path trust)\n"
+        "  TSA trust: NOT EVALUATED (supply a caller-owned trust store for path trust)\n"
     );
     return allPassed;
 }

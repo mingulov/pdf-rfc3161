@@ -7,9 +7,10 @@ or PDF viewers. The expected wording below is an observation to record for the t
 build, not a contract.
 
 Use [validation-tools.md](validation-tools.md) for the role boundaries of Acrobat,
-qpdf, pyHanko, OpenSSL, and the optional TrueDoc differential. Use
-[pdf-lib-incremental-save-limitations.md](pdf-lib-incremental-save-limitations.md) before
-processing an untrusted PDF outside a resource-limited environment.
+qpdf, pyHanko, and OpenSSL. Do not process an untrusted PDF outside
+resource-limited isolation; the supported signing workflow expects a clean,
+structurally valid input. See
+[pdf-lib-incremental-save-limitations.md](pdf-lib-incremental-save-limitations.md).
 
 Use the tested build's equivalent controls, guided by Adobe's primary documentation for
 [validation](https://helpx.adobe.com/uk/acrobat/desktop/e-sign-documents/manage-digital-signatures/validate-digital-sign.html?screen=modern),
@@ -45,16 +46,26 @@ do not create a trust decision, full LTV result, or indefinite validity claim.
 
 ### Retain a disposable local-root fixture
 
-The normal offline conformance gate uses a temporary directory and deletes its
-root certificate, TSA response, covered bytes, and PDF at the end. For this
-manual protocol, create a fresh, caller-selected absolute output directory
-that does not yet exist; its parent directory must already exist:
+The normal offline interoperability gate uses a temporary directory and deletes its
+root certificate, TSA response, covered bytes, and PDF at the end. Generate
+the retained fixture on an Ubuntu 24.04 AMD64 runner with the same pinned tools
+as CI. Create a fresh, caller-selected absolute output directory that does not
+yet exist; its parent directory must already exist:
 
 ```bash
-corepack pnpm@10.30.3 build
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:conformance \
-  --output-dir <absolute-new-artifact-directory>
+ARTIFACT_DIR=<absolute-new-artifact-directory>
+PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
+  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability \
+    --output-dir "$ARTIFACT_DIR"
+for FILE_NAME in timestamped.pdf root.pem response.tsr covered.bin request.tsq; do
+  sha256sum "$ARTIFACT_DIR/$FILE_NAME"
+done
 ```
+
+Before this block, complete the canonical
+[clean-checkout setup](pades-oracle-tools.md#run-from-a-clean-checkout), including
+its passing temporary interoperability run. Preserve the five SHA-256 lines above
+in the Ubuntu generation record for comparison after transfer.
 
 The command refuses a relative or existing output directory. On success it
 retains the same local fixture artifacts for the same-file checks:
@@ -68,10 +79,12 @@ retains the same local fixture artifacts for the same-file checks:
 | `request.tsq`     | Retain with the response as the matching RFC 3161 request record. |
 
 The directory also contains the disposable `root.key` and `tsa.key`. Treat
-both as private test material: do not share the directory, do not import them,
-and delete the directory after the Reader cleanup record is complete. If the
-gate fails, inspect and remove only this caller-selected directory yourself;
-the command deliberately does not delete a retained output directory.
+both as private test material: do not copy, share, or import them. If Reader
+runs on another machine, transfer only the five public files listed above and
+verify their hashes after transfer. Delete both copies after the Reader cleanup
+record is complete. If the gate fails, inspect and remove only this
+caller-selected directory yourself; the command deliberately does not delete a
+retained output directory.
 
 For a Unix-like shell, set the same-file paths explicitly:
 
@@ -83,39 +96,35 @@ TIMESTAMP_RESPONSE="$ARTIFACT_DIR/response.tsr"
 COVERED_BYTES="$ARTIFACT_DIR/covered.bin"
 ```
 
-Windows PowerShell equivalent (run from the repository root) creates and retains the
-same fixture without Bash variables or continuations:
+On the Windows machine running Reader, set `$artifactDirectory` to the directory
+containing the five transferred public files. This step does not regenerate or
+repair the PDF and must not receive either private key:
 
 ```powershell
 $artifactDirectory = "C:\absolute\path\to\artifact-directory"
 if (-not [System.IO.Path]::IsPathRooted($artifactDirectory)) {
     throw "artifactDirectory must be an absolute path"
 }
-if (Test-Path -LiteralPath $artifactDirectory) {
-    throw "Refusing existing artifact directory: $artifactDirectory"
-}
-$artifactParent = [System.IO.Path]::GetDirectoryName($artifactDirectory)
-if (-not (Test-Path -LiteralPath $artifactParent -PathType Container)) {
-    throw "Artifact directory parent does not exist: $artifactParent"
-}
-
-& corepack pnpm@10.30.3 build
-if ($LASTEXITCODE -ne 0) {
-    throw "Build failed with exit code $LASTEXITCODE"
-}
-& corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:conformance --output-dir $artifactDirectory
-if ($LASTEXITCODE -ne 0) {
-    throw "Offline conformance failed with exit code $LASTEXITCODE"
+if (-not (Test-Path -LiteralPath $artifactDirectory -PathType Container)) {
+    throw "Artifact directory does not exist: $artifactDirectory"
 }
 
 $env:PDF = Join-Path $artifactDirectory "timestamped.pdf"
 $env:ROOT_CERT = Join-Path $artifactDirectory "root.pem"
 $env:TIMESTAMP_RESPONSE = Join-Path $artifactDirectory "response.tsr"
 $env:COVERED_BYTES = Join-Path $artifactDirectory "covered.bin"
+
+@($env:PDF, $env:ROOT_CERT, $env:TIMESTAMP_RESPONSE, $env:COVERED_BYTES,
+  (Join-Path $artifactDirectory "request.tsq")) | ForEach-Object {
+    if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) {
+        throw "Missing retained fixture file: $_"
+    }
+    Get-FileHash -LiteralPath $_ -Algorithm SHA256
+}
 ```
 
-Keep `$artifactDirectory` for the root-fingerprint and cleanup steps below. The command
-creates disposable `root.key` and `tsa.key` too; do not copy or import either private key.
+Compare every transferred hash with the Ubuntu generation record. Keep
+`$artifactDirectory` for the root-fingerprint and cleanup steps below.
 
 Before opening Reader, record this identity sheet:
 
@@ -141,13 +150,13 @@ sha256sum "$PDF"
 sha256sum pnpm-lock.yaml
 ```
 
-On Windows PowerShell, set `PDF` to the same absolute path and record both
-complete outputs:
+On Windows PowerShell, record the transferred PDF hash and compare it with the
+Ubuntu generation record. The lockfile hash also comes from that Ubuntu record;
+the Reader machine does not need a repository checkout:
 
 ```powershell
 $env:PDF = "C:\absolute\path\to\document.pdf"
 Get-FileHash -LiteralPath $env:PDF -Algorithm SHA256
-Get-FileHash -LiteralPath (Join-Path (Get-Location) "pnpm-lock.yaml") -Algorithm SHA256
 ```
 
 On another platform, use its SHA-256 command and record both the command and
@@ -155,74 +164,45 @@ its complete output.
 
 ## Capture same-file open-source evidence
 
-Run every command against the SHA-256-recorded `PDF`, not a regenerated or repaired
-copy. Preserve stdout, stderr, tool version, exit status, and the tested file hash.
+Run these commands on the Ubuntu generation runner against the SHA-256-recorded
+`PDF`, not a regenerated or repaired copy. Preserve stdout, stderr, tool version,
+exit status, and the tested file hash. Activate the same locally extracted
+qpdf/OpenSSL binaries that the interoperability gate checked:
 
 ```bash
+PADES_ROOT="$PWD/packages/tests/.pades-oracles/amd64-qpdf-11.9.0-1.1ubuntu0.1-openssl-3.0.13-0ubuntu3.12/rootfs"
+PATH="$PADES_ROOT/usr/bin:$PATH"
+LD_LIBRARY_PATH="$PADES_ROOT/usr/lib/x86_64-linux-gnu"
+PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python
+export PATH LD_LIBRARY_PATH
+
 qpdf --version
 qpdf --check "$PDF"
 node packages/tests/scripts/verify-signature.cjs "$PDF"
-```
-
-Windows PowerShell equivalent (from the repository root, after setting the retained
-fixture variables above):
-
-```powershell
-& qpdf --version
-$qpdfVersionExit = $LASTEXITCODE
-& qpdf --check $env:PDF
-$qpdfCheckExit = $LASTEXITCODE
-& node packages/tests/scripts/verify-signature.cjs $env:PDF
-$projectVerifierExit = $LASTEXITCODE
-```
-
-Record all three exit values with the command output. A nonzero project-verifier exit
-is evidence of a failed consistency check, not a reason to substitute a different PDF.
-
-The project-owned verifier uses the built public API with document ByteRange binding,
-CMS consistency, strict ESS, timestamp EKU, and generation-time checks. Its `PASS` is
-cryptographic consistency only. It intentionally reports `Trust policy / H3: NOT
-EVALUATED` unless a caller supplies its own trust store; the bundled default trust store
-remains empty.
-
-For the local-root fixture only, run the pinned pyHanko helper against the same PDF and
-the exact corresponding root certificate:
-
-```bash
-python packages/tests/scripts/verify-pades.py "$PDF" "$ROOT_CERT"
-```
-
-Windows PowerShell equivalent (use the Python 3.12 interpreter with the pinned pyHanko
-requirements installed):
-
-```powershell
-& python packages/tests/scripts/verify-pades.py $env:PDF $env:ROOT_CERT
-$pyhankoExit = $LASTEXITCODE
-```
-
-The helper expects exactly one document timestamp and reports JSON fields for timestamp
-count, integrity, and trust. Do not substitute an unrelated root merely to obtain a
-green result. If the PDF was made with a public TSA and no matching local root exists,
-record pyHanko local-root trust as `NOT OBSERVED`.
-
-For the same local fixture, retain the complete TimeStampResp and the exact
-concatenated ByteRange bytes from that creation run. The retained local-root
-option above writes both with the matching root certificate. Then OpenSSL can
-independently check the same PDF's response/imprint pair:
-
-```bash
+"$PYTHON" packages/tests/scripts/verify-pades.py "$PDF" "$ROOT_CERT"
+openssl ts -verify \
+  -queryfile "$ARTIFACT_DIR/request.tsq" \
+  -in "$TIMESTAMP_RESPONSE" \
+  -CAfile "$ROOT_CERT"
 openssl ts -verify \
   -data "$COVERED_BYTES" \
   -in "$TIMESTAMP_RESPONSE" \
   -CAfile "$ROOT_CERT"
 ```
 
-Windows PowerShell equivalent:
+Record every exit value with the command output. A nonzero project-verifier
+exit is evidence of a failed consistency check, not a reason to substitute a
+different PDF. The project-owned verifier uses the built public API with
+document ByteRange binding, CMS consistency, complete ESS binding,
+timestamping EKU, and generation-time checks. Its `PASS` is cryptographic
+consistency only. It intentionally reports `TSA trust: NOT EVALUATED`; the
+separate pyHanko command establishes trust only against the supplied disposable
+local root.
 
-```powershell
-& openssl ts -verify -data $env:COVERED_BYTES -in $env:TIMESTAMP_RESPONSE -CAfile $env:ROOT_CERT
-$opensslExit = $LASTEXITCODE
-```
+The helper expects exactly one document timestamp and reports JSON fields for timestamp
+count, integrity, and trust. Do not substitute an unrelated root merely to obtain a
+green result. If the PDF was made with a public TSA and no matching local root exists,
+record pyHanko local-root trust as `NOT OBSERVED`.
 
 If those three companion artifacts were not retained from the same run, record the
 OpenSSL result as `NOT OBSERVED`. Do not use a response, covered bytes, or root from a
@@ -240,15 +220,15 @@ sha256sum "$ROOT_CERT"
 openssl x509 -in "$ROOT_CERT" -noout -fingerprint -sha256 -subject -issuer -serial
 ```
 
-Windows PowerShell equivalent:
+On Windows, record the transferred root file hash without requiring OpenSSL:
 
 ```powershell
 Get-FileHash -LiteralPath $env:ROOT_CERT -Algorithm SHA256
-& openssl x509 -in $env:ROOT_CERT -noout -fingerprint -sha256 -subject -issuer -serial
-$rootFingerprintExit = $LASTEXITCODE
 ```
 
-Compare that output with the local fixture run record. In the tested Reader build's
+Compare the file hash with the Ubuntu record. Compare the certificate subject,
+issuer, serial, and fingerprint recorded on Ubuntu with the certificate details
+shown by Reader before enabling trust. In the tested Reader build's
 [trusted-certificate manager](https://helpx.adobe.com/acrobat/desktop/protect-documents/encrypt-with-certificates/import-via-digital-sign.html),
 import that exact PEM or DER root, limit trust to the timestamp/signature-validation
 purpose offered by that build, and record every selected trust checkbox. Restart or
@@ -267,8 +247,9 @@ and record the removal and cleanup time. Delete the private local test-root mate
 from the test environment. The record must say whether cleanup was completed.
 
 After Reader removal and recording that cleanup, this Windows PowerShell command safely
-removes only the retained fixture directory. It refuses a filesystem root and checks for
-the expected local-fixture files before deletion:
+removes only the retained fixture directory. Do not run it until all Reader and tamper
+steps below are complete. It refuses a filesystem root, rejects unexpected entries, and
+checks for the expected local-fixture files before deletion:
 
 ```powershell
 $resolvedArtifactDirectory = (Resolve-Path -LiteralPath $artifactDirectory).Path
@@ -284,14 +265,26 @@ if ($trimmedArtifactDirectory -eq $trimmedFilesystemRoot) {
 }
 
 $expectedFixtureFiles = @(
-    "timestamped.pdf", "root.pem", "response.tsr", "covered.bin", "root.key", "tsa.key"
+    "timestamped.pdf", "root.pem", "response.tsr", "covered.bin", "request.tsq"
 )
+$unexpectedEntries = @(
+    Get-ChildItem -LiteralPath $resolvedArtifactDirectory -Force | Where-Object {
+        $_.PSIsContainer -or $_.Name -notin $expectedFixtureFiles
+    }
+)
+if ($unexpectedEntries.Count -ne 0) {
+    throw "Refusing cleanup because the directory contains unexpected entries"
+}
 foreach ($fileName in $expectedFixtureFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $resolvedArtifactDirectory $fileName) -PathType Leaf)) {
+    $fixturePath = Join-Path $resolvedArtifactDirectory $fileName
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
         throw "Refusing cleanup because expected fixture file is missing: $fileName"
     }
 }
-Remove-Item -LiteralPath $resolvedArtifactDirectory -Recurse -Force
+foreach ($fileName in $expectedFixtureFiles) {
+    Remove-Item -LiteralPath (Join-Path $resolvedArtifactDirectory $fileName) -Force
+}
+Remove-Item -LiteralPath $resolvedArtifactDirectory
 ```
 
 ## Reader or Acrobat observation steps
@@ -319,9 +312,11 @@ Remove-Item -LiteralPath $resolvedArtifactDirectory -Recurse -Force
 
 ## One-byte covered-range tamper control
 
-Make a copy at an absolute, caller-selected `TAMPERED` path. From `packages/tests` after
-building the package, run this snippet with absolute `PDF` and `TAMPERED` values. It
-changes exactly one covered ASCII space byte to a tab and refuses to overwrite a file.
+On the Ubuntu generation runner, make a copy at an absolute, caller-selected
+`TAMPERED` path outside the retained artifact directory. From `packages/tests`
+after building the package, run this snippet with absolute `PDF` and `TAMPERED`
+values. It changes exactly one covered ASCII space byte to a tab and refuses to
+overwrite a file.
 
 ```bash
 cd packages/tests
@@ -357,84 +352,26 @@ writeFileSync(target, bytes, { flag: "wx" });
 NODE
 ```
 
-Windows PowerShell equivalent (run from `packages/tests` after building):
-
-```powershell
-$env:PDF = "C:\absolute\path\to\original.pdf"
-$env:TAMPERED = "C:\absolute\path\to\tampered.pdf"
-if (-not [System.IO.Path]::IsPathRooted($env:PDF) -or
-    -not [System.IO.Path]::IsPathRooted($env:TAMPERED)) {
-    throw "PDF and TAMPERED must be absolute paths"
-}
-if (-not (Test-Path -LiteralPath $env:PDF -PathType Leaf)) {
-    throw "PDF does not name an existing file"
-}
-if (Test-Path -LiteralPath $env:TAMPERED) {
-    throw "Refusing to overwrite $env:TAMPERED"
-}
-
-# Copy-Item is the caller-selected, non-overwriting copy step.
-Copy-Item -LiteralPath $env:PDF -Destination $env:TAMPERED -ErrorAction Stop
-
-$byteRange = @'
-import { readFileSync } from "node:fs";
-import { extractTimestamps } from "pdf-rfc3161";
-
-const [timestamp] = await extractTimestamps(new Uint8Array(readFileSync(process.env.PDF)));
-if (!timestamp) throw new Error("No document timestamp found");
-console.log(JSON.stringify(timestamp.byteRange));
-'@ | node --input-type=module | ConvertFrom-Json
-
-if ($byteRange.Count -ne 4) {
-    throw "Expected exactly four ByteRange values"
-}
-$bytes = [System.IO.File]::ReadAllBytes($env:TAMPERED)
-$changed = $false
-for ($pair = 0; $pair -lt 2 -and -not $changed; $pair += 1) {
-    $offset = [int64]$byteRange[$pair * 2]
-    $length = [int64]$byteRange[$pair * 2 + 1]
-    $end = $offset + $length
-    if ($offset -lt 0 -or $length -lt 0 -or $end -gt $bytes.LongLength) {
-        throw "ByteRange is outside the copied PDF"
-    }
-    for ([int64]$index = $offset; $index -lt $end; $index += 1) {
-        if ($bytes[$index] -eq 0x20) {
-            $bytes[$index] = 0x09
-            $changed = $true
-            break
-        }
-    }
-}
-if (-not $changed) {
-    throw "No covered ASCII space was available for the tamper control"
-}
-[System.IO.File]::WriteAllBytes($env:TAMPERED, $bytes)
-Get-FileHash -LiteralPath $env:TAMPERED -Algorithm SHA256
-```
-
-The PowerShell procedure copies first only after refusing an existing target,
-then changes exactly one covered ASCII space byte to a tab. It uses the public
-timestamp extraction API to obtain the ByteRange rather than guessing offsets.
-
-Record the `TAMPERED` SHA-256. First confirm the project verifier exits nonzero:
+Record the `TAMPERED` SHA-256 on Ubuntu and confirm the project verifier exits
+nonzero from the current `packages/tests` directory:
 
 ```bash
-node packages/tests/scripts/verify-signature.cjs "$TAMPERED"
+sha256sum "$TAMPERED"
+node scripts/verify-signature.cjs "$TAMPERED"
 ```
 
-Windows PowerShell equivalent (from the repository root):
+Transfer only that tampered PDF to a separate Windows path and verify its hash
+against the Ubuntu record:
 
 ```powershell
-& node packages/tests/scripts/verify-signature.cjs $env:TAMPERED
-$tamperedVerifierExit = $LASTEXITCODE
-if ($tamperedVerifierExit -eq 0) {
-    throw "Tampered PDF unexpectedly passed the project verifier"
-}
+$env:TAMPERED = "C:\absolute\path\to\tampered.pdf"
+Get-FileHash -LiteralPath $env:TAMPERED -Algorithm SHA256
 ```
 
 Then open the tampered copy in the same Reader settings. Reader must not report it as
 intact. Capture the observed wording in the results table; a tampered file reported as
 intact is a `FAIL` for this protocol even if another UI field is unavailable.
+Delete the separate tampered copy after recording the result.
 
 ## Results table
 

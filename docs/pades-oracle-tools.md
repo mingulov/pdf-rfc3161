@@ -1,7 +1,7 @@
-# Offline PAdES oracle tools
+# Pinned offline PAdES validation tools
 
-The offline PAdES conformance gate deliberately uses external programs as
-independent PDF and RFC 3161 oracles. Their exact Ubuntu package revisions,
+The offline PAdES interoperability gate deliberately uses independent external
+PDF and RFC 3161 validation tools. Their exact Ubuntu package revisions,
 artifact URLs, and SHA-256 values are defined once in
 `packages/tests/scripts/pades-oracles.ts`.
 
@@ -21,10 +21,10 @@ changed, and neither host OpenSSL nor host qpdf is downgraded or replaced.
 
 The installer exports the local `usr/bin` directory through `GITHUB_PATH` and
 the local library directory through `GITHUB_ENV` for subsequent workflow
-steps. The conformance harness rechecks the retained artifacts' SHA-256 and
+steps. The interoperability harness rechecks the retained artifacts' SHA-256 and
 metadata, verifies that qpdf resolves its pinned `libqpdf` and OpenSSL resolves
 its pinned `libssl` and `libcrypto`, then checks executable banners before it
-calls either oracle. This pins the command binaries and those direct runtime
+calls either tool. This pins the command binaries and those direct runtime
 libraries. The dynamic loader and remaining transitive system libraries are
 host-runner dependencies; this gate is intentionally not a fully hermetic
 qpdf/OpenSSL runtime. Runner-image or package drift in the asserted artifacts
@@ -43,6 +43,34 @@ Sources and licenses:
   License 2.0. Ubuntu packaging metadata and copyright files remain applicable
   to the distro packages; no third-party binary is vendored in this repository.
 
+## Run from a clean checkout
+
+The pinned binary installer supports an Ubuntu 24.04 AMD64 runner. The runner
+must already provide Node.js 24 with Corepack and `uv` 0.12.5; CI installs
+those exact prerequisites before this recipe. Verify them first, then install
+the locked Python environment and binary artifacts. `test:interoperability`
+deliberately fails if the required tools are missing or have different
+versions:
+
+```bash
+node --version
+corepack --version
+uv --version
+corepack pnpm@10.30.3 install --frozen-lockfile
+uv python install 3.12.14
+uv venv --python 3.12.14 /tmp/pdf-rfc3161-pades-python
+uv pip install --python /tmp/pdf-rfc3161-pades-python/bin/python \
+  --require-hashes -r packages/tests/python/requirements.lock
+corepack pnpm@10.30.3 --filter pdf-rfc3161-tests run install:pades-oracles
+corepack pnpm@10.30.3 --filter pdf-rfc3161-tests run assert:pades-oracles
+corepack pnpm@10.30.3 build
+PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
+  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
+```
+
+The `/tmp` environment is disposable. CI uses the same hash-locked requirements
+and exact binary policy with its ephemeral Python installation.
+
 ## Bumping the policy
 
 1. Select exact AMD64 `.deb` files from the official Ubuntu 24.04 package
@@ -57,6 +85,6 @@ Sources and licenses:
 4. On Ubuntu 24.04, run
    `pnpm --filter pdf-rfc3161-tests run install:pades-oracles`, then
    `pnpm --filter pdf-rfc3161-tests run assert:pades-oracles` and
-   `pnpm --filter pdf-rfc3161-tests test:conformance`.
+   `pnpm --filter pdf-rfc3161-tests test:interoperability`.
 5. Keep the static policy regression green so CI, release, publish, installer,
    and harness remain on the same policy.

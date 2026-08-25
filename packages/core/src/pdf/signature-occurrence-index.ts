@@ -183,9 +183,9 @@ function skipPdfWhitespace(bytes: Uint8Array, index: number, limit: number): num
 }
 
 /**
- * Classic xref control lines accept only the separator forms qpdf accepts.
- * PDF's NUL whitespace is not valid between `xref` and its subsection
- * columns, even though it remains a generic lexical whitespace byte.
+ * Classic xref control lines accept horizontal tabs, spaces, carriage returns,
+ * line feeds, and form feeds. NUL is not accepted between `xref` and its
+ * subsection columns even though it is a generic PDF lexical whitespace byte.
  */
 function skipXrefControlWhitespace(bytes: Uint8Array, index: number, limit: number): number {
     let result = index;

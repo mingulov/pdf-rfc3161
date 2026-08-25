@@ -37,8 +37,8 @@ afterEach(() => {
     }
 });
 
-describe("offline conformance artifact options", () => {
-    it("shows output-retention help without starting the conformance tools", () => {
+describe("offline interoperability artifact options", () => {
+    it("shows output-retention help without starting the validation tools", () => {
         const result = runScript(["--help"]);
 
         expect(result.error).toBeUndefined();
@@ -47,7 +47,7 @@ describe("offline conformance artifact options", () => {
         expect(commandOutput(result)).toContain("--output-dir");
     });
 
-    it("rejects an existing output directory before starting the conformance tools", () => {
+    it("rejects an existing output directory before starting the validation tools", () => {
         const existingDirectory = temporaryDirectory();
         const result = runScript(["--output-dir", existingDirectory]);
 
