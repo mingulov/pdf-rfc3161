@@ -76,6 +76,14 @@ export default tseslint.config(
         },
     },
     {
-        ignores: ["dist/", "node_modules/", "coverage/", "*.config.ts", "*.config.js"],
+        ignores: [
+            "dist/",
+            "node_modules/",
+            "coverage/",
+            "*.config.ts",
+            "*.config.js",
+            // Node --require preloader; it is intentionally CommonJS and outside tsconfig.
+            "packages/tests/test/fixtures/cli-pades/deterministic-webcrypto.cjs",
+        ],
     }
 );

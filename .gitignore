@@ -30,6 +30,7 @@ npm-debug.log*
 *.tmp
 *.temp
 .cache/
+packages/tests/.pades-oracles/
 
 # Robustness Test Artifacts
 .corpus/

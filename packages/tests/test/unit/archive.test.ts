@@ -13,13 +13,17 @@ import type { LTVData } from "../../../core/src/pdf/ltv.js";
 // These tests cover archive wiring only.
 vi.mock("../../../core/src/pdf/extract.js", () => {
     const extractTimestamps = vi.fn();
+    const verifyTimestamp = vi.fn();
     return {
         extractTimestamps,
         discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
             timestamps: await extractTimestamps(pdf, options),
             malformedFieldNames: [],
         })),
-        verifyTimestamp: vi.fn(),
+        verifyTimestamp,
+        verifyTimestampsWithSharedIndex: vi.fn(async (timestamps: unknown[], options: unknown) =>
+            Promise.all(timestamps.map((timestamp) => verifyTimestamp(timestamp, options)))
+        ),
     };
 });
 
@@ -49,7 +53,12 @@ vi.mock("../../../core/src/utils/logger.js", async (importOriginal: <T = unknown
     };
 });
 
-import { extractTimestamps, verifyTimestamp } from "../../../core/src/pdf/extract.js";
+import {
+    discoverArchiveTimestamps,
+    extractTimestamps,
+    verifyTimestamp,
+    verifyTimestampsWithSharedIndex,
+} from "../../../core/src/pdf/extract.js";
 import { addDSS, completeLTVData, extractLTVData } from "../../../core/src/pdf/ltv.js";
 import { timestampPdf } from "../../../core/src/index.js";
 
@@ -229,6 +238,55 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
         };
 
         await expect(archiveTimestamp(options)).rejects.toThrow("Verification failed");
+    });
+
+    it("shares strict discovery binding and collects a shared value's LTV material once", async () => {
+        const sharedValue = {
+            info: {
+                genTime: new Date("2024-01-01T00:00:00Z"),
+                policy: "1.2.3.4.5",
+                serialNumber: "01",
+                hashAlgorithm: "SHA-256" as const,
+                messageDigest: "00",
+                hasCertificate: true,
+                hashAlgorithmOID: "2.16.840.1.101.3.4.2.1",
+            },
+            token: Uint8Array.of(0x30, 0x10),
+            coversWholeDocument: true,
+            verified: false,
+            byteRange: [0, 100, 200, 50] as [number, number, number, number],
+            contentsObject: { objectNumber: 42, generationNumber: 0 },
+        };
+        const first = { ...sharedValue, fieldName: "First" };
+        const second = { ...sharedValue, fieldName: "Second", token: Uint8Array.of(0x30, 0x10) };
+        const certificate = {
+            toSchema: () => ({ toBER: () => Uint8Array.of(0x30, 0x01, 0x01).buffer }),
+        };
+        const occurrenceIndex = {} as never;
+        vi.mocked(discoverArchiveTimestamps).mockResolvedValueOnce({
+            timestamps: [first, second],
+            malformedFieldNames: [],
+            occurrenceIndex,
+        });
+        vi.mocked(verifyTimestampsWithSharedIndex).mockResolvedValueOnce([
+            { ...first, verified: true, certificates: [certificate] as never },
+            { ...second, verified: true, certificates: [certificate] as never },
+        ]);
+        vi.mocked(extractLTVData).mockReturnValue({
+            certificates: [],
+            crls: [Uint8Array.of(0x30, 0x01, 0x02)],
+            ocspResponses: [Uint8Array.of(0x30, 0x01, 0x03)],
+        });
+        vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+        await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+
+        expect(vi.mocked(verifyTimestampsWithSharedIndex)).toHaveBeenCalledWith(
+            [first, second],
+            { pdf: mockPdf },
+            occurrenceIndex
+        );
+        expect(vi.mocked(extractLTVData)).toHaveBeenCalledTimes(1);
     });
 
     // Audit H1: existing timestamps that fail verifyTimestamp (e.g. legacy

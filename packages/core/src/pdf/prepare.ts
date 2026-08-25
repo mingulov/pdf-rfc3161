@@ -11,6 +11,10 @@ import {
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
+import {
+    MAX_FIELD_HIERARCHY_DEPTH,
+    MAX_FIELD_HIERARCHY_NODES,
+} from "./field-traversal.js";
 import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
 
 /**
@@ -159,8 +163,19 @@ function resolveFieldName(
 function collectFieldNames(context: PDFDict["context"], fields: PDFArray): Set<string> {
     const names = new Set<string>();
     const ancestors = new Set<PDFObject>();
+    const visited = new Set<PDFObject>();
 
-    const visitField = (rawField: PDFObject, parentName: string | undefined): void => {
+    const visitField = (
+        rawField: PDFObject,
+        parentName: string | undefined,
+        depth: number
+    ): void => {
+        if (depth >= MAX_FIELD_HIERARCHY_DEPTH) {
+            throw pdfError("Field hierarchy exceeds the supported depth");
+        }
+        if (visited.size >= MAX_FIELD_HIERARCHY_NODES) {
+            throw pdfError("Field hierarchy exceeds the supported node count");
+        }
         const field = resolvePdfDict(context, rawField, "Field");
         if (field === undefined) {
             throw pdfError("Field must be a PDF dictionary");
@@ -170,35 +185,41 @@ function collectFieldNames(context: PDFDict["context"], fields: PDFArray): Set<s
         if (ancestors.has(identity)) {
             throw pdfError("Field hierarchy contains a cycle");
         }
+        if (visited.has(identity)) {
+            throw pdfError("Field hierarchy reuses a field node");
+        }
         ancestors.add(identity);
+        visited.add(identity);
 
-        const partialName = resolveFieldName(context, field.value.get(PDFName.of("T"), true));
-        const qualifiedName =
-            partialName === undefined
-                ? parentName
-                : parentName === undefined
-                  ? partialName
-                  : `${parentName}.${partialName}`;
-        if (partialName !== undefined && qualifiedName !== undefined) {
-            names.add(qualifiedName);
-        }
-
-        const kids = resolvePdfArray(
-            context,
-            field.value.get(PDFName.of("Kids"), true),
-            "Field /Kids"
-        );
-        if (kids !== undefined) {
-            for (let index = 0; index < kids.value.size(); index++) {
-                visitField(kids.value.get(index), qualifiedName);
+        try {
+            const partialName = resolveFieldName(context, field.value.get(PDFName.of("T"), true));
+            const qualifiedName =
+                partialName === undefined
+                    ? parentName
+                    : parentName === undefined
+                      ? partialName
+                      : `${parentName}.${partialName}`;
+            if (partialName !== undefined && qualifiedName !== undefined) {
+                names.add(qualifiedName);
             }
-        }
 
-        ancestors.delete(identity);
+            const kids = resolvePdfArray(
+                context,
+                field.value.get(PDFName.of("Kids"), true),
+                "Field /Kids"
+            );
+            if (kids !== undefined) {
+                for (let index = 0; index < kids.value.size(); index++) {
+                    visitField(kids.value.get(index), qualifiedName, depth + 1);
+                }
+            }
+        } finally {
+            ancestors.delete(identity);
+        }
     };
 
     for (let index = 0; index < fields.size(); index++) {
-        visitField(fields.get(index), undefined);
+        visitField(fields.get(index), undefined, 0);
     }
 
     return names;

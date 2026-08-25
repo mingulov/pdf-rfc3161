@@ -108,7 +108,7 @@ describe("CLI Command Structure and Validation", () => {
                 )
                 .option(
                     "--no-update",
-                    "Do not collect candidate revocation material from verified existing document timestamps",
+                    "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)",
                     false
                 )
                 .option("--timeout <ms>", "Request timeout in milliseconds", "30000")

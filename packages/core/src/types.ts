@@ -175,6 +175,8 @@ export interface TimestampInfo {
      * Optional in the protocol; populated when the TSTInfo includes a nonce field.
      * Used by TimestampSession's request-bound replay defence when it compares
      * the response with the nonce from the original request.
+     * Extracted fields that inherit one selected PDF /V may share this buffer;
+     * treat it as read-only and copy it before mutation.
      */
     nonce?: Uint8Array;
 }

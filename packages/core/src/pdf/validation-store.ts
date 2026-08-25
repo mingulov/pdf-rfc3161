@@ -8,13 +8,13 @@ import {
     PDFObject,
     PDFRawStream,
     PDFRef,
-    PDFString,
 } from "pdf-lib-incremental-save";
 import { TimestampError, TimestampErrorCode, type ExtractOptions } from "../types.js";
 import { bytesToHex, toArrayBuffer } from "../utils.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import type { LTVData } from "./ltv.js";
 import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
+import { collectAcroFormFields } from "./field-traversal.js";
 
 export interface ValidationStoreUpdate {
     validationData?: LTVData;
@@ -196,140 +196,20 @@ function appendValidationData(
     return selectedRefs;
 }
 
-function resolvePdfString(
-    context: PDFDocument["context"],
-    rawValue: PDFObject | undefined,
-    description: string
-): string | undefined {
-    if (rawValue === undefined) {
-        return undefined;
-    }
-
-    const value = rawValue instanceof PDFRef ? context.lookup(rawValue) : rawValue;
-    if (!(value instanceof PDFString) && !(value instanceof PDFHexString)) {
-        throw validationStoreError(`${description} must be a PDF string`);
-    }
-    return value.decodeText();
-}
-
 function resolveSignatureField(pdfDoc: PDFDocument, fieldName: string): ResolvedPdfValue<PDFDict> {
     const context = pdfDoc.context;
-    const acroForm = resolvePdfValue(
-        context,
-        pdfDoc.catalog.get(PDFName.of("AcroForm")),
-        (value): value is PDFDict => value instanceof PDFDict,
-        "AcroForm",
-        "PDF dictionary"
-    );
-    if (acroForm === undefined) {
-        throw validationStoreError(`Signature field "${fieldName}" was not found`);
-    }
-
-    const fields = resolvePdfValue(
-        context,
-        acroForm.value.get(PDFName.of("Fields")),
-        (value): value is PDFArray => value instanceof PDFArray,
-        "AcroForm /Fields",
-        "PDF array"
-    );
-    if (fields === undefined) {
-        throw validationStoreError(`Signature field "${fieldName}" was not found`);
-    }
-
-    const matches: ResolvedPdfValue<PDFDict>[] = [];
-    const ancestors = new Set<PDFObject>();
-    const visited = new Set<PDFObject>();
-
-    const visitField = (
-        rawField: PDFObject,
-        parentName: string | undefined,
-        expectedParent: PDFRef | undefined
-    ): void => {
-        const field = resolvePdfValue(
-            context,
-            rawField,
-            (value): value is PDFDict => value instanceof PDFDict,
-            "Field",
-            "PDF dictionary"
-        );
-        if (field === undefined) {
-            throw validationStoreError("Field must be a PDF dictionary");
-        }
-
-        const identity = field.ref ?? field.value;
-        if (ancestors.has(identity)) {
-            throw validationStoreError("Field hierarchy contains a cycle");
-        }
-        if (visited.has(identity)) {
-            throw validationStoreError("Field hierarchy reuses a field node");
-        }
-        ancestors.add(identity);
-        visited.add(identity);
-
-        const rawParent = field.value.get(PDFName.of("Parent"));
-        const parent = resolvePdfValue(
-            context,
-            rawParent,
-            (value): value is PDFDict => value instanceof PDFDict,
-            "Field /Parent",
-            "PDF dictionary"
-        );
-        if (expectedParent === undefined) {
-            if (parent !== undefined) {
-                throw validationStoreError("AcroForm root field must not have a /Parent");
-            }
-        } else if (parent !== undefined) {
-            if (
-                !(rawParent instanceof PDFRef) ||
-                parent.ref === undefined ||
-                rawParent.objectNumber !== expectedParent.objectNumber ||
-                rawParent.generationNumber !== expectedParent.generationNumber
-            ) {
-                throw validationStoreError(
-                    "Field /Parent must be the exact indirect containing /Kids field"
-                );
-            }
-        }
-
-        const partialName = resolvePdfString(context, field.value.get(PDFName.of("T")), "Field /T");
-        if (partialName === undefined) {
-            const subtype = resolvePdfValue(
-                context,
-                field.value.get(PDFName.of("Subtype")),
-                (value): value is PDFName => value instanceof PDFName,
-                "Unnamed field /Subtype",
-                "PDF name"
+    let matches: ResolvedPdfValue<PDFDict>[];
+    try {
+        matches = collectAcroFormFields(pdfDoc, { strictParentLinks: true })
+            .filter((field) => field.fieldName === fieldName)
+            .map((field) =>
+                field.ref === undefined ? { value: field.field } : { value: field.field, ref: field.ref }
             );
-            if (subtype?.value.toString() !== "/Widget") {
-                throw validationStoreError("Unnamed field node must be a widget annotation");
-            }
-            ancestors.delete(identity);
-            return;
-        }
-        const qualifiedName =
-            parentName === undefined ? partialName : `${parentName}.${partialName}`;
-        if (qualifiedName === fieldName) {
-            matches.push(field);
-        }
-
-        const kids = resolvePdfValue(
-            context,
-            field.value.get(PDFName.of("Kids")),
-            (value): value is PDFArray => value instanceof PDFArray,
-            "Field /Kids",
-            "PDF array"
+    } catch (error) {
+        throw validationStoreError(
+            error instanceof Error ? error.message : String(error),
+            error
         );
-        if (kids !== undefined) {
-            for (let index = 0; index < kids.value.size(); index++) {
-                visitField(kids.value.get(index), qualifiedName, field.ref);
-            }
-        }
-
-        ancestors.delete(identity);
-    };
-
-    for (let index = 0; index < fields.value.size(); index++) {
-        visitField(fields.value.get(index), undefined, undefined);
     }
 
     if (matches.length === 0) {
@@ -368,7 +248,7 @@ function resolveSignatureField(pdfDoc: PDFDocument, fieldName: string): Resolved
             if (parent === undefined) {
                 return undefined;
             }
-            if (!(rawParent instanceof PDFRef) || parent.ref === undefined || current.ref === undefined) {
+            if (!(rawParent instanceof PDFRef) || parent.ref === undefined) {
                 throw validationStoreError(
                     `Field "${fieldName}" /Parent must be an exact indirect field reference`
                 );
@@ -422,11 +302,7 @@ async function vriKeyForSignatureField(pdfDoc: PDFDocument, fieldName: string): 
                 if (parent === undefined) {
                     return undefined;
                 }
-                if (
-                    !(rawParent instanceof PDFRef) ||
-                    parent.ref === undefined ||
-                    current.ref === undefined
-                ) {
+                if (!(rawParent instanceof PDFRef) || parent.ref === undefined) {
                     throw validationStoreError(
                         `Signature field "${fieldName}" /Parent must be an exact indirect field reference`
                     );
