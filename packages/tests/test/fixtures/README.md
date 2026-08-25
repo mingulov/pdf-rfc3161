@@ -27,6 +27,19 @@ fixtures/
 3. **Timestamps**: Recorded from live TSA servers
 4. **PDFs**: Created using standard PDF generation tools
 
+### Linearized PDF fixture
+
+`ghostscript-linearized.pdf.base64` is a static, base64-encoded PDF generated from
+`linearization-source.pdf.base64` (decoded before generation) with GPL Ghostscript 10.06.0:
+
+```bash
+gs -q -dNOSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -dFastWebView=true \
+  -sOutputFile=ghostscript-linearized.pdf linearization-source.pdf
+```
+
+Its SHA-256 is `710eb9e6a8afa12934faf907a63dffc085d173a2a69ac3073ac643368d2cd173`.
+Tests decode the checked fixture directly; Ghostscript is not a test dependency.
+
 ## Usage in Tests
 
 ```typescript

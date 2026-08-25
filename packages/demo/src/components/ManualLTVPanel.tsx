@@ -83,10 +83,6 @@ export function ManualLTVPanel() {
             const pdfBytes = new Uint8Array(buffer);
             const session = new TimestampSession(pdfBytes, {
                 enableLTV: false, // We will add DSS manually in the final step
-                prepareOptions: {
-                    reason: "Manual LTV Timestamp",
-                    location: "Browser",
-                },
                 hashAlgorithm: "SHA-256",
             });
             sessionRef.current = session;

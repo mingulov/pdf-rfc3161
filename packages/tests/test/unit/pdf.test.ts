@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef } from "pdf-lib-incremental-save";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
 import { embedTimestampToken, extractBytesToHash } from "../../../core/src/pdf/embed.js";
 
@@ -26,7 +27,7 @@ xref
 trailer
 << /Size 4 /Root 1 0 R >>
 startxref
-210
+203
 %%EOF`;
     return new TextEncoder().encode(pdfContent);
 }
@@ -52,6 +53,30 @@ describe("PDF Preparation", () => {
             // pdf-lib outputs with space: /SubFilter /ETSI.RFC3161
             expect(pdfString).toContain("/SubFilter");
             expect(pdfString).toContain("ETSI.RFC3161");
+        });
+
+        it("should emit a directly addressable DocTimeStamp signature dictionary", async () => {
+            const result = await preparePdfForTimestamp(MINIMAL_PDF);
+            const pdfDoc = await PDFDocument.load(result.bytes, { updateMetadata: false });
+            const acroForm = pdfDoc.catalog.lookup(PDFName.of("AcroForm"));
+            expect(acroForm).toBeInstanceOf(PDFDict);
+            const fields = (acroForm as PDFDict).lookup(PDFName.of("Fields"));
+            expect(fields).toBeInstanceOf(PDFArray);
+            const fieldRef = (fields as PDFArray).get(0);
+            expect(fieldRef).toBeInstanceOf(PDFRef);
+            const field = pdfDoc.context.lookup(fieldRef as PDFRef);
+            expect(field).toBeInstanceOf(PDFDict);
+            const fieldDict = field as PDFDict;
+            expect(fieldDict.get(PDFName.of("FT"))?.toString()).toBe("/Sig");
+
+            const signatureRef = fieldDict.get(PDFName.of("V"));
+            expect(signatureRef).toBeInstanceOf(PDFRef);
+            const signature = pdfDoc.context.lookup(signatureRef as PDFRef);
+            expect(signature).toBeInstanceOf(PDFDict);
+            const signatureDict = signature as PDFDict;
+            expect(signatureDict.get(PDFName.of("Type"))?.toString()).toBe("/DocTimeStamp");
+            expect(signatureDict.get(PDFName.of("SubFilter"))?.toString()).toBe("/ETSI.RFC3161");
+            expect(signatureDict.has(PDFName.of("M"))).toBe(false);
         });
 
         it("should include ByteRange", async () => {

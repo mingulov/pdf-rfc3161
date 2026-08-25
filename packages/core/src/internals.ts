@@ -11,8 +11,19 @@
 // (`packages/core/src/pki/cert-client.ts` etc.). They are deliberately not
 // part of the supported public surface.
 
-export { addDSS, addVRI, addVRIEnhanced, extractLTVData, completeLTVData, getDSSInfo } from "./pdf/ltv.js";
-export { embedTimestampToken, extractBytesToHash } from "./pdf/embed.js";
+export {
+    addDSS,
+    addVRIForSignature,
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy source API remains callable.
+    addVRI,
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- legacy source API remains callable.
+    addVRIEnhanced,
+    extractLTVData,
+    completeLTVData,
+    getDSSInfo,
+    type AddVRIForSignatureOptions,
+} from "./pdf/ltv.js";
+export { extractBytesToHash } from "./pdf/embed.js";
 export { preparePdfForTimestamp, type PreparedPDF } from "./pdf/prepare.js";
 export { getOCSPURI, createOCSPRequest, parseOCSPResponse } from "./pki/ocsp-utils.js";
 export { getCaIssuers, findIssuer } from "./pki/cert-utils.js";

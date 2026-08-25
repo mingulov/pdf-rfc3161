@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
-import { PDFDocument } from "pdf-lib-incremental-save";
+import {
+    PDFArray,
+    PDFDict,
+    PDFDocument,
+    PDFName,
+    PDFRef,
+    PDFString,
+} from "pdf-lib-incremental-save";
 
 describe("Regression Tests - Timestamp Chaining", () => {
     it("should detect existing signatures and avoid rewriting PDF (LTA chaining)", async () => {
@@ -76,5 +83,22 @@ describe("Regression Tests - Timestamp Chaining", () => {
                 expect(Number(val)).toBeGreaterThanOrEqual(0);
             }
         }
+    });
+
+    it("should allocate a distinct field name for each chained timestamp", async () => {
+        const document = await PDFDocument.create();
+        document.addPage([100, 100]);
+
+        const first = await preparePdfForTimestamp(await document.save());
+        const second = await preparePdfForTimestamp(first.bytes);
+        const reloaded = await PDFDocument.load(second.bytes, { updateMetadata: false });
+        const acroForm = reloaded.catalog.lookup(PDFName.of("AcroForm"), PDFDict);
+        const fields = acroForm.lookup(PDFName.of("Fields"), PDFArray);
+        const names = [0, 1].map((index) => {
+            const field = reloaded.context.lookup(fields.get(index) as PDFRef, PDFDict);
+            return (field.get(PDFName.of("T")) as PDFString).decodeText();
+        });
+
+        expect(names).toEqual(["Timestamp", "Timestamp_2"]);
     });
 });

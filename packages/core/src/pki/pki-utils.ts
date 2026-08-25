@@ -3,6 +3,7 @@ import * as asn1js from "asn1js";
 import { OID_TO_HASH_ALGORITHM } from "../constants.js";
 import { TimestampError, TimestampErrorCode, type TimestampInfo } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
+export { hasTimestampingEKU } from "../tsa/token-validation.js";
 
 /**
  * Extracts TimestampInfo from a ContentInfo containing SignedData with TSTInfo.
@@ -26,18 +27,28 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
     const eContentAsn1 = signedData.encapContentInfo.eContent;
     let tstInfoBytes: ArrayBuffer;
 
-    if (eContentAsn1 instanceof asn1js.OctetString) {
+    if (eContentAsn1 instanceof asn1js.OctetString && !eContentAsn1.idBlock.isConstructed) {
         tstInfoBytes = toArrayBuffer(new Uint8Array(eContentAsn1.valueBlock.valueHexView));
     } else {
-        // It might be wrapped in a constructed OCTET STRING
-        const eContentAny = eContentAsn1 as { valueBlock?: { value?: asn1js.OctetString[] } };
+        // CMS parsers commonly normalize eContent to a constructed OCTET STRING.
+        const segments =
+            eContentAsn1 instanceof asn1js.OctetString ? eContentAsn1.valueBlock.value : [];
         if (
-            eContentAny.valueBlock?.value &&
-            eContentAny.valueBlock.value[0] instanceof asn1js.OctetString
+            segments.length > 0 &&
+            segments.every(
+                (segment): segment is asn1js.OctetString =>
+                    segment instanceof asn1js.OctetString && !segment.idBlock.isConstructed
+            )
         ) {
-            tstInfoBytes = toArrayBuffer(new Uint8Array(
-                eContentAny.valueBlock.value[0].valueBlock.valueHexView
-            ));
+            const values = segments.map((segment) => new Uint8Array(segment.valueBlock.valueHexView));
+            const length = values.reduce((total, value) => total + value.length, 0);
+            const value = new Uint8Array(length);
+            let offset = 0;
+            for (const segment of values) {
+                value.set(segment, offset);
+                offset += segment.length;
+            }
+            tstInfoBytes = toArrayBuffer(value);
         } else {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
@@ -158,13 +169,6 @@ export function parseTimestampToken(token: Uint8Array): TimestampInfo {
     }
 }
 
-/** OID for ExtendedKeyUsage extension (RFC 5280) */
-const EKU_EXTENSION_OID = "2.5.29.37";
-/** OID for id-kp-timeStamping (RFC 3161 Sec. 2.3) */
-const ID_KP_TIMESTAMPING = "1.3.6.1.5.5.7.3.8";
-/** OID for anyExtendedKeyUsage (RFC 5280) */
-const ID_ANY_EXTENDED_KEY_USAGE = "2.5.29.37.0";
-
 /**
  * Reports whether a certificate is valid at a given point in time
  * (notBefore <= time <= notAfter). Returns false defensively when the
@@ -178,40 +182,4 @@ export function isCertValidAtTime(cert: pkijs.Certificate, time: Date): boolean 
         return false;
     }
     return time.getTime() >= notBefore.getTime() && time.getTime() <= notAfter.getTime();
-}
-
-/**
- * Reports whether a certificate's ExtendedKeyUsage allows the timestamping
- * role per RFC 3161 Sec. 2.3. Accepts the explicit id-kp-timeStamping OID or
- * anyExtendedKeyUsage (the catch-all from RFC 5280). Returns false when no
- * EKU extension is present -- this rejects certs that haven't been issued
- * specifically for the TSA role, which is the whole point of the check.
- */
-export function hasTimestampingEKU(cert: pkijs.Certificate): boolean {
-    if (!cert.extensions) {
-        return false;
-    }
-    for (const ext of cert.extensions) {
-        if (ext.extnID !== EKU_EXTENSION_OID) {
-            continue;
-        }
-        try {
-            const parsed = asn1js.fromBER(ext.extnValue.valueBlock.valueHexView);
-            if (parsed.offset === -1 || !(parsed.result instanceof asn1js.Sequence)) {
-                return false;
-            }
-            for (const item of parsed.result.valueBlock.value) {
-                if (item instanceof asn1js.ObjectIdentifier) {
-                    const oid = item.valueBlock.toString();
-                    if (oid === ID_KP_TIMESTAMPING || oid === ID_ANY_EXTENDED_KEY_USAGE) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    }
-    return false;
 }

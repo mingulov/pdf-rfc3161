@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef } from "pdf-lib-incremental-save";
 import { timestampPdf, TimestampErrorCode } from "../../../core/src/index.js";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
 
@@ -8,6 +9,17 @@ function createTestPdf(sizeKB = 1): Uint8Array {
 }
 
 describe("Timestamp Options Unit Tests", () => {
+    it("rejects certReq=false from the one-call API before PDF embedding", async () => {
+        await expect(
+            timestampPdf({
+                pdf: new Uint8Array(),
+                tsa: { url: "http://example.com", requestCertificate: false },
+            })
+        ).rejects.toMatchObject({
+            code: TimestampErrorCode.INVALID_ARGUMENT,
+        });
+    });
+
     it("should reject PDFs larger than MAX_PDF_SIZE", async () => {
         const largePdf = createTestPdf(1);
         // Mock the MAX_PDF_SIZE Check by passing a small maxSize
@@ -25,8 +37,7 @@ describe("Timestamp Options Unit Tests", () => {
         }
     });
 
-    it("should accept PDFs smaller than maxSize", async () => {
-        // We expect this to fail later at PDF parsing, not size check
+    it("rejects a malformed PDF smaller than maxSize without treating it as a size error", async () => {
         const smallPdf = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52]); // %PDF-1.4 header only
 
         try {
@@ -37,7 +48,7 @@ describe("Timestamp Options Unit Tests", () => {
             });
             // If it fails here, it should be because of parsing or network, NOT size
         } catch (error: any) {
-            expect(error.code).not.toBe(TimestampErrorCode.PDF_ERROR);
+            expect(error.code).toBe(TimestampErrorCode.PDF_ERROR);
             expect(error.message).not.toContain("exceeds maximum");
         }
     });
@@ -55,14 +66,14 @@ endobj
 endobj
 xref
 0 4
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
 trailer
 << /Size 4 /Root 1 0 R >>
 startxref
-210
+203
 %%EOF`);
 
         const result = await preparePdfForTimestamp(minimalPdf, {
@@ -95,7 +106,7 @@ xref
 trailer
 << /Size 4 /Root 1 0 R >>
 startxref
-210
+203
 %%EOF`);
 
         const result = await preparePdfForTimestamp(minimalPdf, {});
@@ -104,5 +115,46 @@ startxref
         // Instead, verify the signature type is present (RFC3161 timestamp)
         const pdfString = new TextDecoder("latin1").decode(result.bytes);
         expect(pdfString).toContain("ETSI.RFC3161");
+    });
+
+    it("should restore legacy metadata when modification time is explicitly enabled", async () => {
+        const minimalPdf = new TextEncoder().encode(`%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> >>
+endobj
+xref
+0 4
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+trailer
+<< /Size 4 /Root 1 0 R >>
+startxref
+203
+%%EOF`);
+
+        const prepared = await preparePdfForTimestamp(minimalPdf, {
+            omitModificationTime: false,
+            reason: "compatibility reason",
+            location: "compatibility location",
+            contactInfo: "compatibility contact",
+        });
+        const pdfDoc = await PDFDocument.load(prepared.bytes, { updateMetadata: false });
+        const acroForm = pdfDoc.catalog.lookup(PDFName.of("AcroForm")) as PDFDict;
+        const fields = acroForm.lookup(PDFName.of("Fields")) as PDFArray;
+        const field = pdfDoc.context.lookup(fields.get(0) as PDFRef) as PDFDict;
+        const signature = pdfDoc.context.lookup(field.get(PDFName.of("V")) as PDFRef) as PDFDict;
+
+        expect(signature.has(PDFName.of("M"))).toBe(true);
+        expect(signature.has(PDFName.of("Reason"))).toBe(true);
+        expect(signature.has(PDFName.of("Location"))).toBe(true);
+        expect(signature.has(PDFName.of("ContactInfo"))).toBe(true);
     });
 });

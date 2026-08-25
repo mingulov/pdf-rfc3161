@@ -1,7 +1,33 @@
 import { describe, it, expect } from "vitest";
 import { extractLTVData, addDSS, type LTVData } from "../../../core/src/pdf/ltv.js";
 import { TimestampError } from "../../../core/src/types.js";
-import { PDFDocument } from "pdf-lib-incremental-save";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream } from "pdf-lib-incremental-save";
+
+async function readDssBytes(pdfBytes: Uint8Array, key: string): Promise<Uint8Array[]> {
+    const pdfDoc = await PDFDocument.load(pdfBytes, { updateMetadata: false });
+    const dss = pdfDoc.catalog.lookup(PDFName.of("DSS"));
+
+    expect(dss).toBeInstanceOf(PDFDict);
+    if (!(dss instanceof PDFDict)) {
+        return [];
+    }
+
+    const entries = dss.lookup(PDFName.of(key));
+    expect(entries).toBeInstanceOf(PDFArray);
+    if (!(entries instanceof PDFArray)) {
+        return [];
+    }
+
+    const bytes: Uint8Array[] = [];
+    for (let index = 0; index < entries.size(); index++) {
+        const stream = entries.lookup(index);
+        expect(stream).toBeInstanceOf(PDFRawStream);
+        if (stream instanceof PDFRawStream) {
+            bytes.push(stream.getContents());
+        }
+    }
+    return bytes;
+}
 
 describe("LTV Functions", () => {
     describe("extractLTVData", () => {
@@ -90,6 +116,31 @@ describe("LTV Functions", () => {
             // Original bytes preserved
             const originalPortion = pdfWithDss.slice(0, originalPdfBytes.length);
             expect(originalPortion).toEqual(originalPdfBytes);
+        });
+
+        it("should append new validation material without replacing existing DSS arrays", async () => {
+            const pdfDoc = await PDFDocument.create();
+            pdfDoc.addPage([612, 792]);
+            const pdf = await pdfDoc.save();
+
+            const first = await addDSS(pdf, {
+                certificates: [Uint8Array.of(0x30, 0x01)],
+                crls: [Uint8Array.of(0x30, 0x02)],
+                ocspResponses: [],
+            });
+            const second = await addDSS(first, {
+                certificates: [Uint8Array.of(0x30, 0x01), Uint8Array.of(0x30, 0x03)],
+                crls: [],
+                ocspResponses: [Uint8Array.of(0x30, 0x04)],
+            });
+
+            expect(second.slice(0, first.length)).toEqual(first);
+            expect(await readDssBytes(second, "Certs")).toEqual([
+                Uint8Array.of(0x30, 0x01),
+                Uint8Array.of(0x30, 0x03),
+            ]);
+            expect(await readDssBytes(second, "CRLs")).toEqual([Uint8Array.of(0x30, 0x02)]);
+            expect(await readDssBytes(second, "OCSPs")).toEqual([Uint8Array.of(0x30, 0x04)]);
         });
     });
 });

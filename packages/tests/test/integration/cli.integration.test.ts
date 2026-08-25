@@ -400,10 +400,12 @@ describe("CLI Integration Tests", () => {
     // The remaining three -- --trust-store, --reject-on-revocation-warning,
     // --ignore-encryption -- get their own block here.
     describe("CLI 0.2.x security flag coverage (audit L3)", () => {
-        it("--reject-on-revocation-warning appears in `timestamp --help`", async () => {
+        it("--reject-on-revocation-warning remains a documented deprecated no-op", async () => {
             const result = await runCli(["timestamp", "--help"]);
             expect(result.code).toBe(0);
             expect(result.stdout).toContain("--reject-on-revocation-warning");
+            expect(result.stdout).toContain("Deprecated no-op");
+            expect(result.stdout).toMatch(/TSA statuses 4\/5 are always\s{1,100}fatal/);
         });
 
         it("`timestamp --reject-on-revocation-warning` parses (no Unknown option)", async () => {

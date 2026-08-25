@@ -208,6 +208,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
 
                 // Add VRI entry for this signature
                 if (Object.keys(revocationData).length > 0) {
+                    // eslint-disable-next-line @typescript-eslint/no-deprecated -- Task 4 removes automatic VRI.
                     currentPdf = await addVRI(currentPdf, signingCert, revocationData);
                 }
             }
@@ -247,6 +248,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
         omitModificationTime: options.omitModificationTime,
         maxSize: options.maxSize,
         optimizePlaceholder: options.optimizePlaceholder,
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- forwarded for source compatibility
         rejectOnRevocationWarning: options.rejectOnRevocationWarning,
         enableLTV: false, // see note above
     });

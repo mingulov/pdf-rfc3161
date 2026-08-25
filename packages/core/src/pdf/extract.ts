@@ -1,5 +1,4 @@
 import * as pkijs from "pkijs";
-import * as asn1js from "asn1js";
 import {
     PDFDocument,
     PDFDict,
@@ -16,10 +15,21 @@ import {
     type VerificationOptions,
     type ExtractOptions,
 } from "../types.js";
-import { toArrayBuffer, hexToBytes, bytesToHex, extractBytesFromByteRange } from "../utils.js";
+import { toArrayBuffer, bytesToHex, extractBytesFromByteRange } from "../utils.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import { parsePdfDate } from "../utils/pdf-date.js";
-import { parseTimestampToken, hasTimestampingEKU, isCertValidAtTime } from "../pki/pki-utils.js";
+import {
+    parseTimestampToken as extractTimestampInfo,
+    isCertValidAtTime,
+} from "../pki/pki-utils.js";
+import {
+    getEmbeddedCertificates,
+    hasTimestampingEKU,
+    parseTimestampToken as parseStrictTimestampToken,
+    selectSignerCertificate,
+    validateTimestampESS,
+    verifyTimestampCmsSignature,
+} from "../tsa/token-validation.js";
 
 /**
  * Information about an extracted timestamp signature from a PDF
@@ -29,6 +39,8 @@ export interface ExtractedTimestamp {
     info: TimestampInfo;
     /** The raw timestamp token (DER-encoded ContentInfo) */
     token: Uint8Array;
+    /** Complete decoded /Contents value bytes, including reserved zero padding. */
+    contentsValueBytes: Uint8Array;
     /** The field name in the PDF */
     fieldName: string;
     /** Whether the signature covers the entire document */
@@ -56,6 +68,57 @@ export interface ExtractedTimestamp {
     contactInfo?: string;
     /** The Modification Time (M) entry from the PDF Signature Dictionary */
     m?: Date;
+}
+
+/**
+ * Returns the exact length of one canonical DER TLV at the start of `bytes`.
+ * PDF /Contents reserves a fixed-width hex string, so only the bytes after
+ * this TLV can be considered placeholder padding.
+ */
+function derTlvLength(bytes: Uint8Array): number {
+    const firstLengthOctet = bytes[1];
+    if (bytes.length < 2 || firstLengthOctet === undefined) {
+        throw new Error("Timestamp /Contents does not contain a DER TLV header");
+    }
+    if (firstLengthOctet < 0x80) {
+        const total = 2 + firstLengthOctet;
+        if (total > bytes.length)
+            throw new Error("Timestamp /Contents DER length exceeds its contents");
+        return total;
+    }
+
+    const lengthOctets = firstLengthOctet & 0x7f;
+    if (lengthOctets === 0 || lengthOctets > 6 || 2 + lengthOctets > bytes.length) {
+        throw new Error("Timestamp /Contents uses an invalid DER long-form length");
+    }
+    const firstLengthByte = bytes[2];
+    if (firstLengthByte === undefined || firstLengthByte === 0) {
+        throw new Error("Timestamp /Contents uses a non-canonical DER length");
+    }
+
+    let contentLength = 0;
+    for (let index = 0; index < lengthOctets; index++) {
+        const value = bytes[2 + index];
+        if (value === undefined) throw new Error("Timestamp /Contents has a truncated DER length");
+        contentLength = contentLength * 256 + value;
+    }
+    if (contentLength < 0x80) {
+        throw new Error("Timestamp /Contents uses a non-canonical DER long-form length");
+    }
+    const total = 2 + lengthOctets + contentLength;
+    if (!Number.isSafeInteger(total) || total > bytes.length) {
+        throw new Error("Timestamp /Contents DER length exceeds its contents");
+    }
+    return total;
+}
+
+function tokenWithoutPdfContentsPadding(contents: Uint8Array): Uint8Array {
+    const tokenLength = derTlvLength(contents);
+    const suffix = contents.subarray(tokenLength);
+    if (!suffix.every((byte) => byte === 0)) {
+        throw new Error("Timestamp /Contents has a nonzero suffix after its DER token");
+    }
+    return contents.slice(0, tokenLength);
 }
 
 /**
@@ -138,12 +201,16 @@ export async function extractTimestamps(
             const contents = sigValue.get(PDFName.of("Contents"));
             if (!contents || !(contents instanceof PDFHexString)) continue;
 
-            // Convert hex string to bytes
-            const tokenHex = contents.asString();
-            const token = hexToBytes(tokenHex);
+            // Keep the exact decoded PDF value, including all reserved zero padding.
+            const contentsBytes = contents.asBytes();
 
             // Skip if token is all zeros (placeholder)
-            if (token.every((b) => b === 0)) continue;
+            if (contentsBytes.every((b) => b === 0)) continue;
+
+            // A signature placeholder is fixed-width and therefore carries
+            // zero bytes after the DER token. Derive the token boundary from
+            // its outer DER TLV rather than relaxing the strict token parser.
+            const token = tokenWithoutPdfContentsPadding(contentsBytes);
 
             // Extract ByteRange
             const byteRange = sigValue.get(PDFName.of("ByteRange"));
@@ -157,7 +224,7 @@ export async function extractTimestamps(
             ] as [number, number, number, number];
 
             // Parse the timestamp details
-            const info = parseTimestampToken(token);
+            const info = extractTimestampInfo(token);
 
             // Check if it covers the whole document
             const coversWholeDocument = brValues[2] + brValues[3] === pdfBytes.length;
@@ -199,6 +266,7 @@ export async function extractTimestamps(
             timestamps.push({
                 info,
                 token,
+                contentsValueBytes: contentsBytes.slice(),
                 fieldName,
                 coversWholeDocument,
                 byteRange: brValues,
@@ -222,20 +290,21 @@ export async function extractTimestamps(
  * properties.
  *
  * The verification runs in order:
- *   1. (optional, when `options.pdf` is supplied) The document's
- *      ByteRange hash matches the messageImprint inside the TSTInfo.
- *   2. The SignedData's `eContentType` is `id-ct-TSTInfo` (1.2.840.113549.1.9.16.1.4)
- *      -- not the bare `id-data` workaround value (H2 guard).
- *   3. pkijs `signedData.verify(...)` confirms the signature math.
- *   4. (optional, when `options.trustStore` is supplied) The certificate
- *      chain validates against the supplied trust store.
- *   5. (optional, when `options.requireTimestampingEKU`) The signing
- *      certificate carries `id-kp-timeStamping` (1.3.6.1.5.5.7.3.8) or
- *      `anyExtendedKeyUsage` (G1).
- *   6. (optional, when `options.requireCertValidAtGenTime`) The signing
- *      certificate is valid at the genTime in the token (G2).
- *   7. (optional, when `options.strictESSValidation`) The ESS / ESSv2
- *      signing-certificate attribute is present.
+ *   1. The raw CMS token is parsed strictly and its signer is selected by
+ *      the original issuer/serial or SubjectKeyIdentifier SID.
+ *   2. (optional, when `options.pdf` is supplied) The document ByteRange
+ *      hash matches the parsed messageImprint.
+ *   3. The shared CMS verifier checks signed attributes, content digest, and
+ *      signature math with the SID-selected certificate.
+ *   4. (optional, when `options.trustStore` is supplied) The caller's trust
+ *      policy validates that signer's certificate chain. No default trust is
+ *      assumed by this function.
+ *   5. (optional for historical files) The selected certificate has one
+ *      critical EKU whose sole value is id-kp-timeStamping.
+ *   6. (optional for historical files) The selected certificate is valid at
+ *      the token's generation time.
+ *   7. (optional for historical files) Complete signed ESS v1/v2 bindings
+ *      match the selected certificate.
  *
  * @param timestamp - The {@link ExtractedTimestamp} to verify.
  * @param options - Optional {@link VerificationOptions}.
@@ -243,7 +312,8 @@ export async function extractTimestamps(
  *   `verificationError` and `certificates` populated.
  *
  * @example
- * Basic verify (signature math only):
+ * Basic verify (CMS signature and the default RFC 3161 profile checks; no
+ * trust policy is implied):
  * ```typescript
  * const verified = await verifyTimestamp(extracted);
  * if (!verified.verified) throw new Error(verified.verificationError);
@@ -278,101 +348,48 @@ export async function verifyTimestamp(
     options: VerificationOptions = {}
 ): Promise<ExtractedTimestamp> {
     try {
-        // Step 1: Verify document hash if PDF is provided
+        const parsed = parseStrictTimestampToken(timestamp.token);
+        const certificates = getEmbeddedCertificates(parsed.signedData);
+        const signingCertificate = selectSignerCertificate(parsed.signerInfo, certificates);
+        const crlCount = parsed.signedData.crls?.length ?? 0;
+        const ocspCount =
+            (parsed.signedData as unknown as { ocsps?: unknown[] }).ocsps?.length ?? 0;
+
+        // Step 1: Verify document hash if PDF is provided. Use the parsed
+        // TSTInfo rather than caller-supplied metadata.
         if (options.pdf) {
             await ensureWebCrypto();
             const dataToHash = extractBytesFromByteRange(options.pdf, timestamp.byteRange);
             const hashBuffer = await crypto.subtle.digest(
-                timestamp.info.hashAlgorithm,
+                parsed.info.hashAlgorithm,
                 toArrayBuffer(dataToHash)
             );
             const actualHash = bytesToHex(hashBuffer);
 
-            if (actualHash.toLowerCase() !== timestamp.info.messageDigest.toLowerCase()) {
+            if (actualHash.toLowerCase() !== parsed.info.messageDigest.toLowerCase()) {
                 return {
                     ...timestamp,
                     verified: false,
-                    verificationError: `Document hash mismatch. Expected ${timestamp.info.messageDigest}, found ${actualHash}`,
+                    verificationError: `Document hash mismatch. Expected ${parsed.info.messageDigest}, found ${actualHash}`,
+                    certificates,
                 };
             }
         }
 
-        // Step 2: Verify cryptographic signature of the token
-        const asn1 = asn1js.fromBER(toArrayBuffer(timestamp.token));
-        if (asn1.offset === -1) {
-            return {
-                ...timestamp,
-                verified: false,
-                verificationError: "Failed to parse timestamp token",
-            };
-        }
-
-        const contentInfo = new pkijs.ContentInfo({ schema: asn1.result });
-        const signedData = new pkijs.SignedData({ schema: contentInfo.content });
-
-        // Extract certificates to include in result
-        const certificates: pkijs.Certificate[] = [];
-        if (signedData.certificates) {
-            for (const cert of signedData.certificates) {
-                if (cert instanceof pkijs.Certificate) {
-                    certificates.push(cert);
-                } else {
-                    // Handle CertificateSet member
-                    try {
-                        const certAsn1 = asn1js.fromBER(cert.toSchema().toBER(false));
-                        certificates.push(new pkijs.Certificate({ schema: certAsn1.result }));
-                    } catch {
-                        // Ignore unparseable certs
-                    }
-                }
-            }
-        }
-
-        // H2 guard: an attacker could craft a SignedData whose eContentType is
-        // id-data (1.2.840.113549.1.7.1) with arbitrary content and a valid
-        // signature -- without this check, the override below would silently
-        // accept it as a "valid timestamp". A legitimate RFC 3161 token MUST
-        // declare eContentType = id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4).
-        const TSTINFO_OID = "1.2.840.113549.1.9.16.1.4";
-        const originalEContentType = signedData.encapContentInfo.eContentType;
-        if (originalEContentType !== TSTINFO_OID) {
-            return {
-                ...timestamp,
-                verified: false,
-                verificationError: `Invalid content type: expected id-ct-TSTInfo (${TSTINFO_OID}), got ${originalEContentType}`,
-                certificates,
-            };
-        }
-
-        // Workaround: pkijs refuses to use attached content for non-id-data types
-        // (including id-ct-TSTInfo). Temporarily set the type to id-data so pkijs
-        // verifies the hash of the eContent. The H2 guard above ensures we only
-        // reach this point for legitimate TSTInfo content.
-        signedData.encapContentInfo.eContentType = "1.2.840.113549.1.7.1"; // id-data
-
-        const crlCount = signedData.crls?.length ?? 0;
-        const ocspCount = (signedData as unknown as { ocsps?: unknown[] }).ocsps?.length ?? 0;
-
-        // Verify the SignedData structure (cryptographic integrity)
-        const verifyResult = await signedData.verify({
-            signer: 0,
-            checkChain: false,
-            extendedMode: true,
-        });
-
-        if (!verifyResult.signatureVerified) {
-            return {
-                ...timestamp,
-                verified: false,
-                verificationError: "Signature verification failed",
-                certificates,
-            };
-        }
+        // Step 2: Reuse the pre-embed CMS verifier after selecting the signer
+        // by its original SID. This validates signed attributes, content digest,
+        // and the CMS signature without treating certificate order as authority.
+        await verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signingCertificate);
 
         // If trust store is provided, verify the certificate chain
         if (options.trustStore) {
-            // Use the extracted certificates
-            const isTrusted = await options.trustStore.verifyChain(certificates);
+            // Put the SID-selected signer first. This remains caller-owned
+            // trust policy; self-consistency alone never establishes TSA trust.
+            const chain = [
+                signingCertificate,
+                ...certificates.filter((certificate) => certificate !== signingCertificate),
+            ];
+            const isTrusted = await options.trustStore.verifyChain(chain);
             if (!isTrusted) {
                 return {
                     ...timestamp,
@@ -383,29 +400,16 @@ export async function verifyTimestamp(
             }
         }
 
-        // G1: enforce id-kp-timeStamping ExtendedKeyUsage on the signing cert
-        // (RFC 3161 Sec. 2.3). Defaults to `true` since 0.2.0 -- callers who
-        // need to verify legacy tokens that pre-date the EKU requirement can
-        // opt out with `requireTimestampingEKU: false`. The first cert in
-        // `signedData.certificates` is by convention the signing TSA cert.
+        // G1: strict RFC 3161 EKU validation. This opt-out is retained only
+        // for post-embed historical verification, never the pre-embed gate.
         const requireEKU = options.requireTimestampingEKU ?? true;
         if (requireEKU) {
-            const signingCert = certificates[0];
-            if (!signingCert) {
+            if (!hasTimestampingEKU(signingCertificate)) {
                 return {
                     ...timestamp,
                     verified: false,
                     verificationError:
-                        "requireTimestampingEKU: no signing certificate available to check",
-                    certificates,
-                };
-            }
-            if (!hasTimestampingEKU(signingCert)) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError:
-                        "Signing certificate is missing id-kp-timeStamping (1.3.6.1.5.5.7.3.8) ExtendedKeyUsage required by RFC 3161 Sec. 2.3",
+                        "Signing certificate must have one critical exclusive id-kp-timeStamping ExtendedKeyUsage required by RFC 3161 Sec. 2.3",
                     certificates,
                 };
             }
@@ -417,17 +421,7 @@ export async function verifyTimestamp(
         // `requireCertValidAtGenTime: false`.
         const requireValidity = options.requireCertValidAtGenTime ?? true;
         if (requireValidity) {
-            const signingCert = certificates[0];
-            const genTime = timestamp.info.genTime;
-            if (!signingCert) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError:
-                        "requireCertValidAtGenTime: no signing certificate available to check",
-                    certificates,
-                };
-            }
+            const genTime = parsed.info.genTime;
             if (!(genTime instanceof Date)) {
                 return {
                     ...timestamp,
@@ -437,11 +431,11 @@ export async function verifyTimestamp(
                     certificates,
                 };
             }
-            if (!isCertValidAtTime(signingCert, genTime)) {
+            if (!isCertValidAtTime(signingCertificate, genTime)) {
                 return {
                     ...timestamp,
                     verified: false,
-                    verificationError: `Signing certificate was not valid at genTime ${genTime.toISOString()} (notBefore=${signingCert.notBefore.value instanceof Date ? signingCert.notBefore.value.toISOString() : "unknown"}, notAfter=${signingCert.notAfter.value instanceof Date ? signingCert.notAfter.value.toISOString() : "unknown"})`,
+                    verificationError: `Signing certificate was not valid at genTime ${genTime.toISOString()} (notBefore=${signingCertificate.notBefore.value instanceof Date ? signingCertificate.notBefore.value.toISOString() : "unknown"}, notAfter=${signingCertificate.notAfter.value instanceof Date ? signingCertificate.notAfter.value.toISOString() : "unknown"})`,
                     certificates,
                 };
             }
@@ -449,44 +443,12 @@ export async function verifyTimestamp(
 
         // Strict PAdES/ESS check
         if (options.strictESSValidation) {
-            // Check for signing-certificate (1.2.840.113549.1.9.16.2.12) or signing-certificate-v2 (1.2.840.113549.1.9.16.2.47)
-            const signerInfo = signedData.signerInfos[0];
-            if (!signerInfo) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError: "Strict validation: SignerInfo missing",
-                    certificates,
-                };
-            }
-
-            let hasESS = false;
-            if (signerInfo.signedAttrs?.attributes) {
-                for (const attr of signerInfo.signedAttrs.attributes) {
-                    const oid = attr.type;
-                    if (
-                        oid === "1.2.840.113549.1.9.16.2.12" ||
-                        oid === "1.2.840.113549.1.9.16.2.47"
-                    ) {
-                        hasESS = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!hasESS) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError:
-                        "Strict validation: Missing 'signing-certificate' or 'signing-certificate-v2' (ESS) attribute",
-                    certificates,
-                };
-            }
+            await validateTimestampESS(parsed.signerInfo, signingCertificate);
         }
 
         return {
             ...timestamp,
+            info: parsed.info,
             verified: true,
             certificates,
             crlCount,
@@ -526,7 +488,5 @@ export async function verifyPdfTimestamps(
     options: ExtractOptions & VerificationOptions = {}
 ): Promise<ExtractedTimestamp[]> {
     const timestamps = await extractTimestamps(pdfBytes, options);
-    return Promise.all(
-        timestamps.map((ts) => verifyTimestamp(ts, { pdf: pdfBytes, ...options }))
-    );
+    return Promise.all(timestamps.map((ts) => verifyTimestamp(ts, { pdf: pdfBytes, ...options })));
 }
