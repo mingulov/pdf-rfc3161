@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: Test on Node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +57,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -82,7 +82,7 @@ jobs:
 
   pades-conformance:
     name: Offline PAdES Conformance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
@@ -100,18 +100,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.12.14'
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v9
         with:
           version: '0.12.5'
 
-      - name: Install qpdf and OpenSSL
-        run: sudo apt-get update && sudo apt-get install --yes qpdf openssl
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install pinned PAdES oracles
+        run: pnpm --filter pdf-rfc3161-tests run install:pades-oracles
+
+      - name: Verify pinned PAdES oracle versions
+        run: pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
 
       - name: Install pyHanko
         run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
@@ -124,7 +127,7 @@ jobs:
 
   integration:
     name: Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Only run on main branch to avoid rate limiting from TSAs
     if: github.ref == 'refs/heads/main'
 

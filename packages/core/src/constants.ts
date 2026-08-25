@@ -113,6 +113,14 @@ export const TSA_CONTENT_TYPE = {
 export const MAX_PDF_SIZE = 250 * 1024 * 1024;
 
 /**
+ * Fixed aggregate covered-byte budget for one PDF-level timestamp
+ * verification batch. It is intentionally internal: callers cannot raise it
+ * per request, which keeps repeated /ByteRange extraction and hashing bounded
+ * for untrusted PDFs while still allowing realistic timestamp chains.
+ */
+export const MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES = 512 * 1024 * 1024;
+
+/**
  * Default reserved size for the timestamp signature placeholder.
  * 8192 bytes (8KB) is typically sufficient for most DocTimeStamp tokens.
  */

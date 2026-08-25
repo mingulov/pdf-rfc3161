@@ -9,13 +9,17 @@ import {
 
 vi.mock("../../../core/src/pdf/extract.js", () => {
     const extractTimestamps = vi.fn();
+    const verifyTimestamp = vi.fn();
     return {
         extractTimestamps,
         discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
             timestamps: await extractTimestamps(pdf, options),
             malformedFieldNames: [],
         })),
-        verifyTimestamp: vi.fn(),
+        verifyTimestamp,
+        verifyTimestampsWithSharedIndex: vi.fn(async (timestamps: unknown[], options: unknown) =>
+            Promise.all(timestamps.map((timestamp) => verifyTimestamp(timestamp, options)))
+        ),
     };
 });
 

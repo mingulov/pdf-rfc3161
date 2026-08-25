@@ -6,8 +6,15 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { TimestampSession } from "pdf-rfc3161";
 import { createLocalTsa, TSA_POLICY } from "./local-tsa-fixture";
+import {
+    activatePadesOracleEnvironment,
+    assertPadesOracleTools,
+    PADES_ORACLE_POLICY,
+} from "./pades-oracles.js";
 
 const PYHANKO_VALID_JSON = '{"timestampCount":1,"intact":true,"trusted":true}';
+const PINNED_ORACLE_INSTALLATION_GUIDANCE =
+    "Run pnpm --filter pdf-rfc3161-tests run install:pades-oracles.";
 
 class UsageError extends Error {}
 
@@ -154,14 +161,18 @@ function assertSuccess(
     return result;
 }
 
-function requirePython312(python: string): void {
+function requirePinnedPython(python: string): void {
     const version = assertSuccess(
         python,
         ["--version"],
-        "Install Python 3.12 and set PYTHON to its executable."
+        `Install Python ${PADES_ORACLE_POLICY.pythonVersion} and set PYTHON to its executable.`
     );
     const output = version.stdout.length > 0 ? version.stdout : version.stderr;
-    assert.ok(output.startsWith("Python 3.12."), `Expected Python 3.12, got ${output.trim()}`);
+    assert.equal(
+        output.trim(),
+        `Python ${PADES_ORACLE_POLICY.pythonVersion}`,
+        `Expected Python ${PADES_ORACLE_POLICY.pythonVersion}, got ${output.trim()}`
+    );
 }
 
 function qpdfReferenceKey(value: QpdfValue | undefined): string | undefined {
@@ -374,17 +385,9 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
     const retainArtifacts = options.outputDirectory !== undefined;
 
     try {
-        assertSuccess(
-            "qpdf",
-            ["--version"],
-            "Install qpdf (for example: sudo apt-get install qpdf)."
-        );
-        assertSuccess(
-            "openssl",
-            ["version"],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
-        );
-        requirePython312(python);
+        activatePadesOracleEnvironment();
+        assertPadesOracleTools();
+        requirePinnedPython(python);
 
         const { rootCert, config } = createLocalTsa(workingDirectory);
         const requestPath = join(workingDirectory, "request.tsq");
@@ -415,7 +418,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const response = assertSuccess(
             "openssl",
             ["ts", "-reply", "-queryfile", requestPath, "-config", config, "-out", responsePath],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.equal(response.status, 0, response.stderr);
         const responseBytes = new Uint8Array(readFileSync(responsePath));
@@ -447,13 +450,13 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const qpdf = run(
             "qpdf",
             ["--check", timestampedPdfPath],
-            "Install qpdf (for example: sudo apt-get install qpdf)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.equal(qpdf.status, 0, qpdf.stderr);
         const qpdfJson = assertSuccess(
             "qpdf",
             ["--json", timestampedPdfPath],
-            "Install qpdf (for example: sudo apt-get install qpdf)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         ).stdout;
         assert.match(qpdfJson, /DocTimeStamp/);
         assert.match(qpdfJson, /ETSI\.RFC3161/);
@@ -479,13 +482,13 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const opensslQueryVerify = run(
             "openssl",
             ["ts", "-verify", "-queryfile", requestPath, "-in", responsePath, "-CAfile", rootCert],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.equal(opensslQueryVerify.status, 0, opensslQueryVerify.stderr);
         const opensslVerify = run(
             "openssl",
             ["ts", "-verify", "-data", coveredPath, "-in", responsePath, "-CAfile", rootCert],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.equal(opensslVerify.status, 0, opensslVerify.stderr);
 
@@ -512,7 +515,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
                 "-CAfile",
                 rootCert,
             ],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.notEqual(tamperedOpenSsl.status, 0, tamperedOpenSsl.stderr);
 
@@ -524,7 +527,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const wrongDataOpenSsl = run(
             "openssl",
             ["ts", "-verify", "-data", wrongDataPath, "-in", responsePath, "-CAfile", rootCert],
-            "Install OpenSSL (for example: sudo apt-get install openssl)."
+            PINNED_ORACLE_INSTALLATION_GUIDANCE
         );
         assert.notEqual(wrongDataOpenSsl.status, 0, wrongDataOpenSsl.stderr);
 

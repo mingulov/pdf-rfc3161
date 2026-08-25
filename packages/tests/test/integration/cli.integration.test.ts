@@ -370,17 +370,17 @@ describe("CLI Integration Tests", () => {
             const result = await runCli(["archive", "--help"]);
             expect(result.code).toBe(0);
             expect(result.stdout).toContain("--no-update");
-            // The help describes collection from verified document timestamps
-            // rather than implying generic signature harvesting or validation.
-            expect(result.stdout).toMatch(/candidate revocation material/);
+            // --no-update only skips reuse of embedded CRL/OCSP data. The
+            // archive flow still enriches verified certificates through
+            // completeLTVData, which can fetch fresh OCSP/CRL material.
+            expect(result.stdout).toMatch(/harvest revocation data/);
+            expect(result.stdout).toMatch(/still fetches fresh OCSP\/CRL via\s{1,100}completeLTVData/);
         });
 
-        it("--no-update verbose log should report that existing material is not collected", async () => {
+        it("--no-update verbose log should disclose fresh OCSP/CRL enrichment", async () => {
             // We don't need the archive to succeed; verbose output streams
-            // BEFORE the network call. The presence of the non-collection text
-            // confirms the flag is wired (audit C4 -- previously the line
-            // always said "Fetch fresh" because cmdOptions.noUpdate was
-            // always undefined).
+            // BEFORE the network call. The caveat confirms the negated
+            // option is wired without promising it is network-free.
             const result = await runCli([
                 "archive",
                 "http://freetsa.org/tsr",
@@ -388,7 +388,8 @@ describe("CLI Integration Tests", () => {
                 "--no-update",
                 "--verbose",
             ]);
-            expect(result.stdout).toContain("Do not collect existing material");
+            expect(result.stdout).toContain("Skip embedded revocation data");
+            expect(result.stdout).toContain("still fetch fresh OCSP/CRL via completeLTVData");
         });
 
         it("default archive --verbose should report candidate-material collection", async () => {

@@ -86,6 +86,55 @@ function fieldName(context: PDFDict["context"], fieldRef: PDFRef): string | unde
     return name instanceof PDFString ? name.decodeText() : undefined;
 }
 
+async function repeatedKidsDagPdf(depth = 20): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    let child = context.register(context.obj({ T: PDFString.of("Leaf") }));
+    for (let index = 0; index < depth; index += 1) {
+        child = context.register(
+            context.obj({
+                T: PDFString.of(`N${index.toString()}`),
+                Kids: context.obj([child, child]),
+            })
+        );
+    }
+    document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: context.obj([child]) }));
+    return document.save({ useObjectStreams: false });
+}
+
+async function deepFieldHierarchyPdf(depth = 257): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    let child = context.register(context.obj({}));
+    for (let index = 1; index < depth; index += 1) {
+        child = context.register(context.obj({ Kids: context.obj([child]) }));
+    }
+    document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: context.obj([child]) }));
+    return document.save({ useObjectStreams: false });
+}
+
+async function oversizedFieldHierarchyPdf(nodeCount = 10_001): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const fields = PDFArray.withContext(document.context);
+    for (let index = 0; index < nodeCount; index += 1) {
+        fields.push(document.context.register(document.context.obj({})));
+    }
+    document.catalog.set(PDFName.of("AcroForm"), document.context.obj({ Fields: fields }));
+    return document.save({ useObjectStreams: false });
+}
+
+async function prepareError(pdf: Uint8Array): Promise<unknown> {
+    try {
+        await preparePdfForTimestamp(pdf);
+        return undefined;
+    } catch (error) {
+        return error;
+    }
+}
+
 describe("preparePdfForTimestamp form preservation", () => {
     it.each([
         { indirectAcroForm: false, indirectFields: false, indirectAnnots: false },
@@ -248,4 +297,22 @@ describe("preparePdfForTimestamp form preservation", () => {
             );
         }
     );
+
+    it("rejects a reused /Kids field node before traversing an exponential DAG", async () => {
+        await expect(prepareError(await repeatedKidsDagPdf())).resolves.toMatchObject({
+            code: TimestampErrorCode.PDF_ERROR,
+        });
+    });
+
+    it("rejects a field hierarchy deeper than the shared traversal limit", async () => {
+        await expect(prepareError(await deepFieldHierarchyPdf())).resolves.toMatchObject({
+            code: TimestampErrorCode.PDF_ERROR,
+        });
+    });
+
+    it("rejects more unique field nodes than the shared traversal limit", async () => {
+        await expect(prepareError(await oversizedFieldHierarchyPdf())).resolves.toMatchObject({
+            code: TimestampErrorCode.PDF_ERROR,
+        });
+    });
 });

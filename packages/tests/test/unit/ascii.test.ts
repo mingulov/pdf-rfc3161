@@ -8,14 +8,23 @@ import { test } from "vitest";
  */
 
 const EXTENSIONS = [".ts", ".js", ".cjs", ".mjs", ".md", ".json"];
-const EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage", ".corpus", "docs"];
+const EXCLUDE_DIRS = [
+    "node_modules",
+    ".git",
+    "dist",
+    "coverage",
+    ".corpus",
+    // Generated, gitignored external-oracle cache; not repository source.
+    ".pades-oracles",
+    "docs",
+];
 const EXCLUDE_FILES = ["dummy_token.der"]; // Specific binary fixtures or third-party files
 
 function getFiles(dir: string, allFiles: string[] = []): string[] {
     const files = readdirSync(dir);
     for (const file of files) {
         const path = join(dir, file);
-        if (EXCLUDE_DIRS.some((d) => path.includes(d))) continue;
+        if (EXCLUDE_DIRS.includes(file)) continue;
         if (EXCLUDE_FILES.includes(file)) continue;
 
         if (statSync(path).isDirectory()) {
