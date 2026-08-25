@@ -9,14 +9,14 @@ import * as crlUtils from "../../../core/src/pki/crl-utils.js";
 
 // Mock the client modules
 // We'll spy on them to control behavior
-vi.mock("../../../core/src/pki/ocsp-client.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/ocsp-client.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof ocspClient>()),
         fetchOCSPResponse: vi.fn(),
     };
 });
 
-vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof crlClient>()),
         fetchCRL: vi.fn(),
@@ -24,14 +24,14 @@ vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal) => {
 });
 
 // We might need to mock utils if we want to force specific URLs for testing
-vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof ocspUtils>()),
         getOCSPURI: vi.fn(),
     };
 });
 
-vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof crlUtils>()),
         getCRLDistributionPoints: vi.fn(),
@@ -230,7 +230,7 @@ describe("LTV Revocation Logic", () => {
     );
 });
 
-vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof crlClient>()),
         fetchCRL: vi.fn(),
@@ -238,14 +238,14 @@ vi.mock("../../../core/src/pki/crl-client.js", async (importOriginal) => {
 });
 
 // We might need to mock utils if we want to force specific URLs for testing
-vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof ocspUtils>()),
         getOCSPURI: vi.fn(),
     };
 });
 
-vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal) => {
+vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     return {
         ...(await importOriginal<typeof crlUtils>()),
         getCRLDistributionPoints: vi.fn(),

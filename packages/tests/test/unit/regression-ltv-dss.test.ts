@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { PDFDict, PDFDocument, PDFName, PDFRef } from "pdf-lib-incremental-save";
+import { PDFDocument, PDFName, PDFRef } from "pdf-lib-incremental-save";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
 import { addDSS } from "../../../core/src/pdf/ltv.js";
 import { TimestampErrorCode } from "../../../core/src/types.js";

@@ -1,6 +1,7 @@
 {
     "name": "pdf-rfc3161-monorepo",
     "private": true,
+    "packageManager": "pnpm@10.30.3",
     "description": "Monorepo for pdf-rfc3161 ecosystem",
     "scripts": {
         "build": "pnpm -r run build",
@@ -16,16 +17,24 @@
     "devDependencies": {
         "@changesets/cli": "^2.31.0",
         "@eslint/js": "^10.0.1",
-        "eslint": "^10.4.0",
-        "eslint-plugin-security": "^4.0.0",
-        "prettier": "^3.8.3",
+        "eslint": "^10.9.1",
+        "eslint-plugin-security": "^4.0.1",
+        "prettier": "^3.9.6",
         "tsup": "^8.5.1",
-        "tsx": "^4.22.3",
+        "tsx": "^4.23.12",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.59.4"
+        "typescript-eslint": "^8.68.0"
     },
     "engines": {
-        "node": ">=18.0.0",
+        "node": ">=20.19.0",
         "pnpm": ">=10.0.0"
+    },
+    "pnpm": {
+        "overrides": {
+            "eslint": "10.9.1",
+            "typescript-eslint": "8.68.0",
+            "@typescript-eslint/tsconfig-utils": "8.68.0",
+            "@typescript-eslint/types": "8.68.0"
+        }
     }
 }

@@ -971,6 +971,7 @@ describe("signature-specific VRI", () => {
     );
 });
 
+/* eslint-disable @typescript-eslint/no-deprecated -- compatibility coverage */
 describe("deprecated addVRI compatibility", () => {
     it("rejects calls without an explicit signature field name", async () => {
         const pdf = await createPdfWithFields([{ name: "Timestamp" }]);
@@ -1023,3 +1024,4 @@ describe("deprecated addVRI compatibility", () => {
         ).rejects.toMatchObject({ code: TimestampErrorCode.INVALID_ARGUMENT });
     });
 });
+/* eslint-enable @typescript-eslint/no-deprecated */

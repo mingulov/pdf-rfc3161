@@ -29,6 +29,8 @@ export default defineConfig({
             exclude: [
                 `${coreSrc}/**/*.d.ts`,
                 `${coreSrc}/**/*.test.ts`,
+                // This module contains TypeScript interfaces only; V8 cannot remap it as JavaScript.
+                `${coreSrc}/pki/validation-types.ts`,
             ],
             all: true,
             allowExternal: true,
