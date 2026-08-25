@@ -9,7 +9,7 @@ Pure-JS RFC 3161 PDF timestamping library. Monorepo with edge-runtime support (n
 ```bash
 pnpm install            # uses pnpm workspaces — npm/yarn won't work
 pnpm build              # builds all packages (tsup → ESM + CJS dual)
-pnpm test               # 918 passed, 51 skipped, 2 todo; ~6s wall-clock
+pnpm test               # 965 passed, 51 skipped, 2 todo; ~6s wall-clock
 pnpm typecheck          # tsc --noEmit, all packages
 pnpm lint               # eslint --fix, all packages
 pnpm cli -- <args>      # run CLI from source (tsx)

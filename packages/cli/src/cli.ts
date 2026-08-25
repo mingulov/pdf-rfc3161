@@ -154,7 +154,7 @@ program
                     // The core preserves a caller's explicit legacy
                     // `omitModificationTime: false`, but the CLI has no
                     // documented emit-/M mode. Leave the property absent by
-                    // default so command-line output remains PAdES-safe.
+                    // default; the RFC 3161 token carries the signed genTime.
                     ...(options.omitM ? { omitModificationTime: true } : {}),
                     enableLTV: options.ltv,
                     // --reject-on-revocation-warning remains parser-compatible only.
@@ -218,10 +218,10 @@ program
     // Commander's --no-* syntax stores the negated flag under the un-negated
     // name (`update`), defaulting to true. The previous code read
     // `cmdOptions.noUpdate` which is always undefined, so the flag was a
-    // no-op. See audit C4.
+    // no-op.
     .option(
         "--no-update",
-        "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)"
+        "Skip embedded OCSP/CRL candidates from verified document timestamps (their certificates remain; fresh candidates may still be fetched)"
     )
     .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
@@ -244,7 +244,7 @@ program
                     console.log(`Output:    ${outputFile}`);
                     console.log(`TSA:       ${tsaUrl}`);
                     console.log(
-                        `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Skip embedded revocation data; still fetch fresh OCSP/CRL via completeLTVData"}`
+                        `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Skip embedded OCSP/CRL candidates; timestamp certificates remain and fresh candidates may still be fetched"}`
                     );
                     console.log();
                 }

@@ -61,9 +61,9 @@ interface HeaderScanBudget {
 
 /**
  * Reads a decimal token without ever converting an unsafe value through
- * Number. The scan is intentionally only used after the official loader has
- * accepted the input, as a compatibility guard for missing physical container
- * references rather than as a PDF parser.
+ * Number. The scan is intentionally only used after `PDFDocument.load` has
+ * constructed a context; the original bytes remain untrusted. This is a
+ * compatibility guard for missing physical container references, not a PDF parser.
  */
 function readHeaderInteger(bytes: Uint8Array, offset: number): HeaderInteger {
     let next = offset;
@@ -206,7 +206,7 @@ function largestPhysicalHeaderObjectNumber(pdfBytes: Uint8Array): number {
 }
 
 /**
- * Restores the largest object number after the official loader has populated
+ * Restores the largest object number after `PDFDocument.load` has populated
  * its context. pdf-lib-incremental-save can omit physical ObjStm and XRef
  * container references from that context. The bounded raw-header scan closes
  * that writer-collision gap but is intentionally only a compatibility

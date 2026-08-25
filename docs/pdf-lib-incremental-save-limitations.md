@@ -7,10 +7,20 @@ package, pinned exactly to `1.17.4` in `packages/core/package.json` and
 license is available at `packages/core/node_modules/pdf-lib-incremental-save/LICENSE.md`
 after installation.
 
-This is a maintainer and deployer boundary note. It does not describe a fixed hostile-PDF
-parser. A fork or replacement loader is deferred to separate work. The direct `pako`
-dependency previously used by this project for an experimental preflight is gone; `pako`
-may still be present transitively through the official dependency.
+## Intended input and responsibility boundary
+
+`pdf-rfc3161` is a PDF timestamp signer, not a PDF sanitizer, repair tool, or hostile-file
+security gateway. Its supported signing workflow expects the caller to supply a clean,
+structurally valid PDF from a trusted source or from a separately validated intake process.
+It appends an incremental timestamp revision and deliberately preserves the existing bytes;
+it does not normalize or regenerate the input document.
+
+The potential dependency issues below remain documented so maintainers and deployments that
+choose to accept untrusted PDFs understand the boundary. They are not a claim that this
+library supports deliberately malformed or adversarial input. A fork or replacement loader
+is deferred to separate work. The direct `pako` dependency previously used by this project
+for an experimental preflight is gone; `pako` may still be present transitively through the
+official dependency.
 
 ## What the pinned dependency does
 

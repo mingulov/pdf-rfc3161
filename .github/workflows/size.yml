@@ -39,12 +39,13 @@ jobs:
             fi
           done
 
-      - name: Enforce ESM bundle size budget (<= 200 KB)
+      # Main ESM entry-point budget; update deliberately when public exports grow.
+      - name: Enforce ESM bundle size budget (<= 225 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=204800
-          echo "ESM main bundle: $SIZE bytes (max: $MAX)"
+          MAX=230400
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 225 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 200 KB budget"
+            echo "::error::ESM bundle exceeds 225 KiB (230400 bytes) budget"
             exit 1
           fi

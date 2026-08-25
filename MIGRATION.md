@@ -5,7 +5,7 @@ This document covers breaking changes between major releases of `pdf-rfc3161`.
 ## 0.1.x -> unreleased next major (breaking)
 
 This guide describes unreleased next-major work combining security hardening,
-an API redesign with stricter defaults, and follow-up audit fixes. It does not
+an API redesign with stricter defaults, and PDF timestamp interoperability fixes. It does not
 announce a published version or release date. The basic `timestampPdf({ pdf,
 tsa })` call signature is unchanged, but the verify / extract path and several
 helpers acquire defaults that are stricter than 0.1.x.
@@ -102,11 +102,12 @@ set `enableLTV: false` explicitly.
 
 ### 5. `verifyTimestamp` enforces id-kp-timeStamping EKU and cert-validity-at-genTime by default
 
-The two security checks (G1 and G2 in the audit) previously had to be opted
-into via `requireTimestampingEKU: true` / `requireCertValidAtGenTime: true`.
-In the unreleased API both default to `true`. Verifying a legacy token that
-pre-dates the RFC 3161 EKU requirement (or whose TSA cert had expired by
-signing time) now fails by default; pass `{ requireTimestampingEKU: false }` or
+The timestamping-EKU and certificate-validity checks previously had to be
+enabled via `requireTimestampingEKU: true` / `requireCertValidAtGenTime: true`.
+In the unreleased API both default to `true`. Verifying a legacy or
+non-conforming token whose certificate lacks the required RFC 3161 EKU (or was
+outside its validity window at `genTime`) now fails by default; pass
+`{ requireTimestampingEKU: false }` or
 `{ requireCertValidAtGenTime: false }` to restore the looser behaviour.
 
 ```typescript
@@ -180,7 +181,7 @@ ESS binding, and exclusive critical timestamping EKU immediately before it
 embeds the timestamp into the PDF. This is mandatory request-bound pre-embed validation, not an
 optional post-write check.
 
-The main bundle's `.d.ts` is now ~50% smaller (41 KB -> 21 KB).
+The main bundle's `.d.ts` is now about 40% smaller (~41 KB -> ~24 KB).
 
 `/internals` does **not** re-export the circuit-breaker reset functions
 (`resetCertCircuits`, `resetCRLCircuits`, `resetOCSPCircuits`). They mutate
@@ -244,14 +245,13 @@ If you were invoking the CLI with an explicit positive flag (e.g.
 now on by default. To restore the 0.1.x CLI behaviour of producing a
 non-LTV signature, pass `--no-ltv` explicitly.
 
-`archive --no-update` previously was documented but ineffective. It now
-works: without it, `archiveTimestamp` harvests revocation data from existing
-in-PDF signatures; with it, the harvest is skipped and only freshly-fetched
-OCSP/CRL go into the new DSS. The archive path is RFC 3161 document-timestamp
-renewal: it verifies recognized document timestamps, merges global DSS
-candidate material, and adds a new document timestamp. It is not a general
-PAdES-LTA upgrader or an indefinite-validity guarantee, and it never creates
-VRI entries automatically.
+`archive --no-update` previously was documented but ineffective. It now skips
+embedded OCSP/CRL candidates from verified existing document timestamps. Their
+certificates are still retained, and fresh OCSP/CRL candidates may still be
+fetched. The archive path is RFC 3161 document-timestamp renewal: it verifies
+recognized document timestamps, merges global DSS candidate material, and adds
+a new document timestamp. It is not a general PAdES-LTA upgrader or an
+indefinite-validity guarantee, and it never creates VRI entries automatically.
 
 ### 11. Removed: `rfcs/rfc4998` deep import
 
@@ -273,7 +273,7 @@ always returned `true` because its underlying `getProtectedAlgorithms`
 returned `[]`. The real RFC 8933 algorithm protection is exposed via
 `validateTimestampTokenRFC8933Compliance` from the main entry point.
 
-### 13. Document timestamp metadata is PAdES-safe by default
+### 13. Document timestamp metadata is omitted by default
 
 New document timestamps write a value dictionary with `/Type /DocTimeStamp`
 and `/SubFilter /ETSI.RFC3161`. The AcroForm field remains `/FT /Sig`; a
@@ -335,12 +335,15 @@ field-specific interoperability need.
 
 ### 15. Validate the published artifact and document loader limits
 
-Run the offline structural and packed-consumer gates on a built artifact:
+On a clean Ubuntu 24.04 AMD64 runner, install the locked validation tools using
+[the clean-run recipe](./docs/pades-oracle-tools.md#run-from-a-clean-checkout),
+then run the offline structural/interoperability and packed-consumer gates:
 
 ```bash
-pnpm build
-pnpm --filter pdf-rfc3161-tests test:conformance
-pnpm --filter pdf-rfc3161-tests test:package
+corepack pnpm@10.30.3 build
+PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
+  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
+corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:package
 ```
 
 For the tool-role boundaries and a reproducible later Acrobat Reader

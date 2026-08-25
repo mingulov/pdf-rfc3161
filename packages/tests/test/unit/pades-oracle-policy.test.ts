@@ -47,7 +47,20 @@ function pinnedOracleRunner(overrides: Record<string, string> = {}): OracleComma
     };
 }
 
-describe("offline PAdES oracle policy", () => {
+describe("offline PAdES validation-tool policy", () => {
+    it("keeps the legacy conformance command as an interoperability alias", () => {
+        const packageJson = JSON.parse(
+            readFileSync(resolve(REPOSITORY_ROOT, "packages/tests/package.json"), "utf8")
+        ) as { scripts?: Record<string, string> };
+
+        expect(packageJson.scripts?.["test:interoperability"]).toBe(
+            "tsx scripts/offline-pades-conformance.ts"
+        );
+        expect(packageJson.scripts?.["test:conformance"]).toBe(
+            packageJson.scripts?.["test:interoperability"]
+        );
+    });
+
     it("accepts only hash-pinned artifacts, local libraries, and executable banners", () => {
         expect(() => assertPadesOracleTools(pinnedOracleRunner())).not.toThrow();
         expect(() =>
@@ -58,7 +71,7 @@ describe("offline PAdES oracle policy", () => {
             )
         ).toThrow(/Pinned qpdf banner mismatch/);
         const firstArtifact = PADES_ORACLE_ARTIFACTS[0];
-        if (firstArtifact === undefined) throw new Error("Pinned oracle artifact is required");
+        if (firstArtifact === undefined) throw new Error("Pinned validation artifact is required");
         expect(() =>
             assertPadesOracleTools(
                 pinnedOracleRunner({
@@ -111,7 +124,7 @@ describe("offline PAdES oracle policy", () => {
         );
     });
 
-    it("asserts the same local policy before the conformance harness touches an oracle", () => {
+    it("asserts the same local policy before the interoperability harness uses a tool", () => {
         const harness = readFileSync(
             resolve(REPOSITORY_ROOT, "packages/tests/scripts/offline-pades-conformance.ts"),
             "utf8"
@@ -133,6 +146,10 @@ describe("offline PAdES oracle policy", () => {
         expect(documentation).toContain(PADES_ORACLE_POLICY.qpdf.packageVersion);
         expect(documentation).toContain(PADES_ORACLE_POLICY.openssl.packageVersion);
         expect(documentation).toContain(PADES_ORACLE_POLICY.opensslRuntime.package);
+        expect(documentation).toContain("Node.js 24 with Corepack");
+        expect(documentation).toContain("`uv` 0.12.5");
+        expect(documentation).toContain("corepack pnpm@10.30.3 install --frozen-lockfile");
+        expect(documentation).toContain("uv python install 3.12.14");
         expect(documentation).toMatch(
             /dynamic loader and remaining transitive system libraries are\s+host-runner dependencies/
         );

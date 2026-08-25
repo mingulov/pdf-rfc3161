@@ -81,7 +81,7 @@ jobs:
         run: pnpm lint
 
   pades-conformance:
-    name: Offline PAdES Conformance
+    name: Offline PAdES Interoperability
     runs-on: ubuntu-24.04
 
     steps:
@@ -110,10 +110,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install pinned PAdES oracles
+      - name: Install pinned PAdES validation tools
         run: pnpm --filter pdf-rfc3161-tests run install:pades-oracles
 
-      - name: Verify pinned PAdES oracle versions
+      - name: Verify pinned PAdES validation-tool versions
         run: pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
 
       - name: Install pyHanko
@@ -122,8 +122,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Run offline PAdES conformance
-        run: pnpm --filter pdf-rfc3161-tests test:conformance
+      - name: Run offline PAdES interoperability checks
+        run: pnpm --filter pdf-rfc3161-tests test:interoperability
 
   integration:
     name: Integration Tests
