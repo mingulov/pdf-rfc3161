@@ -18,6 +18,7 @@ import { fetchOCSPResponse } from "../pki/ocsp-client.js";
 import { getCRLDistributionPoints } from "../pki/crl-utils.js";
 import { fetchCRL } from "../pki/crl-client.js";
 import { getCaIssuers, findIssuer } from "../pki/cert-utils.js";
+import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "../pki/der-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
@@ -27,11 +28,11 @@ import { updateValidationStore } from "./validation-store.js";
  * LTV (Long-Term Validation) data extracted from a timestamp token
  */
 export interface LTVData {
-    /** DER-encoded certificates from the timestamp token */
+    /** DER-encoded certificate candidate material from the timestamp token or caller. */
     certificates: Uint8Array[];
-    /** DER-encoded CRLs if available */
+    /** DER-encoded CRL candidate material; caller-supplied bytes are caller-responsible. */
     crls: Uint8Array[];
-    /** DER-encoded OCSP responses if available */
+    /** DER-encoded OCSP candidate material; caller-supplied bytes are caller-responsible. */
     ocspResponses: Uint8Array[];
 }
 
@@ -44,6 +45,31 @@ export interface LTVSettings {
         ocspFetcher?: (url: string, request: Uint8Array) => Promise<Uint8Array>;
         crlFetcher?: (url: string) => Promise<Uint8Array>;
     };
+}
+
+function parseCompleteCrlCandidate(crlBytes: Uint8Array): pkijs.CertificateRevocationList {
+    const asn1 = parseCanonicalDERSequenceTree(crlBytes, "CRL candidate");
+    if (!(asn1 instanceof asn1js.Sequence)) {
+        throw new TimestampError(TimestampErrorCode.INVALID_RESPONSE, "CRL candidate must be a SEQUENCE");
+    }
+
+    const children = asn1.valueBlock.value;
+    if (
+        children.length !== 3 ||
+        !(children[0] instanceof asn1js.Sequence) ||
+        !(children[1] instanceof asn1js.Sequence) ||
+        !(children[2] instanceof asn1js.BitString)
+    ) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "CRL candidate must contain TBSCertList, AlgorithmIdentifier, and BIT STRING only"
+        );
+    }
+
+    const crl = new pkijs.CertificateRevocationList({ schema: asn1 });
+    const crlSchema = crl.toSchema(true) as asn1js.Sequence;
+    requireSchemaRoundTrip(crlBytes, crlSchema.toBER(false), "CRL candidate");
+    return crl;
 }
 
 /**
@@ -117,8 +143,9 @@ export function extractLTVData(timestampToken: Uint8Array): LTVData {
 
 /**
  * Adds a Document Security Store (DSS) to a PDF for LTV enablement.
- * The DSS contains certificates and revocation data needed to validate
- * signatures long after the signing certificates have expired.
+ * The DSS contains certificate and revocation candidate material for a
+ * caller or validator to evaluate under its own trust policy. Embedding it
+ * does not validate the material or guarantee validity after certificate expiry.
  *
  * Uses incremental save to append DSS without rewriting the existing
  * document structure, which would invalidate any existing signatures.
@@ -254,15 +281,20 @@ export async function addVRIEnhanced(
  * Result of completing LTV data, including any errors encountered
  */
 export interface CompletedLTVData {
-    /** The enriched LTV data */
+    /**
+     * The enriched candidate material. Network OCSP/CRL bytes are only
+     * structurally parsed before collection, not signature/path/freshness or
+     * revocation validated. Caller-supplied bytes remain caller responsibility.
+     */
     data: LTVData;
     /** Any errors encountered during enrichment (for debugging/monitoring) */
     errors: string[];
 }
 
 /**
- * Attempts to fetch missing revocation data (OCSP) for the certificates in the LTV data.
- * This is "best effort" - if network fails or OCSP is unavailable, it returns the original data (or partial).
+ * Attempts to fetch structurally valid revocation candidate material for the certificates in LTV data.
+ * This is "best effort". It does not authenticate OCSP/CRL bytes, validate their
+ * responder/issuer paths, check freshness, or establish a revocation decision.
  *
  * @param ltvData - The extracted LTV data (certs, CRLs)
  * @returns CompletedLTVData with enhanced data and any errors encountered
@@ -344,30 +376,29 @@ export async function completeLTVData(
                         ? await settings.fetchers.ocspFetcher(ocspUrl, request)
                         : await fetchOCSPResponse(ocspUrl, request);
 
-                    // Validate OCSP response before embedding (best effort)
-                    // If parsing fails, we still embed the response but log a warning
+                    // Only a complete, successful Basic OCSP response with a
+                    // structurally good certificate status is a candidate.
+                    // This is deliberately not responder-signature, CertID,
+                    // freshness, or revocation-trust validation.
                     try {
                         const parsed = parseOCSPResponse(response);
                         if (parsed.certStatus !== CertificateStatus.GOOD) {
                             errors.push(
-                                `OCSP indicates certificate is not good (Status: ${CertificateStatus[parsed.certStatus]}), skipping for cert serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}`
+                                `Fetched OCSP candidate is structurally valid but certificate status is not good (${CertificateStatus[parsed.certStatus]}); attempting CRL fallback for cert serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}`
                             );
-                            continue;
+                        } else {
+                            const ocspHash = bytesToHex(response);
+                            if (!seenOCSPs.has(ocspHash)) {
+                                seenOCSPs.add(ocspHash);
+                                enrichedData.ocspResponses.push(response);
+                            }
+                            ocspSuccess = true;
                         }
                     } catch (parseError) {
-                        // Parse failure - embed anyway but log warning
                         errors.push(
-                            `Failed to parse OCSP response, embedding anyway: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+                            `Fetched OCSP candidate failed structural parsing; attempting CRL fallback: ${parseError instanceof Error ? parseError.message : String(parseError)}`
                         );
                     }
-
-                    // Deduplicate OCSP responses
-                    const ocspHash = bytesToHex(response);
-                    if (!seenOCSPs.has(ocspHash)) {
-                        seenOCSPs.add(ocspHash);
-                        enrichedData.ocspResponses.push(response);
-                    }
-                    ocspSuccess = true;
                 } catch (e) {
                     // OCSP fetch failed - log error and continue to CRL
                     errors.push(
@@ -385,7 +416,9 @@ export async function completeLTVData(
                             ? await settings.fetchers.crlFetcher(url)
                             : await fetchCRL(url);
 
-                        // Deduplicate CRLs
+                        parseCompleteCrlCandidate(crlBytes);
+
+                        // Keep structurally parsed CRL bytes as candidate material.
                         const crlHash = bytesToHex(crlBytes);
                         if (!seenCRLs.has(crlHash)) {
                             seenCRLs.add(crlHash);
@@ -394,9 +427,8 @@ export async function completeLTVData(
                         // If we got one CRL, that's usually enough for this cert (ignoring delta CRLs for now)
                         break;
                     } catch (e) {
-                        // CRL fetch failed - try next URL
                         errors.push(
-                            `Failed to fetch CRL from ${url}: ${e instanceof Error ? e.message : String(e)}`
+                            `Fetched CRL candidate failed structural parsing or retrieval from ${url}: ${e instanceof Error ? e.message : String(e)}`
                         );
                     }
                 }

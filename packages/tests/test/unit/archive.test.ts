@@ -6,18 +6,25 @@ import {
 } from "../../../core/src/pdf/archive.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import type { TimestampResult } from "../../../core/src/types.js";
+import type { LTVData } from "../../../core/src/pdf/ltv.js";
 
 // Mock dependencies -- these tests cover wrapper-layer wiring only.
-// End-to-end PAdES-LTA behaviour is exercised in the LIVE-only
-// integration tests (`archive-lta.test.ts`).
-vi.mock("../../../core/src/pdf/extract.js", () => ({
-    extractTimestamps: vi.fn(),
-    verifyTimestamp: vi.fn(),
-}));
+// The real-PDF preservation boundary is exercised in archive-validation.test.ts.
+// These tests cover archive wiring only.
+vi.mock("../../../core/src/pdf/extract.js", () => {
+    const extractTimestamps = vi.fn();
+    return {
+        extractTimestamps,
+        discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
+            timestamps: await extractTimestamps(pdf, options),
+            malformedFieldNames: [],
+        })),
+        verifyTimestamp: vi.fn(),
+    };
+});
 
 vi.mock("../../../core/src/pdf/ltv.js", () => ({
     addDSS: vi.fn(),
-    addVRI: vi.fn(),
     extractLTVData: vi.fn(),
     completeLTVData: vi.fn(),
 }));
@@ -43,10 +50,10 @@ vi.mock("../../../core/src/utils/logger.js", async (importOriginal) => {
 });
 
 import { extractTimestamps, verifyTimestamp } from "../../../core/src/pdf/extract.js";
-import { completeLTVData, extractLTVData } from "../../../core/src/pdf/ltv.js";
+import { addDSS, completeLTVData, extractLTVData } from "../../../core/src/pdf/ltv.js";
 import { timestampPdf } from "../../../core/src/index.js";
 
-describe("PDF Archive Timestamping (PAdES-LTA) -- wrapper wiring", () => {
+describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         warnSpy.mockClear();
@@ -64,6 +71,9 @@ describe("PDF Archive Timestamping (PAdES-LTA) -- wrapper wiring", () => {
             crls: [],
             ocspResponses: [],
         });
+        vi.mocked(addDSS).mockResolvedValue(
+            new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x44, 0x53, 0x53])
+        );
     });
 
     const mockPdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
@@ -89,6 +99,59 @@ describe("PDF Archive Timestamping (PAdES-LTA) -- wrapper wiring", () => {
             ocspResponses: [new Uint8Array([0x30, 0x03])],
         },
     };
+
+    it("merges global DSS once and timestamps the returned DSS bytes without automatic LTV", async () => {
+        const dssResult = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x44, 0x53, 0x53]);
+        vi.mocked(extractTimestamps).mockResolvedValue([]);
+        vi.mocked(addDSS).mockResolvedValue(dssResult);
+        vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+        await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+
+        expect(vi.mocked(addDSS)).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(addDSS)).toHaveBeenCalledWith(mockPdf, {
+            certificates: [],
+            crls: [],
+            ocspResponses: [],
+        }, { ignoreEncryption: undefined });
+        expect(vi.mocked(timestampPdf)).toHaveBeenCalledWith(
+            expect.objectContaining({ pdf: dssResult, enableLTV: false })
+        );
+    });
+
+    it("merges caller-supplied revocation bytes as caller-responsible candidate material", async () => {
+        const callerData = {
+            certificates: [Uint8Array.of(0x30, 0x01, 0x04)],
+            crls: [Uint8Array.of(0x30, 0x01, 0x05)],
+            ocspResponses: [Uint8Array.of(0x30, 0x01, 0x06)],
+        };
+        vi.mocked(extractTimestamps).mockResolvedValue([]);
+        vi.mocked(completeLTVData).mockImplementation(async (data: LTVData) => ({ data, errors: [] }));
+        vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+        await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig, revocationData: callerData });
+
+        expect(vi.mocked(addDSS)).toHaveBeenCalledWith(mockPdf, callerData, {
+            ignoreEncryption: undefined,
+        });
+    });
+
+    it("forwards ignoreEncryption to the one global DSS update", async () => {
+        vi.mocked(extractTimestamps).mockResolvedValue([]);
+        vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+        await archiveTimestamp({
+            pdf: mockPdf,
+            tsa: mockTsaConfig,
+            ignoreEncryption: true,
+        });
+
+        expect(vi.mocked(addDSS)).toHaveBeenCalledWith(
+            mockPdf,
+            { certificates: [], crls: [], ocspResponses: [] },
+            { ignoreEncryption: true }
+        );
+    });
 
     it("should forward signatureFieldName through to timestampPdf", async () => {
         vi.mocked(extractTimestamps).mockResolvedValue([]);
@@ -206,6 +269,33 @@ describe("PDF Archive Timestamping (PAdES-LTA) -- wrapper wiring", () => {
             expect(warnSpy).toHaveBeenCalledWith(
                 expect.stringContaining("Signing certificate is missing id-kp-timeStamping")
             );
+        });
+
+        it("does not merge certificates or revocation bytes from failed timestamps", async () => {
+            const candidateCertificate = {
+                toSchema: () => ({ toBER: () => Uint8Array.of(0x30, 0x01, 0x01).buffer }),
+            };
+            const failedWithMaterial = {
+                ...failedVerification,
+                certificates: [candidateCertificate] as never,
+            };
+            vi.mocked(extractTimestamps).mockResolvedValue([failedWithMaterial]);
+            vi.mocked(verifyTimestamp).mockResolvedValue(failedWithMaterial);
+            vi.mocked(extractLTVData).mockReturnValue({
+                certificates: [],
+                crls: [Uint8Array.of(0x30, 0x01, 0x02)],
+                ocspResponses: [Uint8Array.of(0x30, 0x01, 0x03)],
+            });
+            vi.mocked(completeLTVData).mockImplementation(async (data: LTVData) => ({ data, errors: [] }));
+            vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+            await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+
+            expect(vi.mocked(addDSS)).toHaveBeenCalledWith(mockPdf, {
+                certificates: [],
+                crls: [],
+                ocspResponses: [],
+            }, { ignoreEncryption: undefined });
         });
 
         it("strictExistingVerification: true throws on first failed verify", async () => {
@@ -377,8 +467,8 @@ describe("PDF Archive Timestamping (PAdES-LTA) -- wrapper wiring", () => {
         });
     });
 
-    // Audit L6: `timestampPdfLTA` is the deprecated pre-0.2.0 name for
-    // `archiveTimestamp`. They must refer to the same function. If the
+    // Audit L6: `timestampPdfLTA` is the deprecated historical name for
+    // document-timestamp renewal. It must retain the same call shape. If the
     // alias line in archive.ts (`export const timestampPdfLTA = archiveTimestamp`)
     // is ever removed or mistyped, deep imports that still use the old name
     // would silently fail. This identity check catches that.

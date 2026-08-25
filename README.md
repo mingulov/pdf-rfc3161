@@ -1,23 +1,25 @@
 # pdf-rfc3161
 
-A pure JavaScript/TypeScript library for adding RFC 3161 trusted timestamps to PDF documents. Works in Node.js, Cloudflare Workers, Deno, and modern browsers without native dependencies.
+A pure JavaScript/TypeScript library for adding RFC 3161 document timestamps to PDFs. Works in Node.js, Cloudflare Workers, Deno, and modern browsers without native dependencies.
 
 ## About RFC 3161
 
-RFC 3161 defines the Time-Stamp Protocol (TSP). It allows proving that data existed at a specific time by having a trusted third party (Time Stamping Authority) cryptographically sign the hash of the data along with a timestamp.
+RFC 3161 defines the Time-Stamp Protocol (TSP). A Time Stamping Authority (TSA) signs a
+data hash and timestamp. Whether that TSA is trusted is a separate caller policy decision:
+the caller must supply and apply an appropriate trust store.
 
 When embedded in a PDF as a Document Timestamp (DocTimeStamp):
 
-- It proves the document existed at the timestamp time
+- It provides cryptographic evidence about a document hash and timestamp
 - It can be verified by PDF readers like Adobe Acrobat
 - It does not require a signing certificate from the user
-- With LTV, it remains valid even after the TSA certificate expires
+- Its long-term acceptance depends on the verifier's TSA, path, revocation, and freshness policy
 
 ## Features
 
 - RFC 3161 compliant implementation of the Time-Stamp Protocol
 - Document timestamps using the DocTimeStamp (ETSI.RFC3161) format
-- LTV (Long-Term Validation) support with certificate chain embedding
+- Candidate certificate and revocation-material embedding for LTV workflows
 - Support for multiple timestamps from different TSAs
 - Extraction and verification of timestamps from existing PDFs
 - RFC 8933 CMS Algorithm Identifier Protection validation
@@ -76,6 +78,9 @@ const result = await timestampPdf({
     enableLTV: true,
 });
 ```
+
+`enableLTV` embeds collected certificate and revocation candidates. It does not establish TSA
+trust, validate revocation freshness, or guarantee validity after certificate expiry.
 
 ### Verify path
 
@@ -138,7 +143,7 @@ const result = await timestampPdf({
 
 ### LTV (Long-Term Validation)
 
-Enable LTV to embed certificate chains. This allows timestamp validation even after the TSA certificates expire:
+Enable LTV to embed candidate certificates and revocation material for a verifier to evaluate:
 
 ```typescript
 import { timestampPdf } from "pdf-rfc3161";
@@ -166,9 +171,13 @@ const result = await timestampPdfMultiple({
 console.log(`Added ${result.timestamps.length} timestamps`);
 ```
 
-### PAdES-LTA Archive Timestamp
+### RFC 3161 Document-Timestamp Renewal
 
-For long-term preservation of signed documents, use `archiveTimestamp`. This fetches fresh revocation data and adds a final document timestamp:
+Use `archiveTimestamp` to renew RFC 3161 document timestamps. It verifies existing timestamp
+tokens, collects certificate and revocation candidates only from verified tokens, additively
+updates the global DSS once, and adds a final document timestamp. Network OCSP and CRL bytes are
+structural candidates only; caller-supplied revocation data remains the caller's responsibility.
+This is not a general PAdES-LTA upgrader or an indefinite-validity guarantee:
 
 ```typescript
 import { archiveTimestamp, KNOWN_TSA_URLS } from "pdf-rfc3161";
@@ -253,9 +262,11 @@ Options:
 | `optimizePlaceholder`  | `boolean`    | No       | Optimize signature size (default: false)                           |
 | `rejectOnRevocationWarning` | `boolean` | No     | Deprecated no-op retained for source compatibility; TSA statuses 4/5 are always fatal |
 | `ignoreEncryption`     | `boolean`    | No       | Process encrypted PDFs (default: false; recommend leaving false)   |
-| `revocationData`       | `LTVData`    | No       | Pre-fetched revocation data; skips network OCSP/CRL fetches        |
+| `revocationData`       | `LTVData`    | No       | Caller-provided candidate material; caller is responsible for trust |
 
-Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional `ltvData`. The deprecated `tsaRevocationWarning` field is never set: TSA statuses 4/5 are always fatal.
+Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional candidate
+`ltvData`. The deprecated `tsaRevocationWarning` field is never set: TSA statuses 4/5 are always
+fatal.
 
 Note: When using LTV, `signatureSize: 0` uses a 16KB default. Specify larger value manually if you encounter "token larger than placeholder" errors.
 
@@ -325,21 +336,26 @@ try {
 
 ## Scope & Design Philosophy
 
-This library focuses on generating RFC 3161 timestamps for PDFs with full LTV support.
+This library focuses on generating RFC 3161 timestamps for PDFs with candidate validation-material
+support for LTV workflows.
 
 **Primary use cases:**
 
 - Adding timestamps to fresh documents
-- Archiving documents with PAdES-LTA for indefinite validity
+- Renewing RFC 3161 document timestamps with aggregate global DSS candidate material
 - Extracting and verifying timestamp structures
 
 **Verification scope:**
 
-The `verifyTimestamp()` function performs cryptographic integrity verification:
+The `verifyTimestamp()` function checks cryptographic self-consistency and configured profile
+requirements:
 
 - The timestamp token is properly signed by the TSA
 - The document hash matches what was timestamped
 - The timestamp structure is valid
+
+Those checks do not by themselves trust the TSA, validate a certificate path, or establish
+revocation freshness. Supply a caller-owned `TrustStore` to apply a trust policy.
 
 **Modular Network Architecture:**
 
@@ -393,7 +409,7 @@ const request = await session.createTimestampRequest();
 // Step 2: Send request via your preferred method
 const response = await myCustomTSAFetch(request);
 
-// Step 3: Embed response with full LTV
+// Step 3: Embed response with candidate LTV material
 const finalPdf = await session.embedTimestampToken(response);
 ```
 
@@ -412,13 +428,15 @@ The library implements or aims to support the following standards:
 
 **Revocation & Chain Handling:**
 
-- **OCSP/CRL**: The library handles Online Certificate Status Protocol (OCSP) and Certificate Revocation Lists (CRL) for Long-Term Validation (LTV).
-- **AIA**: Authority Information Access (AIA) extensions are actively used to discover and fetch missing intermediate certificates to construct the full trust chain.
+- **OCSP/CRL**: The library can collect structurally parsed Online Certificate Status Protocol (OCSP) and Certificate Revocation List (CRL) candidate bytes. It does not verify responder signatures, certificate paths, CertIDs, freshness, scope, or revocation trust for those network candidates.
+- **AIA**: Authority Information Access (AIA) extensions can discover and fetch intermediate certificate candidates. Fetching them does not construct or trust a certificate chain on its own.
 
 
 **TrustStore validation:**
 
-For production chain validation, pass a `TrustStore` to `verifyTimestamp()`:
+For production chain validation, pass a caller-owned `TrustStore` with the roots you accept to
+`verifyTimestamp()`. H3 remains in effect: the library's default trust store is empty, so it does
+not provide an implicit TSA trust anchor or full chain validation policy:
 
 ```typescript
 import { verifyTimestamp, SimpleTrustStore } from "pdf-rfc3161";

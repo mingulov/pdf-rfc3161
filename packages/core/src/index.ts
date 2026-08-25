@@ -129,12 +129,14 @@ export type { VerificationOptions, ParsedTimestampResponse };
 // have moved to the `pdf-rfc3161/advanced` subpath.
 
 /**
- * Adds an RFC 3161 trusted timestamp to a PDF.
+ * Adds an RFC 3161 document timestamp to a PDF.
  *
  * This is the one-call API: prepare the PDF, send a TimeStampReq to the
  * TSA, embed the TimeStampResp as a Document Timestamp (DocTimeStamp /
  * ETSI.RFC3161) signature, and optionally collect Long-Term Validation
  * (LTV) data into the PDF's Document Security Store (DSS).
+ * Cryptographic self-consistency does not establish TSA trust; reliance on
+ * a timestamp remains a caller-owned trust policy.
  *
  * @param options - {@link TimestampOptions}: the PDF bytes, TSA config,
  *   and tuning flags. Only `pdf` and `tsa` are required.
@@ -269,7 +271,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                         errors: [],
                     };
                 } else {
-                    // Fetch missing OCSP data to make LTV complete
+                    // Collect structural revocation candidate material for the DSS.
                     completed = await completeLTVData(extracted);
                 }
 

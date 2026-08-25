@@ -255,7 +255,7 @@ export class TimestampSession {
 
         if (shouldEnableLTV) {
             let ltvData = extractLTVData(token);
-            // Fetch missing OCSP data to make LTV complete
+            // Collect structural revocation candidate material for the DSS.
             ltvData = (await completeLTVData(ltvData)).data;
             finalPdf = await addDSS(finalPdf, ltvData);
         }
