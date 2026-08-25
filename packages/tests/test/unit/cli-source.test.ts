@@ -108,7 +108,7 @@ describe("CLI Command Structure and Validation", () => {
                 )
                 .option(
                     "--no-update",
-                    "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)",
+                    "Skip embedded OCSP/CRL candidates from verified document timestamps (their certificates remain; fresh candidates may still be fetched)",
                     false
                 )
                 .option("--timeout <ms>", "Request timeout in milliseconds", "30000")

@@ -13,9 +13,9 @@ still prepares, sends, validates, embeds, and verifies a timestamp. It is never
 loaded by production code.
 
 OpenSSL is not required to run this fixture. The ordinary Vitest suite uses the
-checked-in response. The separate offline PAdES conformance gate remains the
+checked-in response. The separate offline PAdES interoperability gate remains the
 only test path that creates or independently verifies timestamp material with
-the hash-pinned Ubuntu OpenSSL oracle.
+the hash-pinned Ubuntu OpenSSL validator.
 
 The fixture's TSA certificate has approximately 100-year disposable test
 validity around its fixed token generation time. The test asserts that fixed
@@ -27,14 +27,14 @@ runner's wall-clock date.
 
 Regenerate only when the timestamp-preparation wire format intentionally changes:
 
-1. Use the pinned PAdES OpenSSL oracle on Ubuntu 24.04, not an ambient system
+1. Use the pinned PAdES OpenSSL validator on Ubuntu 24.04, not an ambient system
    OpenSSL, to create a disposable root and TSA certificate with the same
    critical exclusive time-stamping EKU used by `local-tsa-fixture.ts`.
 2. Save a fixed one-page input PDF, preload the fixed nonce above into the CLI
    child, and produce the response for that exact request with LTV disabled.
 3. Replace all three exported values together: input PDF, response, and root
    certificate. Confirm `cli-pades-safety.test.ts` passes without `openssl` on
-   `PATH`, then run the dedicated offline conformance gate.
+   `PATH`, then run the dedicated offline interoperability gate.
 
 The generated key material is disposable test data and is project-owned. It has
 no third-party content or license obligation beyond this repository's license.

@@ -363,18 +363,17 @@ describe("CLI Integration Tests", () => {
             expect(result.stderr).not.toContain("Unknown option");
         });
 
-        // Audit C4 regression: --no-update was a no-op because Commander
-        // stores negated flags under `update`, not `noUpdate`. After the fix,
-        // the verbose log line should reflect the actual flag state.
+        // Commander stores negated flags under `update`, not `noUpdate`.
+        // The verbose log line must reflect the actual flag state.
         it("should advertise --no-update meaning in --help", async () => {
             const result = await runCli(["archive", "--help"]);
             expect(result.code).toBe(0);
             expect(result.stdout).toContain("--no-update");
-            // --no-update only skips reuse of embedded CRL/OCSP data. The
-            // archive flow still enriches verified certificates through
-            // completeLTVData, which can fetch fresh OCSP/CRL material.
-            expect(result.stdout).toMatch(/harvest revocation data/);
-            expect(result.stdout).toMatch(/still fetches fresh OCSP\/CRL via\s{1,100}completeLTVData/);
+            // --no-update only skips embedded CRL/OCSP candidates from verified
+            // document timestamps. Certificates remain and fresh candidates may be fetched.
+            expect(result.stdout).toMatch(/embedded OCSP\/CRL candidates/);
+            expect(result.stdout).toMatch(/certificates remain/);
+            expect(result.stdout).toMatch(/fresh\s{1,100}candidates may still be fetched/);
         });
 
         it("--no-update verbose log should disclose fresh OCSP/CRL enrichment", async () => {
@@ -388,8 +387,9 @@ describe("CLI Integration Tests", () => {
                 "--no-update",
                 "--verbose",
             ]);
-            expect(result.stdout).toContain("Skip embedded revocation data");
-            expect(result.stdout).toContain("still fetch fresh OCSP/CRL via completeLTVData");
+            expect(result.stdout).toContain("Skip embedded OCSP/CRL candidates");
+            expect(result.stdout).toContain("timestamp certificates remain");
+            expect(result.stdout).toContain("fresh candidates may still be fetched");
         });
 
         it("default archive --verbose should report candidate-material collection", async () => {

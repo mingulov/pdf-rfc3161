@@ -14,7 +14,7 @@ const EXCLUDE_DIRS = [
     "dist",
     "coverage",
     ".corpus",
-    // Generated, gitignored external-oracle cache; not repository source.
+    // Generated, gitignored external-validation cache; not repository source.
     ".pades-oracles",
     "docs",
 ];

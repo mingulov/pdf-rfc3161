@@ -32,10 +32,12 @@ function run(command: string, args: string[]): void {
 function assertOfficialArtifactUrl(artifact: PadesOracleArtifact): void {
     const url = new URL(artifact.url);
     if (url.protocol !== "https:" || !OFFICIAL_UBUNTU_HOSTS.has(url.hostname)) {
-        throw new Error(`Oracle artifact URL is not an official Ubuntu HTTPS URL: ${artifact.url}`);
+        throw new Error(
+            `Validation artifact URL is not an official Ubuntu HTTPS URL: ${artifact.url}`
+        );
     }
     if (!/^[a-f0-9]{64}$/.test(artifact.sha256)) {
-        throw new Error(`Oracle artifact SHA-256 is invalid for ${artifact.filename}`);
+        throw new Error(`Validation artifact SHA-256 is invalid for ${artifact.filename}`);
     }
 }
 
@@ -54,7 +56,7 @@ async function downloadVerifiedArtifact(
 
     const advertisedLength = response.headers.get("content-length");
     if (advertisedLength !== null && Number(advertisedLength) > MAX_ARTIFACT_SIZE) {
-        throw new Error(`Oracle artifact is unexpectedly large: ${artifact.filename}`);
+        throw new Error(`Validation artifact is unexpectedly large: ${artifact.filename}`);
     }
 
     const hash = createHash("sha256");
@@ -63,7 +65,9 @@ async function downloadVerifiedArtifact(
         transform(chunk: Buffer, _encoding, callback) {
             received += chunk.length;
             if (received > MAX_ARTIFACT_SIZE) {
-                callback(new Error(`Oracle artifact is unexpectedly large: ${artifact.filename}`));
+                callback(
+                    new Error(`Validation artifact is unexpectedly large: ${artifact.filename}`)
+                );
                 return;
             }
             hash.update(chunk);
@@ -121,10 +125,10 @@ function exportGithubActionsEnvironment(): void {
 
 async function main(): Promise<void> {
     if (process.platform !== "linux") {
-        throw new Error("Pinned PAdES oracle installation requires the Ubuntu 24.04 CI runner");
+        throw new Error("Pinned PAdES tool installation requires the Ubuntu 24.04 CI runner");
     }
     if (process.arch !== "x64") {
-        throw new Error(`Pinned PAdES oracle installation requires ${PADES_ORACLE_POLICY.architecture}`);
+        throw new Error(`Pinned PAdES tool installation requires ${PADES_ORACLE_POLICY.architecture}`);
     }
 
     const paths = padesOraclePaths();

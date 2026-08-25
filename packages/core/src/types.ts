@@ -77,7 +77,7 @@ export interface TimestampOptions {
     signatureSize?: number;
     /**
      * Whether to omit the modification time (/M) from the signature dictionary.
-     * The field is omitted by default because the timestamp token contains the authoritative time;
+     * The field is omitted by default because the timestamp token contains a signed `genTime`;
      * explicit `false` restores the legacy metadata.
      */
     omitModificationTime?: boolean;

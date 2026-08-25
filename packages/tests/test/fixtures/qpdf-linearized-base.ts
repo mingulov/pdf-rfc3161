@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 /**
  * A qpdf 11.9.0 --linearize output derived from packages/demo/test.pdf.
  *
- * The source artifact was checked with the pinned qpdf 11.9.0 oracle before
+ * The source artifact was checked with the pinned qpdf 11.9.0 validator before
  * encoding. Keeping the fixture in base64 makes ordinary unit tests fully
  * tool-independent while preserving the physical linearization layout.
  */

@@ -42,13 +42,14 @@ export interface ArchiveTimestampOptions extends TimestampOptions {
      * existing in-PDF values during the archive's verify-and-collect loop.
      * The archive automatically passes the input `pdf` bytes so the
      * document-hash check runs. This option lets the caller provide a
-     * `trustStore`, opt out of G1/G2 strictness for legacy tokens, or set
+     * `trustStore`, opt out of the default EKU/validity checks for legacy or
+     * non-conforming tokens, or set
      * other verification behavior.
      *
      * The archive always verifies the document hash because it forwards
      * `pdf`. Optional caller settings determine trust-policy and certificate
-     * path checks in addition to the default cryptographic-integrity and
-     * G1/G2 checks.
+     * path checks in addition to the default cryptographic-integrity,
+     * timestamping-EKU, and certificate-validity checks.
      *
      * Audit F7.
      */
@@ -193,7 +194,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
             }
         }
 
-        // This token already passed strict timestamp verification. Any token
+        // This token already passed the configured timestamp checks. Any token
         // parsing failure here is therefore a contradictory PDF state and is
         // surfaced instead of silently falling through a broad catch.
         if (includeExistingRevocationData) {
@@ -233,7 +234,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     // Note: We also do NOT pass pdfDoc here because the bytes may have changed
     // after addDSS. Let timestampPdf load fresh from currentPdf.
     //
-    // Audit M9: `ArchiveTimestampOptions extends TimestampOptions`, so every
+    // `ArchiveTimestampOptions extends TimestampOptions`, so every
     // `TimestampOptions` field is accepted by the type. Previously only 5
     // were forwarded and the rest were silently dropped. We now forward
     // every applicable field. Two carve-outs:

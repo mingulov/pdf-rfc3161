@@ -60,7 +60,7 @@ export async function createTimestampRequest(
  * already hashed the data, or when running in a context where Web Crypto's
  * `subtle.digest` is unavailable.
  *
- * **Sync-crypto constraint (audit M10):** unlike {@link createTimestampRequest},
+ * **Sync-crypto constraint:** unlike {@link createTimestampRequest},
  * this function is synchronous and does NOT `await ensureWebCrypto()`. It still
  * calls `globalThis.crypto.getRandomValues(nonce)` directly, which is always
  * available on Node 20+ (the library's engines floor), Cloudflare Workers,

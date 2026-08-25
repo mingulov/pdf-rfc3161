@@ -9,9 +9,9 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
-This section describes unreleased next-major work combining security hardening
-from `REVIEW-2026-02-09.md`, an API redesign with stricter defaults, and audit
-follow-ups. It does not announce a published version or release date. See
+This section describes unreleased next-major work combining security hardening,
+an API redesign with stricter defaults, and PDF timestamp interoperability fixes.
+It does not announce a published version or release date. See
 [MIGRATION.md](./MIGRATION.md) for diff-level upgrade guidance from 0.1.x.
 **The basic `timestampPdf({ pdf, tsa })` call signature is unchanged**; the
 verify / extract path gain stricter defaults and several new opt-in checks.
@@ -35,8 +35,9 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   into that archive-owned DSS update. New `strictExistingVerification: true` throws
   on the first failing in-PDF timestamp; default is to warn via
   `getLogger().warn`. New `existingTimestampVerifyOptions?:
-VerificationOptions` lets callers add a `trustStore` or opt out of G1/G2
-  strictness when verifying legacy tokens.
+  VerificationOptions` lets callers add a `trustStore` or opt out of the
+  default timestamping-EKU and certificate-validity checks when required by
+  caller policy.
 - `getDefaultTrustStore()` scaffolding (curated root CA bundle to follow).
   Throws `TimestampError(STATE_ERROR, ...)` while the bundled root list is
   empty (current state); see `MIGRATION.md` for the three correct
@@ -63,7 +64,7 @@ VerificationOptions` lets callers add a `trustStore` or opt out of G1/G2
 - New error codes `STATE_ERROR` and `INVALID_ARGUMENT` (replace misplaced
   `PDF_ERROR` and `TSA_ERROR` use, respectively).
 - `pdf-rfc3161/internals` subpath for low-level PDF/PKI helpers (main
-  `.d.ts` shrunk by ~50%: 41 KB -> 21 KB).
+  `.d.ts` is about 40% smaller: ~41 KB -> ~24 KB).
 - `addVRIForSignature(pdf, { fieldName }, { validationData })` for explicit,
   field-bound VRI updates. The legacy VRI wrappers remain available only as
   deprecated compatibility calls.
@@ -82,7 +83,7 @@ VerificationOptions` lets callers add a `trustStore` or opt out of G1/G2
   changesets-based automated release.
 - `bugs` URL in package metadata for both `pdf-rfc3161` and
   `pdf-rfc3161-cli`.
-- Audit roadmap and audit reports (`REVIEW-2026-02-09.md`).
+- Security guidance, release checks, and regression coverage for the stricter API.
 
 ### Changed
 
@@ -236,16 +237,15 @@ pdf-rfc3161-cli`.
   constraint and the `ensureWebCrypto` workaround.
 - README setup commands corrected to `pnpm install` + `pnpm --filter
 pdf-rfc3161-demo dev`.
-- **L7** Documented serverless caveat on `CircuitBreakerMap`.
-- `CLAUDE.md` known-issues block refreshed; only H3 (default trust store
-  empty) remains open.
+- Documented the serverless lifecycle caveat for `CircuitBreakerMap`.
+- `CLAUDE.md` known-issues block records that the default trust store remains empty.
 
 ### Security
 
-Closes 4 of 5 high-severity items, all 6 medium-severity items, and 6 of 7
-low-severity items from `REVIEW-2026-02-09.md`. H3 (default chain
-validation with bundled roots) has infrastructure only; the curated root
-bundle is deferred to later work; publishing it remains a release decision.
+The stricter verification defaults, request/response binding, bounded network
+and parser paths, and circuit-breaker protections are described above. The
+default chain-validation root bundle remains empty; curating and publishing it
+is deferred to a separate release decision.
 
 ## [0.1.4] - 2026-01-14
 

@@ -27,7 +27,7 @@ function printHelp(stream: NodeJS.WriteStream = process.stdout): void {
     stream.write(
         "  tsx packages/tests/scripts/offline-pades-conformance.ts [--output-dir <absolute-new-directory>]\n\n"
     );
-    stream.write("Run the local-root offline PAdES conformance gate.\n\n");
+    stream.write("Run the local-root offline PAdES interoperability gate.\n\n");
     stream.write("Options:\n");
     stream.write("  --output-dir <directory>  Retain artifacts in a new absolute directory\n");
     stream.write("  -h, --help                Show this help and exit\n\n");
@@ -143,7 +143,7 @@ function run(command: string, args: string[], installGuidance: string): SpawnSyn
         const errno = result.error as NodeJS.ErrnoException;
         if (errno.code === "ENOENT") {
             throw new Error(
-                `${command} is required for offline PAdES conformance. ${installGuidance}`
+                `${command} is required for offline PAdES interoperability checks. ${installGuidance}`
             );
         }
         throw new Error(`${command} could not be started: ${result.error.message}`);
@@ -401,7 +401,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
 
         const document = await PDFDocument.create();
         const page = document.addPage([200, 200]);
-        page.drawText("Offline PAdES conformance", { x: 20, y: 100, size: 14 });
+        page.drawText("Offline PAdES interoperability", { x: 20, y: 100, size: 14 });
         const originalPdf = await document.save();
 
         const session = new TimestampSession(originalPdf, {
@@ -531,7 +531,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         );
         assert.notEqual(wrongDataOpenSsl.status, 0, wrongDataOpenSsl.stderr);
 
-        process.stdout.write("Offline PAdES conformance passed.\n");
+        process.stdout.write("Offline PAdES interoperability checks passed.\n");
         if (retainArtifacts) {
             process.stdout.write(`Retained local validation artifacts in ${workingDirectory}\n`);
         }

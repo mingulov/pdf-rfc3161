@@ -12,7 +12,7 @@ export interface PadesOracleArtifact {
 }
 
 /**
- * Pinned external-oracle policy for the offline PAdES conformance gate.
+ * Pinned external-tool policy for the offline PAdES interoperability gate.
  * Values are Ubuntu Noble package revisions and SHA-256-pinned binary
  * artifacts, not merely upstream banners.
  */
@@ -222,7 +222,7 @@ function assertLinkedLibrary(
     const linkage = assertSuccess(runner, "ldd", [binary], `dynamic linker check for ${binary}`);
     if (!linkage.stdout.includes(`=> ${expectedLibrary} `)) {
         throw new Error(
-            `Pinned oracle binary ${binary} is not linked to ${expectedLibrary}: ${output(linkage)}`
+            `Pinned validation binary ${binary} is not linked to ${expectedLibrary}: ${output(linkage)}`
         );
     }
 }
@@ -230,7 +230,7 @@ function assertLinkedLibrary(
 /**
  * Verifies every retained artifact's hash and Debian metadata, the local
  * dynamic-library resolution, and executable banners before an external PDF
- * or RFC 3161 oracle is used. Keep this at the start of every conformance run
+ * or RFC 3161 validator is used. Keep this at the start of every interoperability run
  * so a runner-image update cannot silently alter results.
  */
 export function assertPadesOracleTools(runner: OracleCommandRunner = runOracleCommand): void {

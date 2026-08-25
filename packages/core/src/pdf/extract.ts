@@ -664,11 +664,11 @@ async function discoverTimestamps(
  *   4. (optional, when `options.trustStore` is supplied) The caller's trust
  *      policy validates that signer's certificate chain. No default trust is
  *      assumed by this function.
- *   5. (optional for historical files) The selected certificate has one
+ *   5. (enabled by default) The selected certificate has one
  *      critical EKU whose sole value is id-kp-timeStamping.
- *   6. (optional for historical files) The selected certificate is valid at
+ *   6. (enabled by default) The selected certificate is valid at
  *      the token's generation time.
- *   7. (optional for historical files) Complete signed ESS v1/v2 bindings
+ *   7. (opt-in) Complete signed ESS v1/v2 bindings
  *      match the selected certificate.
  *
  * @param timestamp - The {@link ExtractedTimestamp} to verify.
@@ -685,7 +685,7 @@ async function discoverTimestamps(
  * ```
  *
  * @example
- * Strict verification with chain + opt-in PAdES ESS check:
+ * Verification with chain validation and opt-in complete ESS binding checks:
  * ```typescript
  * // Since 0.2.0, requireTimestampingEKU and requireCertValidAtGenTime
  * // default to `true`. The only remaining opt-in is strictESSValidation.
@@ -697,8 +697,8 @@ async function discoverTimestamps(
  * ```
  *
  * @example
- * Lenient verification for a legacy token whose TSA cert lacks the
- * id-kp-timeStamping EKU (or had expired by signing time):
+ * Caller-policy opt-outs for a token whose TSA certificate lacks the
+ * id-kp-timeStamping EKU or was outside its validity window at `genTime`:
  * ```typescript
  * const verified = await verifyTimestamp(extracted, {
  *     trustStore: myTSARoots,
@@ -788,7 +788,7 @@ async function verifyTimestampWithIndex(
             }
         }
 
-        // G1: strict RFC 3161 EKU validation. This opt-out is retained only
+        // Strict RFC 3161 EKU validation. This opt-out is retained only
         // for post-embed historical verification, never the pre-embed gate.
         const requireEKU = options.requireTimestampingEKU ?? true;
         if (requireEKU) {
@@ -803,7 +803,7 @@ async function verifyTimestampWithIndex(
             }
         }
 
-        // G2: enforce that the signing TSA cert is valid at genTime.
+        // Enforce that the signing TSA cert is valid at genTime.
         // Otherwise an expired or not-yet-valid TSA cert can mint timestamps.
         // Defaults to `true` since 0.2.0; opt out with
         // `requireCertValidAtGenTime: false`.
@@ -829,7 +829,7 @@ async function verifyTimestampWithIndex(
             }
         }
 
-        // Strict PAdES/ESS check
+        // Complete ESS signing-certificate binding check.
         if (options.strictESSValidation) {
             await validateTimestampESS(parsed.signerInfo, signingCertificate);
         }

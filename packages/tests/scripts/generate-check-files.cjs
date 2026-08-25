@@ -4,7 +4,7 @@ const path = require("node:path");
 const VARIANTS = [
     {
         fileName: "final-test-no-ltv.pdf",
-        description: "PAdES-safe document timestamp with LTV collection disabled",
+        description: "document timestamp with default metadata and LTV collection disabled",
         options: { enableLTV: false },
     },
     {
@@ -24,7 +24,7 @@ const VARIANTS = [
     },
     {
         fileName: "final-test-omit-m.pdf",
-        description: "explicit PAdES-safe /M omission (the default)",
+        description: "explicit /M omission (the default)",
         options: { enableLTV: false, omitModificationTime: true },
     },
     {
