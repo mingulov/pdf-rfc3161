@@ -6,6 +6,7 @@ import {
     OCSPResponseStatus,
     CertificateStatus,
 } from "../../../core/src/pki/ocsp-utils.js";
+import { TimestampErrorCode } from "../../../core/src/types.js";
 import * as pkijs from "pkijs";
 
 vi.stubGlobal("crypto", {
@@ -20,6 +21,10 @@ vi.stubGlobal("crypto", {
 
 describe("OCSP Utils", () => {
     describe("parseOCSPResponse", () => {
+        function responseWithStatus(statusContent: Uint8Array): Uint8Array {
+            return Uint8Array.of(0x30, statusContent.length + 2, 0x0a, statusContent.length, ...statusContent);
+        }
+
         it("should throw on invalid ASN.1", () => {
             const invalidData = new Uint8Array([0x00, 0x01, 0x02]);
 
@@ -50,17 +55,47 @@ describe("OCSP Utils", () => {
             expect(() => parseOCSPResponse(tryLaterResponse)).toThrow();
         });
 
-        it("should throw on SIG_REQUIRED (4) status", () => {
-            const sigRequiredResponse = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x04]);
+        it("reports SIG_REQUIRED for RFC 6960 response status 5", () => {
+            const sigRequiredResponse = Uint8Array.of(0x30, 0x03, 0x0a, 0x01, 0x05);
 
-            expect(() => parseOCSPResponse(sigRequiredResponse)).toThrow();
+            expect(() => parseOCSPResponse(sigRequiredResponse)).toThrow(
+                "OCSP responder error: Signature Required (code: 5)"
+            );
         });
 
-        it("should throw on UNAUTHORIZED (5) status", () => {
-            const unauthorizedResponse = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x05]);
+        it("reports UNUSED for RFC 6960 response status 4", () => {
+            const unusedResponse = Uint8Array.of(0x30, 0x03, 0x0a, 0x01, 0x04);
 
-            expect(() => parseOCSPResponse(unauthorizedResponse)).toThrow();
+            expect(() => parseOCSPResponse(unusedResponse)).toThrow(
+                "OCSP responder error: Unused (code: 4)"
+            );
         });
+
+        it("reports UNAUTHORIZED for RFC 6960 response status 6", () => {
+            const unauthorizedResponse = Uint8Array.of(0x30, 0x03, 0x0a, 0x01, 0x06);
+
+            expect(() => parseOCSPResponse(unauthorizedResponse)).toThrow(
+                "OCSP responder error: Unauthorized (code: 6)"
+            );
+        });
+
+        it.each([
+            ["canonical large positive", Uint8Array.of(0x00, 0x80, 0x00, 0x00)],
+            ["negative", Uint8Array.of(0xff)],
+            ["undefined", Uint8Array.of(0x07)],
+            ["canonical multi-byte", Uint8Array.of(0x00, 0x80)],
+        ])(
+            "rejects a %s responseStatus directly from its raw ENUMERATED content",
+            (_label: string, content: Uint8Array) => {
+            try {
+                parseOCSPResponse(responseWithStatus(content));
+                throw new Error("expected invalid OCSP responseStatus to throw");
+            } catch (error) {
+                expect(error).toMatchObject({ code: TimestampErrorCode.INVALID_RESPONSE });
+                expect(error).toHaveProperty("message", expect.stringContaining("responseStatus"));
+            }
+            }
+        );
 
         it("should handle malformed OCSP response structure", () => {
             const malformed = new Uint8Array([0x30, 0x0a, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00]);
@@ -255,12 +290,16 @@ describe("OCSP Utils", () => {
             expect(OCSPResponseStatus.TRY_LATER).toBe(3);
         });
 
-        it("should correctly map SIG_REQUIRED (4) status", () => {
-            expect(OCSPResponseStatus.SIG_REQUIRED).toBe(4);
+        it("should correctly map UNUSED (4) status", () => {
+            expect(OCSPResponseStatus.UNUSED).toBe(4);
         });
 
-        it("should correctly map UNAUTHORIZED (5) status", () => {
-            expect(OCSPResponseStatus.UNAUTHORIZED).toBe(5);
+        it("should correctly map SIG_REQUIRED (5) status", () => {
+            expect(OCSPResponseStatus.SIG_REQUIRED).toBe(5);
+        });
+
+        it("should correctly map UNAUTHORIZED (6) status", () => {
+            expect(OCSPResponseStatus.UNAUTHORIZED).toBe(6);
         });
 
         it("should correctly map CertificateStatus GOOD (0)", () => {

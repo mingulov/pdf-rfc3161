@@ -202,7 +202,7 @@ program
 
 program
     .command("archive")
-    .description("Add a PAdES-LTA Archive Timestamp (long-term preservation)")
+    .description("RFC 3161 document-timestamp renewal with global DSS candidate material")
     .argument("<tsa_url>", "TSA server URL (e.g., https://freetsa.org/tsr)")
     .argument("<file>", "Input PDF file")
     .argument("[bucket_output]", "Output file path (optional)")
@@ -218,7 +218,7 @@ program
     // no-op. See audit C4.
     .option(
         "--no-update",
-        "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)"
+        "Do not collect candidate revocation material from verified existing document timestamps"
     )
     .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
@@ -236,12 +236,12 @@ program
                     bucketOutput ?? cmdOptions.output ?? generateOutputFilename(inputFile);
 
                 if (cmdOptions.verbose) {
-                    console.log(`PAdES-LTA Archive Timestamping`);
+                    console.log(`RFC 3161 document-timestamp renewal`);
                     console.log(`Input:     ${inputFile}`);
                     console.log(`Output:    ${outputFile}`);
                     console.log(`TSA:       ${tsaUrl}`);
                     console.log(
-                        `Update:    ${cmdOptions.update ? "Fetch fresh revocation data" : "Use existing only"}`
+                        `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Do not collect existing material"}`
                     );
                     console.log();
                 }
@@ -276,7 +276,7 @@ program
 
                 await writeFile(outputFile, result.pdf);
 
-                console.log(`SUCCESS: Archive timestamp added!`);
+                console.log(`SUCCESS: RFC 3161 document timestamp renewed!`);
                 console.log(`  Output:      ${outputFile}`);
                 console.log(`  Time:        ${result.timestamp.genTime.toISOString()}`);
 

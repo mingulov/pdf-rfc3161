@@ -1,6 +1,6 @@
 import { timestampPdf } from "../index.js";
-import { extractTimestamps, verifyTimestamp } from "./extract.js";
-import { addDSS, addVRI, extractLTVData, completeLTVData, type LTVData } from "./ltv.js";
+import { discoverArchiveTimestamps, verifyTimestamp } from "./extract.js";
+import { addDSS, extractLTVData, completeLTVData, type LTVData } from "./ltv.js";
 import {
     TimestampError,
     TimestampErrorCode,
@@ -12,11 +12,11 @@ import { getLogger } from "../utils/logger.js";
 import { bytesToHex } from "../utils.js";
 
 /**
- * Options for PAdES-LTA archive timestamping. Inherits every option from
- * {@link TimestampOptions} and adds archive-specific knobs.
+ * Options for RFC 3161 document-timestamp renewal. Inherits every option from
+ * {@link TimestampOptions} and adds renewal-specific controls.
  */
 export interface ArchiveTimestampOptions extends TimestampOptions {
-    /** Whether to include revocation data if available in existing signatures */
+    /** Whether to collect candidate revocation material from verified existing document timestamps. */
     includeExistingRevocationData?: boolean;
     /**
      * When true, fail the archive if any existing timestamp in the input PDF
@@ -24,11 +24,12 @@ export interface ArchiveTimestampOptions extends TimestampOptions {
      * since the 0.2.0 G1/G2 default flip).
      *
      * Default `false`: failed verifications are logged via getLogger().warn
-     * but their cert / revocation material is still collected into the new
-     * DSS. This preserves backward-compatible archive behaviour.
+     * and contribute no certificate, OCSP, or CRL material to the new DSS.
      *
-     * Set `true` to refuse archiving a chain of trust that does not currently
-     * verify. See audit H1.
+     * Set `true` to stop renewal when a recognized timestamp is malformed or
+     * fails verification. The archive always supplies the input PDF, so its
+     * ByteRange hash is checked; caller-supplied verification options control
+     * the trust policy used for the remaining verification checks.
      */
     strictExistingVerification?: boolean;
 
@@ -36,30 +37,39 @@ export interface ArchiveTimestampOptions extends TimestampOptions {
      * Verification options forwarded to `verifyTimestamp` for each existing
      * in-PDF timestamp during the archive's verify-and-collect loop. The
      * archive automatically passes the input `pdf` bytes so the
-     * document-hash check runs; this option lets the caller add a
-     * `trustStore`, opt out of G1/G2 strictness for legacy tokens, etc.
+     * document-hash check runs. This option lets the caller provide a
+     * `trustStore`, opt out of G1/G2 strictness for legacy tokens, or set
+     * other verification behavior.
      *
-     * Without this, the loop would only run the cryptographic-integrity
-     * and G1/G2 checks (default-true since 0.2.0), missing:
-     *   - document-hash mismatch (a tampered PDF whose timestamp signs an
-     *     earlier revision still verifies cryptographically)
-     *   - chain-of-trust validation against your roots
+     * The archive always verifies the document hash because it forwards
+     * `pdf`. Optional caller settings determine trust-policy and certificate
+     * path checks in addition to the default cryptographic-integrity and
+     * G1/G2 checks.
      *
      * Audit F7.
      */
     existingTimestampVerifyOptions?: VerificationOptions;
+
+    /**
+     * Caller-supplied raw validation material to merge into the global DSS.
+     * It is embedded as caller-responsible candidate material; this renewal
+     * operation does not cryptographically validate it.
+     */
+    revocationData?: TimestampOptions["revocationData"];
 }
 
 /**
- * Adds a PAdES-LTA Archive Timestamp to a PDF.
+ * Renews RFC 3161 document timestamps in a PDF.
  *
  * This function:
- * 1. Extracts all existing timestamps and their certificates.
- * 2. Collects validation material (certificates, CRLs, OCSPs) from all signatures.
- * 3. Embeds them in a Document Security Store (DSS).
- * 4. Adds a final RFC 3161 timestamp covering the entire document including the DSS.
+ * 1. Extracts and verifies recognized existing document timestamps.
+ * 2. Collects candidate validation material only from timestamps that verify.
+ * 3. Additively merges that aggregate material into the global DSS once.
+ * 4. Adds a final RFC 3161 document timestamp covering the DSS revision.
  *
- * This ensures the document remains verifiable even after the original certificates expire.
+ * This is not a general approval-signature validator, a PAdES-LTA upgrader,
+ * or a guarantee of indefinite validity. VRI remains opt-in through
+ * {@link addVRIForSignature}; renewal never creates or imports VRI entries.
  *
  * @example
  * ```typescript
@@ -80,9 +90,17 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     } = options;
 
     // 1. Extract all existing timestamps
-    const existingTimestamps = await extractTimestamps(pdf, {
+    const discovery = await discoverArchiveTimestamps(pdf, {
         ignoreEncryption: options.ignoreEncryption,
     });
+    for (const fieldName of discovery.malformedFieldNames) {
+        const message = `Existing RFC 3161 document timestamp '${fieldName}' is malformed and cannot be verified`;
+        if (strictExistingVerification) {
+            throw new TimestampError(TimestampErrorCode.VERIFICATION_FAILED, message);
+        }
+        getLogger().warn(message);
+    }
+    const existingTimestamps = discovery.timestamps;
 
     // 2. Verify all existing timestamps concurrently.
     //
@@ -100,18 +118,19 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     );
 
     const allCerts = new Set<string>();
-    const certificates: Uint8Array[] = [];
-    const crls: Uint8Array[] = [];
-    const ocspResponses: Uint8Array[] = [];
+    const certificates = [...(options.revocationData?.certificates ?? [])];
+    const crls = [...(options.revocationData?.crls ?? [])];
+    const ocspResponses = [...(options.revocationData?.ocspResponses ?? [])];
+
+    for (const certificate of certificates) {
+        allCerts.add(bytesToHex(certificate));
+    }
 
     // 3. For each existing timestamp, extract its validation material.
     //
-    // Audit H1: with the 0.2.0 G1/G2 default flips, legacy timestamps without
-    // the id-kp-timeStamping EKU (or with a TSA cert that was expired by
-    // signing time) now fail verification. Previously this loop silently
-    // collected their material anyway, producing a misleadingly-"successful"
-    // archive with a broken chain of trust. We now surface the failure: warn
-    // by default, throw if strictExistingVerification is set.
+    // A failed token never supplies validation material. It might be malformed,
+    // bind an earlier document revision, or use a different signer than its
+    // certificate set suggests.
     for (const verified of verifiedTimestamps) {
         if (!verified.verified) {
             const message = `Existing timestamp '${verified.fieldName}' failed verification: ${
@@ -121,9 +140,13 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
                 throw new TimestampError(TimestampErrorCode.VERIFICATION_FAILED, message);
             }
             getLogger().warn(message);
+            continue;
         }
 
-        // Collect certificates
+        // Verification selects the signer by CMS SID. Archive renewal does not
+        // need to select a signer itself, so retain every embedded certificate
+        // candidate from a successfully verified token rather than relying on
+        // certificates[0].
         if (verified.certificates) {
             for (const cert of verified.certificates) {
                 const der = cert.toSchema().toBER(false);
@@ -137,85 +160,41 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
             }
         }
 
-        // Collect revocation data from the token if requested
+        // This token already passed strict timestamp verification. Any token
+        // parsing failure here is therefore a contradictory PDF state and is
+        // surfaced instead of silently falling through a broad catch.
         if (includeExistingRevocationData) {
-            // Note: extractLTVData in ltv.ts handles this extraction from a token
-            try {
-                const ltv = extractLTVData(verified.token);
-
-                // Add unique CRLs and OCSPs (simplified deduplication)
-                for (const crl of ltv.crls) crls.push(crl);
-                for (const ocsp of ltv.ocspResponses) ocspResponses.push(ocsp);
-            } catch {
-                // Skip malformed existing tokens
-            }
+            const ltv = extractLTVData(verified.token);
+            for (const crl of ltv.crls) crls.push(crl);
+            for (const ocsp of ltv.ocspResponses) ocspResponses.push(ocsp);
         }
     }
 
-    // 4. Update the DSS with collected information
-    // If no new info was found, we still proceed to add the archive timestamp
     const ltvData: LTVData = {
         certificates,
         crls,
         ocspResponses,
     };
 
-    // 4. Update the DSS with collected information
-    // Fetch missing revocation data (best effort)
+    // Fetch structural candidate material for verified-token certificates.
     const ltvResult = await completeLTVData(ltvData);
     const completeData = ltvResult.data;
 
-    // Log any errors encountered during LTV enrichment (for debugging)
+    // Collection errors do not turn fetched or caller-provided bytes into
+    // cryptographically validated revocation evidence.
     if (ltvResult.errors.length > 0) {
         const logger = getLogger();
-        logger.warn("Warnings during LTV data completion:");
+        logger.warn("Warnings during validation-material collection:");
         for (const error of ltvResult.errors) {
             logger.warn(`  - ${error}`);
         }
     }
 
-    // If no new info was found, we still proceed to add the archive timestamp
-
-    // Use incremental addDSS
-    let currentPdf = pdf;
-
-    if (certificates.length > 0 || crls.length > 0 || ocspResponses.length > 0) {
-        // Note: We do NOT pass pdfDoc here because addDSS needs to load fresh
-        // from the bytes to get correct xref offsets for incremental save.
-        currentPdf = await addDSS(pdf, completeData);
-    }
-
-    // 4.5 Add VRI entries for each signature
-    // VRI associates validation material with specific signing certificates
-    for (const verified of verifiedTimestamps) {
-        try {
-            if (verified.certificates && verified.certificates.length > 0) {
-                // Use the first certificate as the signing certificate
-                const signingCert = verified.certificates[0];
-                if (!signingCert) continue;
-
-                // Collect revocation data for this signature
-                const revocationData: { crls?: Uint8Array[]; ocspResponses?: Uint8Array[] } = {};
-
-                // Extract revocation data from this timestamp's token
-                const ltv = extractLTVData(verified.token);
-                if (ltv.crls.length > 0) {
-                    revocationData.crls = ltv.crls;
-                }
-                if (ltv.ocspResponses.length > 0) {
-                    revocationData.ocspResponses = ltv.ocspResponses;
-                }
-
-                // Add VRI entry for this signature
-                if (Object.keys(revocationData).length > 0) {
-                    // eslint-disable-next-line @typescript-eslint/no-deprecated -- Task 4 removes automatic VRI.
-                    currentPdf = await addVRI(currentPdf, signingCert, revocationData);
-                }
-            }
-        } catch {
-            // Skip VRI for malformed signatures
-        }
-    }
+    // Always append exactly one additive global DSS revision. This preserves
+    // existing DSS/VRI/unknown entries even when renewal adds no new bytes.
+    const currentPdf = await addDSS(pdf, completeData, {
+        ignoreEncryption: options.ignoreEncryption,
+    });
 
     // 5. Add the final archive timestamp
     // Note: We also do NOT pass pdfDoc here because the bytes may have changed
@@ -228,9 +207,8 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     //   - `enableLTV` is force-overridden to `false`: archive owns the LTV
     //     pipeline (it builds the DSS above). If the caller explicitly set
     //     `enableLTV: true`, warn so they understand it's ignored.
-    //   - `revocationData` is dropped: archive collects revocation material
-    //     from existing in-PDF signatures rather than from caller-supplied
-    //     pre-fetched data. Mixing the two would be confusing.
+    //   - `revocationData` has already been merged as caller-responsible raw
+    //     candidate material in the archive-owned aggregate DSS update.
     if (options.enableLTV === true) {
         getLogger().warn(
             "archiveTimestamp: `enableLTV: true` is ignored; archive manages LTV internally."
@@ -255,7 +233,8 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
 }
 
 /**
- * @deprecated Renamed to {@link archiveTimestamp} in 0.2.0. The old name
- * remains available as an alias and will be removed in a future major.
+ * @deprecated Historical alias for {@link archiveTimestamp}. It remains
+ * source-compatible but does not promise PAdES-LTA conformance or indefinite
+ * validity; use archiveTimestamp for RFC 3161 document-timestamp renewal.
  */
 export const timestampPdfLTA = archiveTimestamp;

@@ -1,8 +1,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-import { getLogger } from "../utils/logger.js";
-import { toArrayBuffer } from "../utils.js";
+import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "./der-utils.js";
 
 /**
  * OCSP Response Status values (RFC 6960)
@@ -12,8 +11,9 @@ export enum OCSPResponseStatus {
     MALFORMED_REQUEST = 1,
     INTERNAL_ERROR = 2,
     TRY_LATER = 3,
-    SIG_REQUIRED = 4,
-    UNAUTHORIZED = 5,
+    UNUSED = 4,
+    SIG_REQUIRED = 5,
+    UNAUTHORIZED = 6,
 }
 
 /**
@@ -36,6 +36,87 @@ export interface ParsedOCSPResponse {
     responderName?: string;
 }
 
+function isCertStatusBlock(value: unknown): value is asn1js.Primitive | asn1js.Constructed {
+    return value instanceof asn1js.Primitive || value instanceof asn1js.Constructed;
+}
+
+function invalidOcspSchema(message: string): TimestampError {
+    return new TimestampError(TimestampErrorCode.INVALID_RESPONSE, `OCSP response: ${message}`);
+}
+
+function sequenceChildren(value: asn1js.BaseBlock, description: string): asn1js.BaseBlock[] {
+    if (!(value instanceof asn1js.Sequence)) {
+        throw invalidOcspSchema(`${description} must be a SEQUENCE`);
+    }
+    return value.valueBlock.value;
+}
+
+/**
+ * Checks the RFC 6960 OCSPResponse and nested explicit ResponseBytes framing
+ * before PKIjs maps them into object properties.
+ */
+function parseRawResponseStatus(value: asn1js.BaseBlock): OCSPResponseStatus {
+    if (
+        !(value instanceof asn1js.Enumerated) ||
+        value.idBlock.isConstructed ||
+        value.valueBlock.valueHexView.byteLength !== 1
+    ) {
+        throw invalidOcspSchema(
+            "responseStatus must be a primitive, one-octet ENUMERATED value"
+        );
+    }
+
+    const status = value.valueBlock.valueHexView[0];
+    // RFC 6960 defines nonnegative responseStatus values 0 through 6.
+    if (status === undefined || status > 6) {
+        throw invalidOcspSchema("responseStatus must be an RFC 6960 value from 0 through 6");
+    }
+    return status;
+}
+
+function validateOcspResponseSchema(value: asn1js.BaseBlock): OCSPResponseStatus {
+    const children = sequenceChildren(value, "outer value");
+    if (children.length < 1 || children.length > 2) {
+        throw invalidOcspSchema("outer value must contain responseStatus and optional responseBytes only");
+    }
+
+    const responseStatus = children[0];
+    if (responseStatus === undefined) {
+        throw invalidOcspSchema("outer value must contain responseStatus");
+    }
+    const status = parseRawResponseStatus(responseStatus);
+
+    if (children.length === 1) return status;
+
+    const responseBytesExplicit = children[1];
+    if (
+        !(responseBytesExplicit instanceof asn1js.Constructed) ||
+        responseBytesExplicit.idBlock.tagClass !== 3 ||
+        responseBytesExplicit.idBlock.tagNumber !== 0
+    ) {
+        throw invalidOcspSchema("responseBytes must be [0] EXPLICIT");
+    }
+
+    const explicitChildren = responseBytesExplicit.valueBlock.value;
+    if (explicitChildren.length !== 1) {
+        throw invalidOcspSchema("responseBytes explicit wrapper must contain exactly one value");
+    }
+
+    const responseBytesValue = explicitChildren[0];
+    if (responseBytesValue === undefined) {
+        throw invalidOcspSchema("responseBytes explicit wrapper must contain exactly one value");
+    }
+    const responseBytes = sequenceChildren(responseBytesValue, "responseBytes");
+    if (
+        responseBytes.length !== 2 ||
+        !(responseBytes[0] instanceof asn1js.ObjectIdentifier) ||
+        !(responseBytes[1] instanceof asn1js.OctetString)
+    ) {
+        throw invalidOcspSchema("responseBytes must contain an OBJECT IDENTIFIER and OCTET STRING only");
+    }
+    return status;
+}
+
 /**
  * Validates and parses an OCSP response.
  *
@@ -44,41 +125,15 @@ export interface ParsedOCSPResponse {
  * @throws TimestampError if response is invalid or indicates failure
  */
 export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse {
-    const asn1 = asn1js.fromBER(toArrayBuffer(responseBytes));
-    if (asn1.offset === -1) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "Failed to parse OCSP response ASN.1"
-        );
-    }
+    const asn1 = parseCanonicalDERSequenceTree(responseBytes, "OCSP response");
+    const status = validateOcspResponseSchema(asn1);
 
-    const ocspResponse = new pkijs.OCSPResponse({ schema: asn1.result });
-
-    // Check response status - pkijs returns an Enumerated type
-    // Check response status - pkijs returns an Enumerated type (object)
-    // We need to extract the actual number from it
-    let statusValue: number;
-
-    const rawStatus = ocspResponse.responseStatus as unknown;
-
-    if (typeof rawStatus === "number") {
-        statusValue = rawStatus;
-    } else if (
-        rawStatus &&
-        typeof rawStatus === "object" &&
-        "valueBlock" in rawStatus &&
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
-        typeof (rawStatus as any).valueBlock.valueDec === "number"
-    ) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
-        statusValue = (rawStatus as any).valueBlock.valueDec as number;
-    } else {
-        // Fallback or error if structure is unexpected
-        // Defaulting to a value that isn't SUCCESSFUL (0) if we can't parse it
-        statusValue = OCSPResponseStatus.INTERNAL_ERROR;
-    }
-
-    const status: OCSPResponseStatus = statusValue;
+    const ocspResponse = new pkijs.OCSPResponse({ schema: asn1 });
+    requireSchemaRoundTrip(
+        responseBytes,
+        ocspResponse.toSchema().toBER(false),
+        "OCSP response"
+    );
 
     if (status !== OCSPResponseStatus.SUCCESSFUL) {
         const statusNames: Record<number, string> = {
@@ -86,6 +141,7 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
             [OCSPResponseStatus.MALFORMED_REQUEST]: "Malformed Request",
             [OCSPResponseStatus.INTERNAL_ERROR]: "Internal Error",
             [OCSPResponseStatus.TRY_LATER]: "Try Later",
+            [OCSPResponseStatus.UNUSED]: "Unused",
             [OCSPResponseStatus.SIG_REQUIRED]: "Signature Required",
             [OCSPResponseStatus.UNAUTHORIZED]: "Unauthorized",
         };
@@ -103,10 +159,25 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
         );
     }
 
+    if (ocspResponse.responseBytes.responseType !== "1.3.6.1.5.5.7.48.1.1") {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "OCSP response does not contain a BasicOCSPResponse"
+        );
+    }
+
     // Parse the response bytes (should be BasicOCSPResponse)
     const responseBytesValue = ocspResponse.responseBytes.response.valueBlock.valueHexView;
-    const responseBytesAsn1 = asn1js.fromBER(responseBytesValue).result;
+    const responseBytesAsn1 = parseCanonicalDERSequenceTree(
+        responseBytesValue,
+        "BasicOCSPResponse"
+    );
     const basicOCSPResponse = new pkijs.BasicOCSPResponse({ schema: responseBytesAsn1 });
+    requireSchemaRoundTrip(
+        responseBytesValue,
+        basicOCSPResponse.toSchema().toBER(false),
+        "BasicOCSPResponse"
+    );
 
     // Get the single response
     const singleResponses = basicOCSPResponse.tbsResponseData.responses;
@@ -126,37 +197,41 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
     }
 
     // Extract certificate status
+    const statusCandidate: unknown = singleResponse.certStatus;
+    if (!isCertStatusBlock(statusCandidate) || statusCandidate.idBlock.tagClass !== 3) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "OCSP response certificate status is malformed"
+        );
+    }
+
+    // CertStatus ::= CHOICE { good [0] IMPLICIT NULL, revoked [1] RevokedInfo,
+    // unknown [2] UnknownInfo }  -- RFC 6960. Good must be primitive with no content.
     let certStatus: CertificateStatus;
-
-    if (singleResponse.certStatus === null || singleResponse.certStatus === undefined) {
-        certStatus = CertificateStatus.GOOD;
-    } else {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const statusAsn1 = singleResponse.certStatus;
-
-        if (statusAsn1 && "idBlock" in (statusAsn1 as object)) {
-            // CertStatus ::= CHOICE { good [0] NULL, revoked [1] RevokedInfo,
-            // unknown [2] UnknownInfo }  -- RFC 6960
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            const tagNumber = statusAsn1.idBlock.tagNumber as number;
-
-            switch (tagNumber) {
-                case 0:
-                    certStatus = CertificateStatus.GOOD;
-                    break;
-                case 1:
-                    certStatus = CertificateStatus.REVOKED;
-                    break;
-                case 2:
-                    certStatus = CertificateStatus.UNKNOWN;
-                    break;
-                default:
-                    certStatus = CertificateStatus.UNKNOWN;
+    switch (statusCandidate.idBlock.tagNumber) {
+        case 0:
+            if (
+                !(statusCandidate instanceof asn1js.Primitive) ||
+                statusCandidate.valueBlock.valueHexView.byteLength !== 0
+            ) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    "OCSP response certificate status is malformed"
+                );
             }
-        } else {
-            getLogger().warn(`OCSP CertStatus missing idBlock; treating as UNKNOWN`);
+            certStatus = CertificateStatus.GOOD;
+            break;
+        case 1:
+            certStatus = CertificateStatus.REVOKED;
+            break;
+        case 2:
             certStatus = CertificateStatus.UNKNOWN;
-        }
+            break;
+        default:
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "OCSP response certificate status is malformed"
+            );
     }
 
     // Extract timestamps

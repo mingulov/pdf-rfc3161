@@ -70,6 +70,12 @@ export interface ExtractedTimestamp {
     m?: Date;
 }
 
+/** @internal Detailed timestamp discovery used by archive renewal only. */
+export interface ArchiveTimestampDiscovery {
+    timestamps: ExtractedTimestamp[];
+    malformedFieldNames: string[];
+}
+
 /**
  * Returns the exact length of one canonical DER TLV at the start of `bytes`.
  * PDF /Contents reserves a fixed-width hex string, so only the bytes after
@@ -121,6 +127,21 @@ function tokenWithoutPdfContentsPadding(contents: Uint8Array): Uint8Array {
     return contents.slice(0, tokenLength);
 }
 
+function isRfc3161SubFilter(value: unknown): boolean {
+    return value instanceof PDFName && value.toString() === "/ETSI.RFC3161";
+}
+
+function isDocumentTimestampType(value: unknown): boolean {
+    return value instanceof PDFName && value.toString() === "/DocTimeStamp";
+}
+
+function fieldNameForDiscovery(field: PDFDict, index: number): string {
+    const fieldNameObj = field.get(PDFName.of("T"));
+    return fieldNameObj
+        ? fieldNameObj.toString().replace(/^\(/, "").replace(/\)$/, "")
+        : `Signature${index.toString()}`;
+}
+
 /**
  * Extracts all RFC 3161 document timestamps from a PDF.
  *
@@ -132,6 +153,31 @@ export async function extractTimestamps(
     pdfBytes: Uint8Array,
     options?: ExtractOptions
 ): Promise<ExtractedTimestamp[]> {
+    const discovery = await discoverTimestamps(pdfBytes, options, false);
+    return discovery.timestamps;
+}
+
+/**
+ * Discovers RFC 3161 document timestamp fields for archive renewal.
+ *
+ * Unlike the compatible public {@link extractTimestamps} API, this retains
+ * the field names of recognized timestamp fields that cannot be parsed, so
+ * archive renewal can warn or reject rather than silently overlook them.
+ *
+ * @internal
+ */
+export async function discoverArchiveTimestamps(
+    pdfBytes: Uint8Array,
+    options?: ExtractOptions
+): Promise<ArchiveTimestampDiscovery> {
+    return discoverTimestamps(pdfBytes, options, true);
+}
+
+async function discoverTimestamps(
+    pdfBytes: Uint8Array,
+    options: ExtractOptions | undefined,
+    archiveDetailed: boolean
+): Promise<ArchiveTimestampDiscovery> {
     let pdfDoc;
     try {
         pdfDoc = await PDFDocument.load(pdfBytes, {
@@ -146,21 +192,23 @@ export async function extractTimestamps(
     }
 
     const timestamps: ExtractedTimestamp[] = [];
+    const malformedFieldNames: string[] = [];
 
     // Get the AcroForm
     const acroForm = pdfDoc.catalog.lookup(PDFName.of("AcroForm"));
     if (!acroForm || !(acroForm instanceof PDFDict)) {
-        return timestamps;
+        return { timestamps, malformedFieldNames };
     }
 
     // Get fields array
     const fields = acroForm.lookup(PDFName.of("Fields"));
     if (!fields || !(fields instanceof PDFArray)) {
-        return timestamps;
+        return { timestamps, malformedFieldNames };
     }
 
     // Iterate through fields looking for signature fields
     for (let i = 0; i < fields.size(); i++) {
+        let recognizedFieldName: string | undefined;
         try {
             const fieldRef = fields.get(i);
             if (!(fieldRef instanceof PDFRef)) continue;
@@ -172,34 +220,68 @@ export async function extractTimestamps(
             const ft = field.get(PDFName.of("FT"));
             if (ft?.toString() !== "/Sig") continue;
 
-            // Get the signature value (V)
+            const fieldName = fieldNameForDiscovery(field, i);
+            const fieldMarksRfc3161 = isRfc3161SubFilter(field.get(PDFName.of("SubFilter")));
+            const fieldMarksDocumentTimestamp = isDocumentTimestampType(
+                field.get(PDFName.of("Type"))
+            );
+
+            // Get the signature value (V). A direct field marker is retained
+            // only to surface a malformed RFC 3161 field whose value cannot
+            // be resolved as a signature dictionary.
             const sigValueRef = field.get(PDFName.of("V"));
-            if (!sigValueRef) continue;
+            if (!sigValueRef) {
+                if (archiveDetailed && (fieldMarksRfc3161 || fieldMarksDocumentTimestamp)) {
+                    recognizedFieldName = fieldName;
+                    throw new Error("RFC 3161 document timestamp has no /V dictionary");
+                }
+                continue;
+            }
 
             let sigValue: PDFDict;
             if (sigValueRef instanceof PDFRef) {
                 const looked = pdfDoc.context.lookup(sigValueRef);
-                if (!(looked instanceof PDFDict)) continue;
+                if (!(looked instanceof PDFDict)) {
+                    if (archiveDetailed && (fieldMarksRfc3161 || fieldMarksDocumentTimestamp)) {
+                        recognizedFieldName = fieldName;
+                        throw new Error("RFC 3161 document timestamp /V is not a dictionary");
+                    }
+                    continue;
+                }
                 sigValue = looked;
             } else if (sigValueRef instanceof PDFDict) {
                 sigValue = sigValueRef;
             } else {
+                if (archiveDetailed && (fieldMarksRfc3161 || fieldMarksDocumentTimestamp)) {
+                    recognizedFieldName = fieldName;
+                    throw new Error("RFC 3161 document timestamp /V is not a dictionary");
+                }
                 continue;
             }
 
-            // Check if it's an RFC 3161 timestamp (SubFilter = /ETSI.RFC3161)
-            const subFilter = sigValue.get(PDFName.of("SubFilter"));
-            if (!subFilter?.toString().includes("ETSI.RFC3161")) continue;
-
-            // Get field name
-            const fieldNameObj = field.get(PDFName.of("T"));
-            const fieldName = fieldNameObj
-                ? fieldNameObj.toString().replace(/^\(/, "").replace(/\)$/, "")
-                : `Signature${i.toString()}`;
+            // Public extraction keeps its established permissive RFC 3161
+            // SubFilter match. Archive renewal is intentionally stricter:
+            // the resolved signature value dictionary must carry both exact
+            // document-timestamp markers. Field-level markers cannot rescue
+            // or invalidate a resolved signature value dictionary.
+            const valueMarksRfc3161 = isRfc3161SubFilter(sigValue.get(PDFName.of("SubFilter")));
+            const valueMarksDocumentTimestamp = isDocumentTimestampType(sigValue.get(PDFName.of("Type")));
+            if (archiveDetailed && valueMarksRfc3161 !== valueMarksDocumentTimestamp) {
+                recognizedFieldName = fieldName;
+                throw new Error("RFC 3161 document timestamp has an incomplete /Type and /SubFilter pair");
+            }
+            if (!valueMarksRfc3161) {
+                // Neither resolved marker identifies an ordinary signature.
+                // Only a reciprocal marker mismatch is malformed above.
+                continue;
+            }
+            recognizedFieldName = fieldName;
 
             // Extract the Contents (the actual timestamp token)
             const contents = sigValue.get(PDFName.of("Contents"));
-            if (!contents || !(contents instanceof PDFHexString)) continue;
+            if (!(contents instanceof PDFHexString)) {
+                throw new Error("RFC 3161 document timestamp /Contents must be a hex string");
+            }
 
             // Keep the exact decoded PDF value, including all reserved zero padding.
             const contentsBytes = contents.asBytes();
@@ -214,13 +296,28 @@ export async function extractTimestamps(
 
             // Extract ByteRange
             const byteRange = sigValue.get(PDFName.of("ByteRange"));
-            if (!(byteRange instanceof PDFArray) || byteRange.size() !== 4) continue;
+            if (!(byteRange instanceof PDFArray) || byteRange.size() !== 4) {
+                throw new Error("RFC 3161 document timestamp /ByteRange must contain four numbers");
+            }
+
+            const byteRangeStart = byteRange.get(0);
+            const byteRangeFirstLength = byteRange.get(1);
+            const byteRangeSecondStart = byteRange.get(2);
+            const byteRangeSecondLength = byteRange.get(3);
+            if (
+                !(byteRangeStart instanceof PDFNumber) ||
+                !(byteRangeFirstLength instanceof PDFNumber) ||
+                !(byteRangeSecondStart instanceof PDFNumber) ||
+                !(byteRangeSecondLength instanceof PDFNumber)
+            ) {
+                throw new Error("RFC 3161 document timestamp /ByteRange must contain four numbers");
+            }
 
             const brValues = [
-                (byteRange.get(0) as PDFNumber).asNumber(),
-                (byteRange.get(1) as PDFNumber).asNumber(),
-                (byteRange.get(2) as PDFNumber).asNumber(),
-                (byteRange.get(3) as PDFNumber).asNumber(),
+                byteRangeStart.asNumber(),
+                byteRangeFirstLength.asNumber(),
+                byteRangeSecondStart.asNumber(),
+                byteRangeSecondLength.asNumber(),
             ] as [number, number, number, number];
 
             // Parse the timestamp details
@@ -277,12 +374,15 @@ export async function extractTimestamps(
                 m,
             });
         } catch {
+            if (recognizedFieldName !== undefined) {
+                malformedFieldNames.push(recognizedFieldName);
+            }
             // Skip fields that fail to parse
             continue;
         }
     }
 
-    return timestamps;
+    return { timestamps, malformedFieldNames };
 }
 
 /**

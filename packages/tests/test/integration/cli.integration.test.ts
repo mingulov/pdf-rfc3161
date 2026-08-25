@@ -333,6 +333,16 @@ describe("CLI Integration Tests", () => {
     });
 
     describe("CLI Archive Command", () => {
+        it("describes archive as RFC 3161 document-timestamp renewal without a PAdES-LTA guarantee", async () => {
+            const result = await runCli(["archive", "--help"]);
+
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("RFC 3161 document-timestamp renewal");
+            expect(result.stdout).not.toContain("PAdES-LTA");
+            expect(result.stdout).not.toMatch(/indefinite/i);
+            expect(result.stdout).not.toMatch(/validated revocation/i);
+        });
+
         it("should handle archive command structure", async () => {
             const result = await runCli(["archive", "http://freetsa.org/tsr", inputPdf]);
 
@@ -360,14 +370,14 @@ describe("CLI Integration Tests", () => {
             const result = await runCli(["archive", "--help"]);
             expect(result.code).toBe(0);
             expect(result.stdout).toContain("--no-update");
-            // The help should now describe the actual semantic, not the old
-            // misleading "fetch fresh" wording.
-            expect(result.stdout).toMatch(/harvest revocation data/);
+            // The help describes collection from verified document timestamps
+            // rather than implying generic signature harvesting or validation.
+            expect(result.stdout).toMatch(/candidate revocation material/);
         });
 
-        it("--no-update verbose log should report 'Use existing only'", async () => {
+        it("--no-update verbose log should report that existing material is not collected", async () => {
             // We don't need the archive to succeed; verbose output streams
-            // BEFORE the network call. The presence of "Use existing only"
+            // BEFORE the network call. The presence of the non-collection text
             // confirms the flag is wired (audit C4 -- previously the line
             // always said "Fetch fresh" because cmdOptions.noUpdate was
             // always undefined).
@@ -378,17 +388,17 @@ describe("CLI Integration Tests", () => {
                 "--no-update",
                 "--verbose",
             ]);
-            expect(result.stdout).toContain("Use existing only");
+            expect(result.stdout).toContain("Do not collect existing material");
         });
 
-        it("default archive --verbose should report 'Fetch fresh'", async () => {
+        it("default archive --verbose should report candidate-material collection", async () => {
             const result = await runCli([
                 "archive",
                 "http://freetsa.org/tsr",
                 inputPdf,
                 "--verbose",
             ]);
-            expect(result.stdout).toContain("Fetch fresh");
+            expect(result.stdout).toContain("Collect candidate revocation material");
         });
     });
 
