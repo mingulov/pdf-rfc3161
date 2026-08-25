@@ -14,7 +14,7 @@ import { TimestampError, TimestampErrorCode, type ExtractOptions } from "../type
 import { bytesToHex, toArrayBuffer } from "../utils.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import type { LTVData } from "./ltv.js";
-import { checkedRegister, preflightPdfXref, restoreLargestObjectNumber } from "./internals.js";
+import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
 
 export interface ValidationStoreUpdate {
     validationData?: LTVData;
@@ -717,15 +717,12 @@ export async function updateValidationStore(
     options?: ExtractOptions
 ): Promise<Uint8Array> {
     try {
-        // The pre-load proof must reject malformed metadata and decompression
-        // bombs before the dependency is allowed to parse PDF streams.
-        const xrefProof = preflightPdfXref(pdfBytes);
         const pdfDoc = await PDFDocument.load(pdfBytes, {
             updateMetadata: false,
             ignoreEncryption: options?.ignoreEncryption ?? false,
         });
         const context = pdfDoc.context;
-        restoreLargestObjectNumber(pdfBytes, context, xrefProof);
+        restoreLargestObjectNumber(pdfBytes, context);
         if (update.vri !== undefined && pdfDoc.catalog.has(PDFName.of("VRI"))) {
             throw validationStoreError(
                 "Catalog /VRI is not permitted; VRI must be stored under DSS"
