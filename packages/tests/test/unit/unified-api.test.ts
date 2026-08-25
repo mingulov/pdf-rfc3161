@@ -128,12 +128,13 @@ describe("Unified API Tests", () => {
             "utf8"
         );
         const timestampPdfDocs = indexSource.slice(
-            indexSource.indexOf("/**\n * Adds an RFC 3161 trusted timestamp"),
+            indexSource.indexOf("/**\n * Adds an RFC 3161 document timestamp"),
             indexSource.indexOf("export async function timestampPdf")
         );
 
         expect(timestampPdfDocs).toContain("`VERIFICATION_FAILED` if the TSA response");
         expect(timestampPdfDocs).not.toContain("`INVALID_RESPONSE` if the TSA response");
+        expect(timestampPdfDocs).toContain("caller-owned trust policy");
     });
 
     it("keeps the status 4/5 and raw-embed migration guidance current", () => {

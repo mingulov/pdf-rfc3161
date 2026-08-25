@@ -88,24 +88,28 @@ export interface TimestampOptions {
      */
     optimizePlaceholder?: boolean;
     /**
-     * Enable LTV (Long-Term Validation) by embedding DSS (Document Security Store).
-     * This includes certificates, CRLs, and OCSP responses needed for offline validation.
+     * Embed DSS (Document Security Store) candidate material, including certificates,
+     * CRLs, and OCSP responses. This supplies validation inputs but does not establish
+     * revocation trust, TSA trust, or long-term-validity sufficiency.
      */
     enableLTV?: boolean;
     /**
-     * Pre-fetched revocation data for LTV embedding.
+     * Pre-fetched revocation candidate material for LTV embedding.
      * Allows supplying certificates, CRLs, and OCSP responses directly without network calls.
      * Useful for air-gapped environments or when revocation data is obtained separately.
      *
      * When provided, this data is embedded in the DSS instead of fetching from network.
+     * It is caller-responsible raw material: the library does not claim it has
+     * validated its signature, issuer/responder authorization, freshness,
+     * scope, CertID, or revocation status.
      * Takes precedence over automatic fetching when enableLTV is true.
      */
     revocationData?: {
-        /** DER-encoded certificates to embed */
+        /** DER-encoded certificate candidate material to embed */
         certificates?: Uint8Array[];
-        /** DER-encoded CRLs to embed */
+        /** Caller-responsible DER-encoded CRL candidate material to embed */
         crls?: Uint8Array[];
-        /** DER-encoded OCSP responses to embed */
+        /** Caller-responsible DER-encoded OCSP candidate material to embed */
         ocspResponses?: Uint8Array[];
     };
     /**
@@ -128,7 +132,10 @@ export interface TimestampResult {
     pdf: Uint8Array;
     /** Information about the embedded timestamp */
     timestamp: TimestampInfo;
-    /** LTV data that was embedded (if enableLTV was true) */
+    /**
+     * LTV candidate material embedded when enableLTV was true. Its presence
+     * does not by itself establish revocation trust or indefinite validity.
+     */
     ltvData?: {
         /** Certificates embedded for LTV */
         certificates: Uint8Array[];

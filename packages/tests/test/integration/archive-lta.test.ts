@@ -33,7 +33,7 @@ async function withTSAHandler(tsaUrl: string, testFn: () => Promise<void>): Prom
     }
 }
 
-describe("Integration: PAdES-LTA Archive Timestamps", () => {
+describe("Integration: RFC 3161 document-timestamp renewal", () => {
     // Only run integration tests if explicitly enabled
     const itLive = process.env.LIVE_TSA_TESTS ? it : it.skip;
 
@@ -63,7 +63,7 @@ describe("Integration: PAdES-LTA Archive Timestamps", () => {
             await delay(1500);
 
             await withTSAHandler(KNOWN_TSA_URLS.DIGICERT, async () => {
-                // Step 2: Add archive timestamp using archiveTimestamp
+                // Step 2: Renew the document timestamp using archiveTimestamp
                 const initialResult = await timestampPdf({
                     pdf: pdfBytes,
                     tsa: {

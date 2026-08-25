@@ -97,7 +97,7 @@ describe("CLI Command Structure and Validation", () => {
 
             const archiveCmd = program
                 .command("archive")
-                .description("Add a PAdES-LTA Archive Timestamp")
+                .description("RFC 3161 document-timestamp renewal with global DSS candidate material")
                 .argument("<tsa_url>", "TSA server URL")
                 .argument("<file>", "Input PDF file")
                 .argument("[bucket_output]", "Output file path (optional)")
@@ -106,7 +106,11 @@ describe("CLI Command Structure and Validation", () => {
                         .choices(["SHA-256", "SHA-384", "SHA-512"])
                         .default("SHA-256")
                 )
-                .option("--no-update", "Do not fetch fresh revocation data", false)
+                .option(
+                    "--no-update",
+                    "Do not collect candidate revocation material from verified existing document timestamps",
+                    false
+                )
                 .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
                 .option("--retry <n>", "Number of retry attempts", "3")
                 .option("-v, --verbose", "Verbose output", false);
@@ -171,7 +175,7 @@ describe("CLI Command Structure and Validation", () => {
             const descriptions = {
                 timestamp: "Add an RFC 3161 timestamp to a PDF document",
                 verify: "Verify RFC 3161 timestamps in a PDF document",
-                archive: "Add a PAdES-LTA Archive Timestamp (long-term preservation)",
+                archive: "RFC 3161 document-timestamp renewal with global DSS candidate material",
             };
 
             Object.values(descriptions).forEach((desc) => {
