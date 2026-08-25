@@ -9,11 +9,13 @@
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "test:conformance": "tsx scripts/offline-pades-conformance.ts",
+        "install:pades-oracles": "tsx scripts/install-pades-oracles.ts",
+        "assert:pades-oracles": "tsx scripts/assert-pades-oracles.ts",
         "test:package": "tsx scripts/test-packed-consumer.ts",
         "test:integration": "vitest run test/integration",
         "test:robustness": "tsx scripts/test-robustness.ts",
         "typecheck": "tsc --noEmit",
-        "lint": "eslint test scripts/test-packed-consumer.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts --fix"
+        "lint": "eslint test scripts/test-packed-consumer.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts scripts/pades-oracles.ts scripts/install-pades-oracles.ts scripts/assert-pades-oracles.ts --fix"
     },
     "dependencies": {
         "asn1js": "^3.0.10",

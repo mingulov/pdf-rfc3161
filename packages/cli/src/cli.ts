@@ -4,8 +4,7 @@ import { basename, dirname, join } from "node:path";
 import {
     timestampPdf,
     archiveTimestamp,
-    extractTimestamps,
-    verifyTimestamp,
+    verifyPdfTimestamps,
     validateTimestampTokenRFC8933Compliance,
     KNOWN_TSA_URLS,
     TimestampError,
@@ -77,7 +76,7 @@ program
     // aligned with the library default. See audit C3.
     .option(
         "--no-ltv",
-        "Disable LTV (DSS/VRI). LTV is on by default since 0.2.0 -- pass --no-ltv to opt out for a basic signature."
+        "Disable automatic DSS candidate material collection. LTV is on by default since 0.2.0 -- pass --no-ltv to opt out for a basic signature."
     )
     .option("--reason <text>", "Reason for the timestamp")
     .option("--location <text>", "Location where the timestamp occurs")
@@ -152,7 +151,11 @@ program
                     contactInfo: options.contactInfo,
                     signatureFieldName: options.name,
                     optimizePlaceholder: options.optimize,
-                    omitModificationTime: options.omitM,
+                    // The core preserves a caller's explicit legacy
+                    // `omitModificationTime: false`, but the CLI has no
+                    // documented emit-/M mode. Leave the property absent by
+                    // default so command-line output remains PAdES-safe.
+                    ...(options.omitM ? { omitModificationTime: true } : {}),
                     enableLTV: options.ltv,
                     // --reject-on-revocation-warning remains parser-compatible only.
                     // Every non-granted TSA status is fatal in the core validator.
@@ -218,7 +221,7 @@ program
     // no-op. See audit C4.
     .option(
         "--no-update",
-        "Do not collect candidate revocation material from verified existing document timestamps"
+        "Do not harvest revocation data from existing signatures into the new archive (still fetches fresh OCSP/CRL via completeLTVData)"
     )
     .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
@@ -241,7 +244,7 @@ program
                     console.log(`Output:    ${outputFile}`);
                     console.log(`TSA:       ${tsaUrl}`);
                     console.log(
-                        `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Do not collect existing material"}`
+                        `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Skip embedded revocation data; still fetch fresh OCSP/CRL via completeLTVData"}`
                     );
                     console.log();
                 }
@@ -350,8 +353,15 @@ program
                     console.log();
                 }
 
-                // Extract timestamps
-                const timestamps = await extractTimestamps(pdfData);
+                // Discover and verify all values through one PDF-level batch.
+                // This shares the bounded lexical signature index instead of
+                // rebuilding it for every displayed timestamp.
+                const timestamps = await verifyPdfTimestamps(pdfData, {
+                    trustStore,
+                    requireTimestampingEKU: options.requireEku,
+                    requireCertValidAtGenTime: options.requireValidity,
+                    strictESSValidation: options.strictEss,
+                });
 
                 if (timestamps.length === 0) {
                     console.log("No RFC 3161 timestamps found in this PDF.");
@@ -361,18 +371,9 @@ program
                 console.log(`Found ${timestamps.length.toString()} timestamp(s):\n`);
 
                 for (let i = 0; i < timestamps.length; i++) {
-                    const ts = timestamps[i];
-                    if (!ts) continue;
-
-                    // Verify the timestamp
-                    const verified = await verifyTimestamp(ts, {
-                        pdf: pdfData,
-                        trustStore,
-                        requireTimestampingEKU: options.requireEku,
-                        requireCertValidAtGenTime: options.requireValidity,
-                        strictESSValidation: options.strictEss,
-                    });
-                    timestamps[i] = verified;
+                    const verified = timestamps[i];
+                    if (!verified) continue;
+                    const ts = verified;
 
                     console.log(`Timestamp ${(i + 1).toString()}:`);
                     console.log(`  Field:         ${ts.fieldName}`);
@@ -385,7 +386,15 @@ program
                     if (ts.m) console.log(`  Signed At:     ${ts.m.toISOString()}`);
 
                     if (verified.verified) {
-                        console.log(`  Status:        [OK] Verified`);
+                        if (trustStore) {
+                            console.log(
+                                "  Status:        [OK] Cryptographically consistent and trusted under supplied policy"
+                            );
+                        } else {
+                            console.log(
+                                "  Status:        [OK] Cryptographically consistent; TSA trust NOT EVALUATED (no --trust-store supplied)"
+                            );
+                        }
                     } else {
                         console.log(`  Status:        [FAIL] Verification failed`);
                         if (verified.verificationError !== undefined) {
@@ -393,14 +402,11 @@ program
                         }
                     }
 
-                    // Extract TSA Name from certificate
+                    // Do not infer a TSA name from certificate order: the
+                    // selected signer is determined by the CMS SID.
                     if (verified.certificates && verified.certificates.length > 0) {
                         const count = verified.certificates.length;
-                        const signer = verified.certificates[0];
-                        if (signer) {
-                            const signerName = getCommonName(signer.subject);
-                            console.log(`  TSA Name:      ${signerName}`);
-                        }
+                        console.log(`  Certificates:  ${String(count)} embedded`);
 
                         if (options.verbose) {
                             console.log(`  Chain:         ${String(count)} certificates`);
@@ -456,9 +462,15 @@ program
                     (ts: { verified: boolean }) => ts.verified
                 ).length;
                 if (verifiedCount === timestamps.length) {
-                    console.log(
-                        `SUCCESS: All ${String(timestamps.length)} timestamp(s) verified successfully.`
-                    );
+                    if (trustStore) {
+                        console.log(
+                            `SUCCESS: All ${String(timestamps.length)} timestamp(s) are cryptographically consistent and trusted under supplied policy.`
+                        );
+                    } else {
+                        console.log(
+                            `SUCCESS: All ${String(timestamps.length)} timestamp(s) are cryptographically consistent; TSA trust was NOT EVALUATED (no --trust-store supplied).`
+                        );
+                    }
                 } else {
                     console.log(
                         `WARN: ${String(verifiedCount)}/${String(timestamps.length)} timestamp(s) verified.`

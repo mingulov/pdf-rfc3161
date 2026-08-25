@@ -1,5 +1,9 @@
 import { timestampPdf } from "../index.js";
-import { discoverArchiveTimestamps, verifyTimestamp } from "./extract.js";
+import {
+    discoverArchiveTimestamps,
+    verifyTimestampsWithSharedIndex,
+    type ExtractedTimestamp,
+} from "./extract.js";
 import { addDSS, extractLTVData, completeLTVData, type LTVData } from "./ltv.js";
 import {
     TimestampError,
@@ -34,9 +38,9 @@ export interface ArchiveTimestampOptions extends TimestampOptions {
     strictExistingVerification?: boolean;
 
     /**
-     * Verification options forwarded to `verifyTimestamp` for each existing
-     * in-PDF timestamp during the archive's verify-and-collect loop. The
-     * archive automatically passes the input `pdf` bytes so the
+     * Verification options forwarded to the shared timestamp verifier for
+     * existing in-PDF values during the archive's verify-and-collect loop.
+     * The archive automatically passes the input `pdf` bytes so the
      * document-hash check runs. This option lets the caller provide a
      * `trustStore`, opt out of G1/G2 strictness for legacy tokens, or set
      * other verification behavior.
@@ -56,6 +60,20 @@ export interface ArchiveTimestampOptions extends TimestampOptions {
      * operation does not cryptographically validate it.
      */
     revocationData?: TimestampOptions["revocationData"];
+}
+
+function signatureValueKey(timestamp: ExtractedTimestamp): string | undefined {
+    if (timestamp.contentsObject === undefined) return undefined;
+    const [offset1, length1, offset2, length2] = timestamp.byteRange;
+    return [
+        timestamp.contentsObject.objectNumber,
+        timestamp.contentsObject.generationNumber,
+        timestamp.contentsDirectValue ? "direct" : "indirect",
+        offset1,
+        length1,
+        offset2,
+        length2,
+    ].join(":");
 }
 
 /**
@@ -102,7 +120,9 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     }
     const existingTimestamps = discovery.timestamps;
 
-    // 2. Verify all existing timestamps concurrently.
+    // 2. Verify existing values in field order. Strict discovery supplies its
+    // scanner, so renewal neither reparses the PDF nor falls back to public
+    // permissive discovery. Shared /V values are verified once, sequentially.
     //
     // Audit F7: always forward `pdf` so the document-hash check runs --
     // without it, a token signing an earlier revision of a tampered PDF
@@ -113,8 +133,10 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
         ...existingTimestampVerifyOptions,
         pdf,
     };
-    const verifiedTimestamps = await Promise.all(
-        existingTimestamps.map((ts) => verifyTimestamp(ts, verifyOpts))
+    const verifiedTimestamps = await verifyTimestampsWithSharedIndex(
+        existingTimestamps,
+        verifyOpts,
+        discovery.occurrenceIndex
     );
 
     const allCerts = new Set<string>();
@@ -131,6 +153,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     // A failed token never supplies validation material. It might be malformed,
     // bind an earlier document revision, or use a different signer than its
     // certificate set suggests.
+    const collectedSignatureValues = new Set<string>();
     for (const verified of verifiedTimestamps) {
         if (!verified.verified) {
             const message = `Existing timestamp '${verified.fieldName}' failed verification: ${
@@ -141,6 +164,16 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
             }
             getLogger().warn(message);
             continue;
+        }
+
+        // Multiple fields may inherit one valid selected /V. Its CMS token,
+        // certificates, and embedded revocation data are identical, so avoid
+        // repeated parsing and DER conversion while retaining per-field
+        // warning/error behavior above.
+        const valueKey = signatureValueKey(verified);
+        if (valueKey !== undefined) {
+            if (collectedSignatureValues.has(valueKey)) continue;
+            collectedSignatureValues.add(valueKey);
         }
 
         // Verification selects the signer by CMS SID. Archive renewal does not

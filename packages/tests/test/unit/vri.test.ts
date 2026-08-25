@@ -73,7 +73,9 @@ async function createNestedSignatureFieldPdf(): Promise<Uint8Array> {
     kids.push(child);
     const parent = context.obj({ T: PDFString.of("Parent"), Kids: kids });
     const fields = PDFArray.withContext(context);
-    fields.push(context.register(parent));
+    const parentRef = context.register(parent);
+    child.set(PDFName.of("Parent"), parentRef);
+    fields.push(parentRef);
     const acroForm = context.obj({ Fields: context.register(fields) });
     document.catalog.set(PDFName.of("AcroForm"), context.register(acroForm));
     return document.save();
@@ -83,6 +85,7 @@ async function createInheritedSignatureFieldPdf(options: {
     inheritFieldType: boolean;
     inheritSignatureValue: boolean;
     indirectParent: boolean;
+    includeChildParent?: boolean;
 }): Promise<Uint8Array> {
     const document = await PDFDocument.create();
     document.addPage([100, 100]);
@@ -113,8 +116,8 @@ async function createInheritedSignatureFieldPdf(options: {
         if (parentRef === undefined) {
             throw new Error("indirect parent reference is required");
         }
-        child.set(PDFName.of("Parent"), parentRef);
-    } else {
+        if (options.includeChildParent ?? true) child.set(PDFName.of("Parent"), parentRef);
+    } else if (options.includeChildParent ?? true) {
         child.set(PDFName.of("Parent"), parent);
     }
 
@@ -211,6 +214,50 @@ async function createSignatureFieldWithWidget(indirectWidget: boolean): Promise<
     return document.save();
 }
 
+async function createDirectChildWithIndirectParentPdf(includeChildParent = true): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    const signature = context.obj({ Contents: PDFHexString.of(contentsHex(paddedContents)) });
+    const child = context.obj({
+        T: PDFString.of("Timestamp"),
+        V: context.register(signature),
+    });
+    const kids = PDFArray.withContext(context);
+    kids.push(child);
+    const parent = context.obj({
+        FT: PDFName.of("Sig"),
+        T: PDFString.of("Parent"),
+        Kids: kids,
+    });
+    const parentRef = context.register(parent);
+    if (includeChildParent) child.set(PDFName.of("Parent"), parentRef);
+    document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: context.obj([parentRef]) }));
+    return document.save();
+}
+
+async function createWidgetWithDirectParentPdf(): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    const signature = context.obj({ Contents: PDFHexString.of(contentsHex(paddedContents)) });
+    const field = context.obj({
+        FT: PDFName.of("Sig"),
+        T: PDFString.of("Timestamp"),
+        V: context.register(signature),
+    });
+    const fieldRef = context.register(field);
+    const directParent = context.obj({ T: PDFString.of("SpoofedParent") });
+    const widget = context.obj({
+        Type: PDFName.of("Annot"),
+        Subtype: PDFName.of("Widget"),
+        Parent: directParent,
+    });
+    field.set(PDFName.of("Kids"), context.obj([widget]));
+    document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: context.obj([fieldRef]) }));
+    return document.save();
+}
+
 async function createUnnamedNonWidgetChildPdf(): Promise<Uint8Array> {
     const document = await PDFDocument.create();
     document.addPage([100, 100]);
@@ -230,7 +277,7 @@ async function createUnnamedNonWidgetChildPdf(): Promise<Uint8Array> {
     return document.save();
 }
 
-async function createSharedSignatureChildPdf(sameParentName: boolean): Promise<Uint8Array> {
+async function createSharedSignatureChildPdf(): Promise<Uint8Array> {
     const document = await PDFDocument.create();
     document.addPage([100, 100]);
     const context = document.context;
@@ -241,13 +288,13 @@ async function createSharedSignatureChildPdf(sameParentName: boolean): Promise<U
         V: context.register(signature),
     });
     const childRef = context.register(child);
-    const fields = PDFArray.withContext(context);
-
-    for (const name of sameParentName ? ["Parent", "Parent"] : ["First", "Second"]) {
-        const kids = PDFArray.withContext(context);
-        kids.push(childRef);
-        fields.push(context.register(context.obj({ T: PDFString.of(name), Kids: kids })));
-    }
+    const parent = context.obj({
+        T: PDFString.of("Parent"),
+        Kids: context.obj([childRef, childRef]),
+    });
+    const parentRef = context.register(parent);
+    child.set(PDFName.of("Parent"), parentRef);
+    const fields = context.obj([parentRef]);
 
     document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: fields }));
     return document.save();
@@ -622,6 +669,21 @@ describe("signature-specific VRI", () => {
         ).rejects.toMatchObject({ code: TimestampErrorCode.PDF_ERROR });
     });
 
+    it("rejects a child reached through a direct root parent without an indirect Parent link", async () => {
+        await expect(
+            addVRIForSignature(
+                await createInheritedSignatureFieldPdf({
+                    inheritFieldType: false,
+                    inheritSignatureValue: false,
+                    indirectParent: false,
+                    includeChildParent: false,
+                }),
+                { fieldName: "Parent.Timestamp" },
+                { validationData }
+            )
+        ).rejects.toThrow("Field /Parent must be the exact indirect containing /Kids field");
+    });
+
     it.each([false, true])(
         "rejects a malformed or cyclic Parent field chain when cyclic=%s",
         async (cyclic: boolean) => {
@@ -701,21 +763,45 @@ describe("signature-specific VRI", () => {
         ).rejects.toMatchObject({ code: TimestampErrorCode.PDF_ERROR });
     });
 
-    it.each([
-        { name: "only one matching path", sameParentName: false, fieldName: "First.Timestamp" },
-        { name: "two matching paths", sameParentName: true, fieldName: "Parent.Timestamp" },
-    ])(
-        "rejects a shared child reached through $name",
-        async ({ sameParentName, fieldName }: { sameParentName: boolean; fieldName: string }) => {
-            await expect(
-                addVRIForSignature(
-                    await createSharedSignatureChildPdf(sameParentName),
-                    { fieldName },
-                    { validationData }
-                )
-            ).rejects.toThrow("Field hierarchy reuses a field node");
-        }
-    );
+    it("accepts a direct child with the exact indirect containing Parent field", async () => {
+        const updated = await addVRIForSignature(
+            await createDirectChildWithIndirectParentPdf(),
+            { fieldName: "Parent.Timestamp" },
+            { validationData }
+        );
+        const document = await PDFDocument.load(updated, { updateMetadata: false });
+        expect(document.catalog.lookup(PDFName.of("DSS"))).toBeInstanceOf(PDFDict);
+    });
+
+    it("rejects a direct child missing the required indirect Parent field", async () => {
+        await expect(
+            addVRIForSignature(
+                await createDirectChildWithIndirectParentPdf(false),
+                { fieldName: "Parent.Timestamp" },
+                { validationData }
+            )
+        ).rejects.toThrow("Field /Parent must be the exact indirect containing /Kids field");
+    });
+
+    it("rejects a direct Parent dictionary on an unnamed widget child", async () => {
+        await expect(
+            addVRIForSignature(
+                await createWidgetWithDirectParentPdf(),
+                { fieldName: "Timestamp" },
+                { validationData }
+            )
+        ).rejects.toMatchObject({ code: TimestampErrorCode.PDF_ERROR });
+    });
+
+    it("rejects a child reused through one valid Parent /Kids array", async () => {
+        await expect(
+            addVRIForSignature(
+                await createSharedSignatureChildPdf(),
+                { fieldName: "Parent.Timestamp" },
+                { validationData }
+            )
+        ).rejects.toThrow("Field hierarchy reuses a field node");
+    });
 
     it("rejects cyclic field Kids graphs instead of recursing indefinitely", async () => {
         await expect(

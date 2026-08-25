@@ -34,6 +34,8 @@ describe("CLI smoke test", () => {
         expect(help).toContain("SHA-256");
         // 0.2.0: `--ltv` opt-in renamed to `--no-ltv` opt-out (audit C3).
         expect(help).toContain("--no-ltv");
+        expect(help).toContain("DSS candidate material");
+        expect(help).not.toContain("DSS/VRI");
         expect(help).toContain("--timeout");
     });
 

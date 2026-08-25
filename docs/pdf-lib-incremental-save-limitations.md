@@ -163,6 +163,69 @@ These guards do not validate the input xref graph, resolve indirect stream lengt
 bound parser decompression, decide whether a physical object is active, or prove that a
 hostile PDF was parsed correctly. They do not make the official loader a strict parser.
 
+The official loader does not expose raw active offsets or revision ownership for the
+objects it returns. Project code therefore cannot turn a post-load context lookup into
+proof that a particular physical object occurrence belongs to the active revision. Where
+the project needs to associate a project-generated signature dictionary with raw bytes,
+an ambiguous project signature occurrence fails closed rather than selecting an
+occurrence heuristically. Targeted ByteRange checks do not harden the loader: they check
+only a selected signature's byte geometry after loading and cannot constrain the
+physical object, stream, or allocation decisions made during loading. Parser hardening,
+an authoritative active-revision model, and any replacement-loader work are future work
+separate from these mutation-time guards.
+
+## Project-owned timestamp occurrence boundary
+
+Timestamp extraction adds a separate, deliberately narrow post-load check in
+`signature-occurrence-index.ts`. It is a narrow lexical partial parser, not a full or
+authoritative PDF loader or xref resolver, and does not alter the official
+`pdf-lib-incremental-save@1.17.4` package. The check makes a selected document-timestamp
+`/Contents` occurrence fail closed when the project cannot bind its raw hexadecimal token
+to the selected `/ByteRange` gap and physical signature owner. It lexically skips
+comments, literal strings, hexadecimal strings, and stream payloads before considering a
+physical indirect-object header. It also requires the selected gap to include the complete
+hexadecimal token delimiters.
+
+For a current or earlier signed revision, the check records only lexically framed
+append boundaries. A classic target must contain at least one syntactically framed xref
+subsection and horizontally framed entry followed by a trailer dictionary. An XRef-stream
+target must be a complete physical indirect object with exact root `/Type /XRef`. A later
+boundary needs one direct unsigned `/Prev` whose value is the preceding accepted xref
+offset. The bytes between accepted boundaries may contain only whitespace/comments,
+complete physical objects, and the accepted xref framing; no object can follow the chosen
+xref target before its `startxref`. A tightly framed two-xref linearized base is collapsed
+to its `/L` endpoint before ordinary append checks begin. This rejects a terminal
+`startxref` that merely points back to an old xref or an arbitrary appended token sequence.
+
+This is lexical append-boundary evidence, not authoritative xref-chain validation. It
+does not resolve xref entries, prove that a physical object is active/reachable, validate
+the loader's interpretation of an indirect stream `/Length`, or establish revision
+ownership from the dependency context. Ambiguous selected signature ownership fails
+closed; it performs no unrelated semantic resolution or normalization. The source
+regressions in `signature-occurrence-index.test.ts`, `byte-range-geometry.test.ts`, and
+`nested-document-timestamp.test.ts` cover lexical spoofing, signed number spellings,
+framed classic/XRef-stream updates, `/Prev` linkage, linearized bases, and valid
+xref-stream source PDFs whose new timestamp revision is classic.
+
+The project-owned scanner caps aggregate lexical work at four times the maximum PDF size
+(1,000 MiB), physical-candidate attempts at 1,000,000, timestamp `/Contents` occurrences
+at 1,024 per object, and collected `startxref`/EOF markers at 4,096 per PDF. Each physical
+object and classic-xref trailer parse has a separate 100,000 retained-structure cap: every
+returned parsed value, retained dictionary, and retained dictionary entry counts before it
+is collected. The scanner uses binary boundary membership lookup. Shared selected `/V`
+values are decoded, bound, metadata-parsed, and CMS-verified once per PDF-level operation.
+Extracted fields sharing that value share the raw token and complete `/Contents` buffers and
+a decoded token nonce by read-only convention; callers must copy any of those buffers before
+mutation. Duplicate verification results likewise share their selected certificate array by
+read-only convention. Archive renewal verifies values sequentially and collects shared LTV
+candidate material once. A fixed 512 MiB aggregate covered-byte budget is charged before each
+distinct verification can copy or hash PDF bytes.
+`verifyPdfTimestamps` retains result order and returns `verified: false` for an exhausted
+value; default archive renewal warns and continues, while `strictExistingVerification`
+rejects before mutation. Those bounds reduce repeated work in project code after loading.
+They do not bound the official loader's decompression, parser CPU, memory use, or
+active-object model; keep the sandbox and resource limits above for hostile inputs.
+
 ## Operational mitigations
 
 - Treat hostile or tenant-supplied PDFs as untrusted code-like input for CPU and memory
@@ -195,9 +258,11 @@ reviewed loader replacement or upstream release provides all of the following:
 5. A versioned dependency update, license review, package ESM/CJS smoke coverage, and a
    security review that verifies the new boundary in the actual edge-runtime build.
 
-## Task 7 documentation TODO
+## Maintainer documentation boundary
 
-Task 7 public documentation, migration notes, validator guidance, and issue replies must
-link to this note when they describe PDF input handling. They must distinguish the
+Public documentation, migration notes, validator guidance, and issue replies that
+describe PDF input handling should link to this note. They must distinguish the
 incremental-write collision guard from hostile-PDF parser hardening and must not claim
-that the dependency limitation is fixed.
+that the dependency limitation is fixed. When the dependency version or integration
+changes, update the affected entries with reproducible evidence while retaining that
+boundary.

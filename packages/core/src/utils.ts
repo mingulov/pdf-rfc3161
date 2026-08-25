@@ -98,12 +98,13 @@ export function extractBytesFromByteRange(
 ): Uint8Array {
     const [offset1, length1, offset2, length2] = byteRange;
 
-    // Security check: Verify ranges are within bounds and non-negative to prevent DoS via huge allocations
+    // A PDF signature ByteRange has four integral byte offsets/lengths. Reject
+    // fractional and unsafe values before arithmetic or typed-array allocation.
     if (
-        isNaN(offset1) ||
-        isNaN(length1) ||
-        isNaN(offset2) ||
-        isNaN(length2) ||
+        !Number.isSafeInteger(offset1) ||
+        !Number.isSafeInteger(length1) ||
+        !Number.isSafeInteger(offset2) ||
+        !Number.isSafeInteger(length2) ||
         offset1 < 0 ||
         length1 < 0 ||
         offset2 < 0 ||
@@ -111,35 +112,57 @@ export function extractBytesFromByteRange(
     ) {
         throw new TimestampError(
             TimestampErrorCode.PDF_ERROR,
-            "Invalid ByteRange: values must be non-negative numbers"
+            "Invalid ByteRange: values must be non-negative numbers and safe integers"
         );
     }
 
-    if (offset1 + length1 > pdfBytes.length) {
+    if (offset1 !== 0) {
         throw new TimestampError(
             TimestampErrorCode.PDF_ERROR,
-            `Invalid ByteRange: range 1 [${offset1.toString()}, ${(offset1 + length1).toString()}] out of bounds for PDF of length ${pdfBytes.length.toString()}`
+            "Invalid ByteRange: first offset must be zero"
         );
     }
-    if (offset2 + length2 > pdfBytes.length) {
+
+    const firstEnd = offset1 + length1;
+    const secondEnd = offset2 + length2;
+    if (!Number.isSafeInteger(firstEnd) || !Number.isSafeInteger(secondEnd)) {
         throw new TimestampError(
             TimestampErrorCode.PDF_ERROR,
-            `Invalid ByteRange: range 2 [${offset2.toString()}, ${(offset2 + length2).toString()}] out of bounds for PDF of length ${pdfBytes.length.toString()}`
+            "Invalid ByteRange: range end exceeds the safe integer limit"
+        );
+    }
+    if (firstEnd > pdfBytes.length) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `Invalid ByteRange: range 1 [${offset1.toString()}, ${firstEnd.toString()}] out of bounds for PDF of length ${pdfBytes.length.toString()}`
+        );
+    }
+    if (secondEnd > pdfBytes.length) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `Invalid ByteRange: range 2 [${offset2.toString()}, ${secondEnd.toString()}] out of bounds for PDF of length ${pdfBytes.length.toString()}`
         );
     }
     // A legitimate signed-PDF ByteRange covers everything except the signature hex string,
     // so length1 + length2 <= pdfBytes.length. Reject anything that would allocate more
     // than the PDF itself.
-    if (length1 + length2 > pdfBytes.length) {
+    const coveredLength = length1 + length2;
+    if (!Number.isSafeInteger(coveredLength) || coveredLength > pdfBytes.length) {
         throw new TimestampError(
             TimestampErrorCode.PDF_ERROR,
-            `Invalid ByteRange: combined length ${(length1 + length2).toString()} exceeds PDF length ${pdfBytes.length.toString()}`
+            `Invalid ByteRange: combined length ${coveredLength.toString()} exceeds PDF length ${pdfBytes.length.toString()}`
+        );
+    }
+    if (firstEnd >= offset2) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            "Invalid ByteRange: ranges must be ordered, disjoint, and leave a non-empty gap"
         );
     }
 
-    const result = new Uint8Array(length1 + length2);
-    result.set(pdfBytes.subarray(offset1, offset1 + length1), 0);
-    result.set(pdfBytes.subarray(offset2, offset2 + length2), length1);
+    const result = new Uint8Array(coveredLength);
+    result.set(pdfBytes.subarray(offset1, firstEnd), 0);
+    result.set(pdfBytes.subarray(offset2, secondEnd), length1);
 
     return result;
 }
