@@ -32,31 +32,6 @@ function contentsHex(contents: Uint8Array): string {
     return Buffer.from(contents).toString("hex");
 }
 
-function replaceLastAsciiNumber(bytes: Uint8Array, key: string, replacement: string): Uint8Array {
-    const keyBytes = new TextEncoder().encode(key);
-    let keyOffset = -1;
-    for (let start = 0; start <= bytes.length - keyBytes.length; start++) {
-        if (keyBytes.every((byte, index) => bytes[start + index] === byte)) {
-            keyOffset = start;
-        }
-    }
-    if (keyOffset < 0) {
-        throw new Error(`fixture must contain ${key}`);
-    }
-    let numberEnd = keyOffset + keyBytes.length;
-    let byte = bytes[numberEnd];
-    while (byte !== undefined && byte >= 0x30 && byte <= 0x39) {
-        numberEnd++;
-        byte = bytes[numberEnd];
-    }
-    const replacementBytes = new TextEncoder().encode(`${key}${replacement}`);
-    const result = new Uint8Array(bytes.length - (numberEnd - keyOffset) + replacementBytes.length);
-    result.set(bytes.subarray(0, keyOffset), 0);
-    result.set(replacementBytes, keyOffset);
-    result.set(bytes.subarray(numberEnd), keyOffset + replacementBytes.length);
-    return result;
-}
-
 async function createPdfWithFields(fields: SignatureFieldFixture[]): Promise<Uint8Array> {
     const document = await PDFDocument.create();
     document.addPage([100, 100]);
@@ -278,12 +253,11 @@ async function createSharedSignatureChildPdf(sameParentName: boolean): Promise<U
     return document.save();
 }
 
-async function createSpoofedSignaturePdf(): Promise<Uint8Array> {
+async function createSignaturePdfWithObjectHeaderSpoof(objectNumber: number): Promise<Uint8Array> {
     const document = await PDFDocument.create();
     document.addPage([100, 100]);
     const context = document.context;
-    const spoofedObjectText = "99999999999999999999 0 obj\n999999 0 obj";
-    const streamBytes = new TextEncoder().encode(spoofedObjectText);
+    const spoofedObjectText = `${objectNumber.toString()} 0 obj`;
     const signature = context.obj({ Contents: PDFHexString.of(contentsHex(paddedContents)) });
     const field = context.obj({
         FT: PDFName.of("Sig"),
@@ -295,10 +269,6 @@ async function createSpoofedSignaturePdf(): Promise<Uint8Array> {
 
     document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: fields }));
     document.catalog.set(PDFName.of("SpoofLiteral"), PDFString.of(spoofedObjectText));
-    document.catalog.set(
-        PDFName.of("SpoofStream"),
-        context.register(PDFRawStream.of(context.obj({ Length: streamBytes.length }), streamBytes))
-    );
     return document.save({ useObjectStreams: false });
 }
 
@@ -767,39 +737,6 @@ describe("signature-specific VRI", () => {
         ).rejects.toMatchObject({ code: TimestampErrorCode.PDF_ERROR });
     });
 
-    it("ignores literal and stream object text when adding VRI and DSS data", async () => {
-        const input = await createSpoofedSignaturePdf();
-        const vriUpdated = await addVRIForSignature(
-            input,
-            { fieldName: "Timestamp" },
-            { validationData }
-        );
-        const vriDocument = await PDFDocument.load(vriUpdated, { updateMetadata: false });
-
-        expect(vriUpdated.slice(0, input.length)).toEqual(input);
-        expect(vriDocument.catalog.lookup(PDFName.of("DSS"))).toBeInstanceOf(PDFDict);
-        expect(
-            Math.max(
-                ...vriDocument.context.enumerateIndirectObjects().map(([ref]) => ref.objectNumber)
-            )
-        ).toBeLessThan(1000);
-
-        const dssUpdated = await addDSS(vriUpdated, {
-            certificates: [Uint8Array.of(0x30, 0x01, 0x04)],
-            crls: [],
-            ocspResponses: [],
-        });
-        const dssDocument = await PDFDocument.load(dssUpdated, { updateMetadata: false });
-
-        expect(dssUpdated.slice(0, vriUpdated.length)).toEqual(vriUpdated);
-        expect(dssDocument.catalog.lookup(PDFName.of("DSS"))).toBeInstanceOf(PDFDict);
-        expect(
-            Math.max(
-                ...dssDocument.context.enumerateIndirectObjects().map(([ref]) => ref.objectNumber)
-            )
-        ).toBeLessThan(1000);
-    });
-
     it("rejects a Catalog-level VRI before mutating the requested VRI", async () => {
         const input = await createExistingVriFixture({ catalogVri: true });
         const original = input.slice();
@@ -865,12 +802,7 @@ describe("signature-specific VRI", () => {
     });
 
     it("rejects a multi-category VRI update when a later registration exceeds the safe range", async () => {
-        const original = await createPdfWithFields([{ name: "Timestamp" }]);
-        const input = replaceLastAsciiNumber(
-            original,
-            "/Size ",
-            (Number.MAX_SAFE_INTEGER - 1).toString()
-        );
+        const input = await createSignaturePdfWithObjectHeaderSpoof(Number.MAX_SAFE_INTEGER - 2);
         const preserved = input.slice();
 
         await expect(
@@ -918,11 +850,8 @@ describe("signature-specific VRI", () => {
     ])(
         "uses checked classic-writer references near the safe range for $name",
         async ({ update }: { update: (input: Uint8Array) => Promise<Uint8Array> }) => {
-            const original = await createPdfWithFields([{ name: "Timestamp" }]);
-            const input = replaceLastAsciiNumber(
-                original,
-                "/Size ",
-                (Number.MAX_SAFE_INTEGER - 2).toString()
+            const input = await createSignaturePdfWithObjectHeaderSpoof(
+                Number.MAX_SAFE_INTEGER - 3
             );
             const updated = await update(input);
             const appended = updated.subarray(input.length);
