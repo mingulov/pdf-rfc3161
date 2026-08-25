@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
 import { INCOMPATIBLE_TSA_URLS } from "../../src/tsa-compatibility.js";
+import { assertQpdfCheck } from "../../src/qpdf-check.js";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -75,16 +76,8 @@ describe("External Tool Validation", () => {
 
         fs.writeFileSync(testPdfPath, result.pdf);
 
-        try {
-            // qpdf --check returns exit code 0 on success, 2 on warning, 3 on error
-            // We accept warnings (exit code 2) as passing for basic structure
-            // But ideally we want 0.
-            execSync(`qpdf --check ${testPdfPath}`, { stdio: "ignore" });
-        } catch (e: any) {
-            // Check exit code
-            // Status 2 is warnings (acceptable), Status 3 is errors (fail)
-            expect(e.status).not.toBe(3);
-        }
+        // Status 3 is accepted only for nonstructural qpdf warnings.
+        assertQpdfCheck(testPdfPath);
         cleanup();
     });
 
@@ -118,12 +111,8 @@ describe("External Tool Validation", () => {
 
         fs.writeFileSync(testPdfPath, result.pdf);
 
-        try {
-            execSync(`qpdf --check ${testPdfPath}`, { stdio: "ignore" });
-        } catch (e: any) {
-            // Status 2 is warnings (acceptable), Status 3 is errors (fail)
-            expect(e.status).not.toBe(3);
-        }
+        // Status 3 is accepted only for nonstructural qpdf warnings.
+        assertQpdfCheck(testPdfPath);
         cleanup();
     });
 

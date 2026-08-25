@@ -135,6 +135,7 @@ function assertValidationBytesShareRefs(
     }
 }
 
+/* eslint-disable @typescript-eslint/no-deprecated -- compatibility coverage */
 describe("deprecated addVRIEnhanced compatibility", () => {
     it("rejects the old call shape without a signature field name", async () => {
         await expect(
@@ -184,3 +185,4 @@ describe("deprecated addVRIEnhanced compatibility", () => {
         }
     );
 });
+/* eslint-enable @typescript-eslint/no-deprecated */

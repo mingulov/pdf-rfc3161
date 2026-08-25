@@ -61,7 +61,7 @@ vi.mock("../../../core/src/session.js", () => {
     return { TimestampSession: FakeSession };
 });
 
-vi.mock("../../../core/src/tsa/index.js", async (importOriginal) => {
+vi.mock("../../../core/src/tsa/index.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const original = await importOriginal<typeof import("../../../core/src/tsa/index.js")>();
     return {
         ...original,

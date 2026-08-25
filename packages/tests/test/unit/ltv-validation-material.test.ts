@@ -6,12 +6,12 @@ import { getCRLDistributionPoints } from "../../../core/src/pki/crl-utils.js";
 import { getOCSPURI } from "../../../core/src/pki/ocsp-utils.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
-vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal) => ({
+vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => ({
     ...(await importOriginal<typeof import("../../../core/src/pki/ocsp-utils.js")>()),
     getOCSPURI: vi.fn(),
 }));
 
-vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal) => ({
+vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => ({
     ...(await importOriginal<typeof import("../../../core/src/pki/crl-utils.js")>()),
     getCRLDistributionPoints: vi.fn(),
 }));

@@ -17,7 +17,7 @@ jobs:
       
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -69,7 +69,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

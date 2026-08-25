@@ -8,10 +8,12 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
+        "test:conformance": "tsx scripts/offline-pades-conformance.ts",
+        "test:package": "tsx scripts/test-packed-consumer.ts",
         "test:integration": "vitest run test/integration",
         "test:robustness": "tsx scripts/test-robustness.ts",
         "typecheck": "tsc --noEmit",
-        "lint": "eslint test --fix"
+        "lint": "eslint test scripts/test-packed-consumer.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts --fix"
     },
     "dependencies": {
         "asn1js": "^3.0.10",
@@ -19,19 +21,19 @@
         "pdf-lib-incremental-save": "1.17.4",
         "pdf-rfc3161": "workspace:*",
         "pdf-rfc3161-cli": "workspace:*",
-        "pkijs": "^3.3.3",
-        "pvutils": "^1.1.5"
+        "pkijs": "^3.4.0",
+        "pvutils": "^1.2.0"
     },
     "devDependencies": {
         "@types/node": "^25.9.1",
-        "@vitest/coverage-v8": "^4.0.17",
-        "eslint": "^10.4.0",
+        "@vitest/coverage-v8": "^4.1.11",
+        "eslint": "^10.9.1",
         "pdf-lib": "^1.17.1",
-        "tsx": "^4.22.3",
+        "tsx": "^4.23.12",
         "typescript": "^5.9.3",
-        "vitest": "^4.0.17"
+        "vitest": "^4.1.11"
     },
     "engines": {
-        "node": ">=18.0.0"
+        "node": ">=20.19.0"
     }
 }

@@ -290,10 +290,12 @@ function reframeOuterDer(bytes: Uint8Array, framing: OuterDerFraming, descriptio
     }
 
     const length = canonicalLengthBytes(contents.length);
+    const firstLengthByte = length[0];
+    if (firstLengthByte === undefined) throw new Error("Fixture length is unexpectedly empty");
     const nonMinimalLength =
         contents.length < 0x80
             ? new Uint8Array([0x81, contents.length])
-            : new Uint8Array([length[0]! + 1, 0, ...length.subarray(1)]);
+            : new Uint8Array([firstLengthByte + 1, 0, ...length.subarray(1)]);
     return concatenateBytes([new Uint8Array([0x30]), nonMinimalLength, contents]);
 }
 

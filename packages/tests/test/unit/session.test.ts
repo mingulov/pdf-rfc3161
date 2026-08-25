@@ -7,7 +7,7 @@ import { PDFDocument } from "pdf-lib-incremental-save";
 
 const embedSpy = vi.hoisted(() => vi.fn(() => new Uint8Array([0x25, 0x50, 0x44, 0x46])));
 
-vi.mock("../../../core/src/pdf/embed.js", async (importOriginal) => {
+vi.mock("../../../core/src/pdf/embed.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const original = await importOriginal<typeof import("../../../core/src/pdf/embed.js")>();
     return {
         ...original,
