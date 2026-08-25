@@ -94,6 +94,11 @@ function buildRequest(
 ): TimestampRequest {
     const nonce = new Uint8Array(8);
     crypto.getRandomValues(nonce);
+    // RFC 3161 carries the nonce as an ASN.1 INTEGER. Keep its octet form
+    // positive, nonzero, and DER-minimal so the request context and echoed
+    // TSTInfo value compare without signed-integer ambiguity.
+    const firstNonceByte = nonce[0] ?? 0;
+    nonce[0] = (firstNonceByte & 0x7f) || 1;
 
     const algorithmOID = HASH_ALGORITHM_TO_OID[hashAlgorithm];
     if (!algorithmOID) {

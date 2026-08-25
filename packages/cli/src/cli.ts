@@ -88,9 +88,11 @@ program
     .option("-v, --verbose", "Verbose output", false)
     .option("--optimize", "Optimize signature size (2-pass)", false)
     .option("--omit-m", "Omit modification time (/M) from signature dictionary", false)
+    // Retained so existing scripts continue to parse the flag. The core gate
+    // always rejects TSA statuses 4 and 5 before embedding.
     .option(
         "--reject-on-revocation-warning",
-        "Reject TSA responses returning REVOCATION_WARNING/_NOTIFICATION",
+        "Deprecated no-op: TSA statuses 4/5 are always fatal",
         false
     )
     .option("--ignore-encryption", "Process encrypted PDFs (off by default)", false)
@@ -99,10 +101,7 @@ program
             tsaUrl: string,
             inputFile: string,
             bucketOutput: string | undefined,
-            options: CliOptions & {
-                rejectOnRevocationWarning: boolean;
-                ignoreEncryption: boolean;
-            }
+            options: CliOptions & { ignoreEncryption: boolean }
         ) => {
             try {
                 // Handle output file logic: explicit argument > -o flag > auto-generated
@@ -155,7 +154,8 @@ program
                     optimizePlaceholder: options.optimize,
                     omitModificationTime: options.omitM,
                     enableLTV: options.ltv,
-                    rejectOnRevocationWarning: options.rejectOnRevocationWarning,
+                    // --reject-on-revocation-warning remains parser-compatible only.
+                    // Every non-granted TSA status is fatal in the core validator.
                     ignoreEncryption: options.ignoreEncryption,
                 };
 

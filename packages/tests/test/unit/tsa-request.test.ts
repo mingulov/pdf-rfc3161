@@ -98,6 +98,20 @@ describe("TSA Request", () => {
             expect(nonce1).not.toEqual(nonce2);
         });
 
+        it("normalizes generated nonces to positive nonzero DER INTEGER values", async () => {
+            vi.spyOn(crypto, "getRandomValues").mockImplementation((array: Uint8Array) => {
+                array.fill(0xff);
+                return array;
+            });
+
+            const { request, nonce } = await createTimestampRequest(new Uint8Array([1, 2, 3, 4]));
+            const tsReq = parseRequest(request);
+
+            expect(nonce[0]).toBe(0x7f);
+            expect(tsReq.nonce).toBeDefined();
+            expect(new Uint8Array(tsReq.nonce!.valueBlock.valueHexView)).toEqual(nonce);
+        });
+
         it("should request certificate by default", async () => {
             const data = new Uint8Array([1, 2, 3, 4]);
 

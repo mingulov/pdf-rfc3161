@@ -1,7 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { PDFDocument } from "pdf-lib-incremental-save";
+import { PDFDict, PDFDocument, PDFName, PDFRef } from "pdf-lib-incremental-save";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
 import { addDSS } from "../../../core/src/pdf/ltv.js";
+import { TimestampErrorCode } from "../../../core/src/types.js";
+
+async function createMalformedDssPdf(): Promise<Uint8Array> {
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([100, 100]);
+    const pdfBytes = await pdfDoc.save();
+
+    const loadedPdf = await PDFDocument.load(pdfBytes, { updateMetadata: false });
+    const snapshot = loadedPdf.takeSnapshot();
+    const context = loadedPdf.context;
+    const malformedDss = context.obj({
+        Certs: context.obj({ Unexpected: PDFName.of("Dictionary") }),
+    });
+    loadedPdf.catalog.set(PDFName.of("DSS"), malformedDss);
+
+    const catalogRef = context.trailerInfo.Root;
+    if (catalogRef instanceof PDFRef) {
+        snapshot.markRefForSave(catalogRef);
+    }
+
+    const incrementalBytes = await loadedPdf.saveIncremental(snapshot);
+    const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);
+    finalBytes.set(pdfBytes, 0);
+    finalBytes.set(incrementalBytes, pdfBytes.length);
+    return finalBytes;
+}
 
 describe("Regression Tests - LTV DSS Object Number Collision", () => {
     /**
@@ -50,11 +76,11 @@ describe("Regression Tests - LTV DSS Object Number Collision", () => {
             counts.set(num, (counts.get(num) ?? 0) + 1);
         }
 
-        // Object 5 is allowed to appear multiple times (ObjStm reuse)
-        // But objects 8, 9, 10+ should NOT be duplicated
+        // The Catalog is intentionally rewritten in each incremental revision.
+        // New DSS material must still receive unique object numbers.
         const problematicDuplicates: number[] = [];
         for (const [objNum, count] of counts) {
-            if (objNum !== 5 && count > 1) {
+            if (objNum !== 2 && count > 1) {
                 problematicDuplicates.push(objNum);
             }
         }
@@ -93,5 +119,17 @@ describe("Regression Tests - LTV DSS Object Number Collision", () => {
         }
 
         expect(certs).toBeDefined();
+    });
+
+    it("should reject a malformed existing DSS array instead of overwriting it", async () => {
+        const malformedPdf = await createMalformedDssPdf();
+
+        await expect(
+            addDSS(malformedPdf, {
+                certificates: [Uint8Array.of(0x30, 0x01)],
+                crls: [],
+                ocspResponses: [],
+            })
+        ).rejects.toMatchObject({ code: TimestampErrorCode.PDF_ERROR });
     });
 });

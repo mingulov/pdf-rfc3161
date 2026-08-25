@@ -74,7 +74,6 @@ const result = await timestampPdf({
     pdf,
     tsa: { url: KNOWN_TSA_URLS.FREETSA },
     enableLTV: true,
-    rejectOnRevocationWarning: true,
 });
 ```
 
@@ -99,7 +98,7 @@ need to verify legacy tokens that pre-date the RFC 3161 EKU requirement.
 | Flag | Default | Recommended for prod |
 | ---- | ------- | -------------------- |
 | `enableLTV` | `true` (since 0.2.0) | `true` |
-| `rejectOnRevocationWarning` | `false` | `true` |
+| `rejectOnRevocationWarning` | deprecated no-op | not applicable; TSA statuses 4/5 are always fatal |
 | `requireTimestampingEKU` | `true` (since 0.2.0) | `true` |
 | `requireCertValidAtGenTime` | `true` (since 0.2.0) | `true` |
 | `strictESSValidation` | `false` | `true` |
@@ -252,11 +251,11 @@ Options:
 | `contactInfo`          | `string`     | No       | Contact information                                                |
 | `omitModificationTime` | `boolean`    | No       | Omit /M from signature dictionary                                  |
 | `optimizePlaceholder`  | `boolean`    | No       | Optimize signature size (default: false)                           |
-| `rejectOnRevocationWarning` | `boolean` | No     | Throw if TSA returns REVOCATION_WARNING/_NOTIFICATION status (default: false) |
+| `rejectOnRevocationWarning` | `boolean` | No     | Deprecated no-op retained for source compatibility; TSA statuses 4/5 are always fatal |
 | `ignoreEncryption`     | `boolean`    | No       | Process encrypted PDFs (default: false; recommend leaving false)   |
 | `revocationData`       | `LTVData`    | No       | Pre-fetched revocation data; skips network OCSP/CRL fetches        |
 
-Returns a `TimestampResult` with the timestamped PDF, timestamp info, optional `ltvData`, and optional `tsaRevocationWarning` (set when TSA returned a non-fatal status).
+Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional `ltvData`. The deprecated `tsaRevocationWarning` field is never set: TSA statuses 4/5 are always fatal.
 
 Note: When using LTV, `signatureSize: 0` uses a 16KB default. Specify larger value manually if you encounter "token larger than placeholder" errors.
 

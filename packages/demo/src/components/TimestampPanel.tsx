@@ -100,8 +100,6 @@ export default function TimestampPanel() {
             const session = new TimestampSession(pdfBytes, {
                 enableLTV: false, // Explicitly disable LTV to avoid CORS/Fetch for revocation data
                 prepareOptions: {
-                    reason: "Demo Timestamp",
-                    location: "Browser",
                     signatureSize: 0, // 0 = Auto/Default (16KB for LTV)
                 },
                 hashAlgorithm: "SHA-256",

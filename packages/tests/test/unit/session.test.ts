@@ -1,12 +1,27 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { TimestampSession } from "../../../core/src/session.js";
-import { TimestampError } from "../../../core/src/types.js";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as asn1js from "asn1js";
+import * as pkijs from "pkijs";
+import { HASH_ALGORITHM_TO_OID } from "../../../core/src/constants.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { PDFDocument } from "pdf-lib-incremental-save";
+
+const embedSpy = vi.hoisted(() => vi.fn(() => new Uint8Array([0x25, 0x50, 0x44, 0x46])));
+
+vi.mock("../../../core/src/pdf/embed.js", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../../../core/src/pdf/embed.js")>();
+    return {
+        ...original,
+        embedTimestampToken: embedSpy,
+    };
+});
+
+const { TimestampSession } = await import("../../../core/src/session.js");
 
 describe("TimestampSession", () => {
     let pdfBytes: Uint8Array;
 
     beforeEach(async () => {
+        embedSpy.mockClear();
         // Create a basic PDF
         const doc = await PDFDocument.create();
         doc.addPage([100, 100]);
@@ -168,6 +183,31 @@ describe("TimestampSession", () => {
             // TSQ should be DER-encoded, first byte is usually 0x30 (SEQUENCE)
             expect(tsq[0]).toBe(0x30);
         });
+
+        it("uses the constructor hash as a fallback and a per-request hash as the precedence override", async () => {
+            const session = new TimestampSession(pdfBytes, {
+                enableLTV: false,
+                hashAlgorithm: "SHA-384",
+            });
+
+            const fallbackRequest = await session.createTimestampRequest();
+            const fallbackAsn1 = asn1js.fromBER(fallbackRequest);
+            expect(fallbackAsn1.offset).toBe(fallbackRequest.length);
+            const fallback = new pkijs.TimeStampReq({ schema: fallbackAsn1.result });
+            expect(fallback.messageImprint.hashAlgorithm.algorithmId).toBe(
+                HASH_ALGORITHM_TO_OID["SHA-384"]
+            );
+
+            const overrideRequest = await session.createTimestampRequest({
+                hashAlgorithm: "SHA-512",
+            });
+            const overrideAsn1 = asn1js.fromBER(overrideRequest);
+            expect(overrideAsn1.offset).toBe(overrideRequest.length);
+            const override = new pkijs.TimeStampReq({ schema: overrideAsn1.result });
+            expect(override.messageImprint.hashAlgorithm.algorithmId).toBe(
+                HASH_ALGORITHM_TO_OID["SHA-512"]
+            );
+        });
     });
 
     describe("calculateOptimalSize", () => {
@@ -317,23 +357,14 @@ describe("TimestampSession", () => {
             ).rejects.toThrow();
         });
 
-        it("should fall back to raw bytes if parse fails but no token", async () => {
+        it("rejects malformed token bytes before the PDF embed primitive", async () => {
             const session = new TimestampSession(pdfBytes);
             await session.createTimestampRequest();
 
-            // Invalid ASN.1 that can't be parsed - should still try to use as raw token
-            // But the parseTimestampResponse will catch the error and fall back
-            const invalidData = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
-
-            // This should NOT throw because it falls back to raw bytes
-            // However, embedding invalid bytes might cause other issues
-            // The key is that the TSA status check doesn't throw on parse errors
-            try {
-                await session.embedTimestampToken(invalidData);
-            } catch {
-                // May fail at embedding stage, which is acceptable
-                // The important thing is it didn't throw due to TSA status check
-            }
+            await expect(session.embedTimestampToken(new Uint8Array([0x00]))).rejects.toMatchObject({
+                code: TimestampErrorCode.INVALID_RESPONSE,
+            });
+            expect(embedSpy).not.toHaveBeenCalled();
         });
 
         it("should still embed token if status is GRANTED", () => {
@@ -371,7 +402,7 @@ describe("TimestampSession", () => {
         });
 
         it("should not leak memory with repeated session creation", async () => {
-            const sessions: TimestampSession[] = [];
+            const sessions: InstanceType<typeof TimestampSession>[] = [];
 
             for (let i = 0; i < 50; i++) {
                 const session = new TimestampSession(pdfBytes);
@@ -392,7 +423,7 @@ describe("TimestampSession", () => {
         });
 
         it("should handle concurrent session lifecycle", async () => {
-            const sessions: TimestampSession[] = [];
+            const sessions: InstanceType<typeof TimestampSession>[] = [];
 
             for (let i = 0; i < 10; i++) {
                 const session = new TimestampSession(pdfBytes);

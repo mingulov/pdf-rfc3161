@@ -1,171 +1,186 @@
-/**
- * Tests for enhanced PAdES VRI support with proper DSS references
- */
-
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { PDFDocument } from "pdf-lib-incremental-save";
-import * as pkijs from "pkijs";
+import { describe, expect, it } from "vitest";
 import * as asn1js from "asn1js";
-import { addVRIEnhanced } from "../../../core/src/pdf/ltv.js";
+import * as pkijs from "pkijs";
+import {
+    PDFArray,
+    decodePDFRawStream,
+    PDFDict,
+    PDFDocument,
+    PDFHexString,
+    PDFName,
+    PDFRawStream,
+    PDFRef,
+    PDFString,
+} from "pdf-lib-incremental-save";
+import { addVRIEnhanced, type AddVRIEnhancedOptions } from "../../../core/src/pdf/ltv.js";
+import { TimestampErrorCode } from "../../../core/src/types.js";
 import { cryptoEngine, generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
 
-// Mock crypto.subtle for SHA-1 hashing
-vi.stubGlobal("crypto", {
-    subtle: {
-        digest: vi.fn((_algo: string) => {
-            return Promise.resolve(new ArrayBuffer(20));
-        }),
-    },
-    getRandomValues: (arr: Uint8Array) => {
-        for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
-        return arr;
-    },
-});
-
-async function createTestCertificate(): Promise<pkijs.Certificate> {
-    const keys = await generateRSAKeyPair();
-
-    const certificate = new pkijs.Certificate();
-    certificate.version = 2;
-    const rnd = new Uint8Array(4);
-    cryptoEngine.crypto.getRandomValues(rnd);
-    certificate.serialNumber = new asn1js.Integer({ valueHex: rnd });
-
-    certificate.subject.typesAndValues.push(
-        new pkijs.AttributeTypeAndValue({
-            type: "2.5.4.3",
-            value: new asn1js.PrintableString({ value: "Test Subject" }),
-        })
-    );
-
-    certificate.issuer = certificate.subject;
-    certificate.notBefore.value = new Date(Date.now() - 60000);
-    certificate.notAfter.value = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-
-    certificate.subjectPublicKeyInfo = await importKeyForCertificate(keys.publicKey);
-    await certificate.sign(keys.privateKey as any, "SHA-256");
-
-    return certificate;
+async function createSignedPdf(): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    const signature = context.obj({ Contents: PDFHexString.of("3003020101000000") });
+    const field = context.obj({
+        FT: PDFName.of("Sig"),
+        T: PDFString.of("Timestamp"),
+        V: context.register(signature),
+    });
+    const fields = PDFArray.withContext(context);
+    fields.push(context.register(field));
+    document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: fields }));
+    return document.save();
 }
 
-describe("Enhanced PAdES VRI Support", () => {
-    let pdfBytes: Uint8Array;
-    let signingCert: pkijs.Certificate;
+let certificatePromise: Promise<pkijs.Certificate> | undefined;
 
-    beforeEach(async () => {
-        const doc = await PDFDocument.create();
-        doc.addPage([100, 100]);
-        pdfBytes = await doc.save();
-        signingCert = await createTestCertificate();
+async function createCertificate(): Promise<pkijs.Certificate> {
+    certificatePromise ??= (async () => {
+        const keys = await generateRSAKeyPair();
+        const certificate = new pkijs.Certificate();
+        certificate.version = 2;
+        certificate.serialNumber = new asn1js.Integer({ value: 1 });
+        certificate.subject.typesAndValues.push(
+            new pkijs.AttributeTypeAndValue({
+                type: "2.5.4.3",
+                value: new asn1js.PrintableString({ value: "Legacy VRI Test" }),
+            })
+        );
+        certificate.issuer = certificate.subject;
+        certificate.notBefore.value = new Date("2025-01-01T00:00:00Z");
+        certificate.notAfter.value = new Date("2030-01-01T00:00:00Z");
+        certificate.subjectPublicKeyInfo = await importKeyForCertificate(keys.publicKey);
+        await certificate.sign(keys.privateKey, "SHA-256", cryptoEngine);
+        return certificate;
+    })();
+    return certificatePromise;
+}
+
+async function createForeignReference(): Promise<PDFRef> {
+    const document = await PDFDocument.create();
+    return document.context.register(document.context.obj({ Foreign: PDFName.of("Reference") }));
+}
+
+function requireDict(value: unknown, message: string): PDFDict {
+    expect(value, message).toBeInstanceOf(PDFDict);
+    if (!(value instanceof PDFDict)) {
+        throw new Error(message);
+    }
+    return value;
+}
+
+function requireArray(value: unknown, message: string): PDFArray {
+    expect(value, message).toBeInstanceOf(PDFArray);
+    if (!(value instanceof PDFArray)) {
+        throw new Error(message);
+    }
+    return value;
+}
+
+function arrayRefs(array: PDFArray, message: string): PDFRef[] {
+    const refs: PDFRef[] = [];
+    for (let index = 0; index < array.size(); index++) {
+        const ref = array.get(index);
+        expect(ref, message).toBeInstanceOf(PDFRef);
+        if (!(ref instanceof PDFRef)) {
+            throw new Error(message);
+        }
+        refs.push(ref);
+    }
+    return refs;
+}
+
+function assertValidationBytesShareRefs(
+    document: PDFDocument,
+    expected: { certificates: Uint8Array[]; crls: Uint8Array[]; ocspResponses: Uint8Array[] }
+): void {
+    const dss = requireDict(document.catalog.lookup(PDFName.of("DSS")), "DSS is required");
+    const vri = requireDict(dss.lookup(PDFName.of("VRI")), "DSS /VRI is required");
+    const [entryValue] = vri.values();
+    const entry = requireDict(
+        entryValue instanceof PDFRef ? document.context.lookup(entryValue) : entryValue,
+        "VRI entry is required"
+    );
+
+    for (const [entryKey, dssKey, expectedBytes] of [
+        ["Cert", "Certs", expected.certificates],
+        ["CRL", "CRLs", expected.crls],
+        ["OCSP", "OCSPs", expected.ocspResponses],
+    ] as const) {
+        const dssRefs = arrayRefs(
+            requireArray(dss.lookup(PDFName.of(dssKey)), `${dssKey} is required`),
+            `${dssKey} entries must be references`
+        );
+        const entryRefs = arrayRefs(
+            requireArray(entry.lookup(PDFName.of(entryKey)), `${entryKey} is required`),
+            `${entryKey} entries must be references`
+        );
+        expect(entryRefs).toHaveLength(expectedBytes.length);
+
+        for (const bytes of expectedBytes) {
+            const globalRef = dssRefs.find((ref) => {
+                const stream = document.context.lookup(ref);
+                if (!(stream instanceof PDFRawStream)) {
+                    return false;
+                }
+                const decoded = decodePDFRawStream(stream).decode();
+                return (
+                    decoded.length === bytes.length &&
+                    decoded.every((value, index) => value === bytes[index])
+                );
+            });
+            expect(globalRef).toBeDefined();
+            expect(entryRefs).toContainEqual(globalRef);
+        }
+    }
+}
+
+describe("deprecated addVRIEnhanced compatibility", () => {
+    it("rejects the old call shape without a signature field name", async () => {
+        await expect(
+            addVRIEnhanced(await createSignedPdf(), await createCertificate(), {})
+        ).rejects.toMatchObject({
+            code: TimestampErrorCode.INVALID_ARGUMENT,
+        });
     });
 
-    it("should create VRI with DSS certificate references", async () => {
-        // Create mock DSS certificate references
-        const doc = await PDFDocument.load(pdfBytes);
-        const context = doc.context;
-
-        const certRef1 = context.register(context.obj({}));
-        const certRef2 = context.register(context.obj({}));
-        const dssCertRefs = [certRef1, certRef2];
-
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            dssCertRefs,
+    it("delegates raw revocation data when a signature field name is supplied", async () => {
+        const certificate = await createCertificate();
+        const crls = [Uint8Array.of(0x30, 0x01, 0x02)];
+        const ocspResponses = [Uint8Array.of(0x30, 0x01, 0x03)];
+        const updated = await addVRIEnhanced(await createSignedPdf(), certificate, {
+            signatureFieldName: "Timestamp",
+            revocationData: {
+                crls,
+                ocspResponses,
+            },
         });
 
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should create VRI with DSS CRL and OCSP references", async () => {
-        const doc = await PDFDocument.load(pdfBytes);
-        const context = doc.context;
-
-        const crlRef1 = context.register(context.obj({}));
-        const ocspRef1 = context.register(context.obj({}));
-        const dssCrlRefs = [crlRef1];
-        const dssOcspRefs = [ocspRef1];
-
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            dssCrlRefs,
-            dssOcspRefs,
+        const document = await PDFDocument.load(updated, { updateMetadata: false });
+        assertValidationBytesShareRefs(document, {
+            certificates: [new Uint8Array(certificate.toSchema().toBER(false))],
+            crls,
+            ocspResponses,
         });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
     });
 
-    it("should create VRI with document timestamp reference", async () => {
-        const doc = await PDFDocument.load(pdfBytes);
-        const context = doc.context;
+    const unsafeOptions: [string, () => Promise<AddVRIEnhancedOptions>][] = [
+        ["timestamp references", async () => ({ timestampRef: await createForeignReference() })],
+        ["certificate references", async () => ({ dssCertRefs: [await createForeignReference()] })],
+        ["CRL references", async () => ({ dssCrlRefs: [await createForeignReference()] })],
+        ["OCSP references", async () => ({ dssOcspRefs: [await createForeignReference()] })],
+        ["SHA-256 selection", async () => ({ hashAlgorithm: "SHA-256" as const })],
+    ];
 
-        const timestampRef = context.register(context.obj({}));
-
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            timestampRef,
-        });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should create VRI with revocation data when no DSS refs provided", async () => {
-        const revocationData = {
-            crls: [new Uint8Array([0xc1, 0xc2, 0xc3])],
-            ocspResponses: [new Uint8Array([0x01, 0x02, 0x03])],
-        };
-
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            revocationData,
-        });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should support SHA-256 for VRI key generation (PDF 2.0)", async () => {
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            hashAlgorithm: "SHA-256",
-        });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should default to SHA-1 for VRI key generation (PDF 1.x compatibility)", async () => {
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            // No hashAlgorithm specified - should default to SHA-1
-        });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should handle empty revocation data gracefully", async () => {
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {});
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
-
-    it("should integrate with existing DSS structure", async () => {
-        // This test verifies that the enhanced VRI can work alongside DSS
-        // by using proper references instead of duplicating data
-
-        const doc = await PDFDocument.load(pdfBytes);
-        const context = doc.context;
-
-        // Create mock DSS references
-        const certRef = context.register(context.obj({}));
-        const crlRef = context.register(context.obj({}));
-        const ocspRef = context.register(context.obj({}));
-
-        const result = await addVRIEnhanced(pdfBytes, signingCert, {
-            dssCertRefs: [certRef],
-            dssCrlRefs: [crlRef],
-            dssOcspRefs: [ocspRef],
-        });
-
-        expect(result).toBeInstanceOf(Uint8Array);
-        expect(result.length).toBeGreaterThan(pdfBytes.length);
-    });
+    it.each(unsafeOptions)(
+        "rejects %s",
+        async (_label: string, optionsForTest: () => Promise<AddVRIEnhancedOptions>) => {
+            await expect(
+                addVRIEnhanced(await createSignedPdf(), await createCertificate(), {
+                    signatureFieldName: "Timestamp",
+                    ...(await optionsForTest()),
+                })
+            ).rejects.toMatchObject({ code: TimestampErrorCode.INVALID_ARGUMENT });
+        }
+    );
 });

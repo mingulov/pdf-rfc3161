@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import * as pkijs from "pkijs";
+import { describe, expect, it } from "vitest";
 import * as asn1js from "asn1js";
+import * as pkijs from "pkijs";
 import { hasTimestampingEKU } from "../../../core/src/pki/pki-utils.js";
 
 const OID_ID_KP_TIMESTAMPING = "1.3.6.1.5.5.7.3.8";
@@ -14,47 +14,69 @@ function certWithExtensions(extensions: pkijs.Extension[]): pkijs.Certificate {
     return cert;
 }
 
-function ekuExtension(ekuOids: string[]): pkijs.Extension {
+function ekuExtension(ekuOids: string[], critical = true): pkijs.Extension {
     const ekuSeq = new asn1js.Sequence({
         value: ekuOids.map((oid) => new asn1js.ObjectIdentifier({ value: oid })),
     });
     return new pkijs.Extension({
         extnID: OID_EKU_EXT,
-        critical: false,
+        critical,
         extnValue: ekuSeq.toBER(false),
     });
 }
 
-describe("hasTimestampingEKU (G1)", () => {
-    it("returns true when cert lists id-kp-timeStamping", () => {
-        const cert = certWithExtensions([ekuExtension([OID_ID_KP_TIMESTAMPING])]);
-        expect(hasTimestampingEKU(cert)).toBe(true);
+describe("hasTimestampingEKU", () => {
+    it("accepts exactly one critical id-kp-timeStamping EKU", () => {
+        expect(
+            hasTimestampingEKU(certWithExtensions([ekuExtension([OID_ID_KP_TIMESTAMPING])]))
+        ).toBe(true);
     });
 
-    it("returns true when cert lists id-kp-timeStamping among multiple purposes", () => {
-        const cert = certWithExtensions([
-            ekuExtension([OID_KP_CLIENT_AUTH, OID_ID_KP_TIMESTAMPING]),
-        ]);
-        expect(hasTimestampingEKU(cert)).toBe(true);
+    it("rejects a noncritical EKU", () => {
+        expect(
+            hasTimestampingEKU(certWithExtensions([ekuExtension([OID_ID_KP_TIMESTAMPING], false)]))
+        ).toBe(false);
     });
 
-    it("returns false when cert lists EKU purposes other than timestamping", () => {
-        const cert = certWithExtensions([ekuExtension([OID_KP_CLIENT_AUTH])]);
-        expect(hasTimestampingEKU(cert)).toBe(false);
+    it("rejects additional EKU purposes", () => {
+        expect(
+            hasTimestampingEKU(
+                certWithExtensions([ekuExtension([OID_ID_KP_TIMESTAMPING, OID_KP_CLIENT_AUTH])])
+            )
+        ).toBe(false);
     });
 
-    it("returns false when cert has no EKU extension at all", () => {
-        const cert = certWithExtensions([]);
-        expect(hasTimestampingEKU(cert)).toBe(false);
+    it("rejects anyExtendedKeyUsage", () => {
+        expect(hasTimestampingEKU(certWithExtensions([ekuExtension([OID_ANY_EKU])]))).toBe(false);
     });
 
-    it("returns true for anyExtendedKeyUsage (2.5.29.37.0) per RFC 5280", () => {
-        const cert = certWithExtensions([ekuExtension([OID_ANY_EKU])]);
-        expect(hasTimestampingEKU(cert)).toBe(true);
+    it("rejects a missing EKU extension", () => {
+        expect(hasTimestampingEKU(certWithExtensions([]))).toBe(false);
     });
 
-    it("returns false when EKU extension is present but empty", () => {
-        const cert = certWithExtensions([ekuExtension([])]);
-        expect(hasTimestampingEKU(cert)).toBe(false);
+    it("rejects duplicate EKU extensions", () => {
+        expect(
+            hasTimestampingEKU(
+                certWithExtensions([
+                    ekuExtension([OID_ID_KP_TIMESTAMPING]),
+                    ekuExtension([OID_ID_KP_TIMESTAMPING]),
+                ])
+            )
+        ).toBe(false);
+    });
+
+    it("rejects empty and malformed EKU extensions", () => {
+        expect(hasTimestampingEKU(certWithExtensions([ekuExtension([])]))).toBe(false);
+        expect(
+            hasTimestampingEKU(
+                certWithExtensions([
+                    new pkijs.Extension({
+                        extnID: OID_EKU_EXT,
+                        critical: true,
+                        extnValue: new Uint8Array([0x05, 0x00]).buffer,
+                    }),
+                ])
+            )
+        ).toBe(false);
     });
 });

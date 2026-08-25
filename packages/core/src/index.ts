@@ -28,11 +28,7 @@ import {
     type LTVSettings,
 } from "./pdf/ltv.js";
 
-import {
-    archiveTimestamp,
-    timestampPdfLTA,
-    type ArchiveTimestampOptions,
-} from "./pdf/archive.js";
+import { archiveTimestamp, timestampPdfLTA, type ArchiveTimestampOptions } from "./pdf/archive.js";
 
 import { TimestampSession, type TimestampSessionOptions } from "./session.js";
 
@@ -45,6 +41,7 @@ import {
     type HashAlgorithm,
     type TSAConfig,
     type TimestampRequestOptions,
+    type TimestampResponseValidationOptions,
     type ParsedTimestampResponse,
     TimestampError,
     TimestampErrorCode,
@@ -93,6 +90,7 @@ export type {
     TimestampResult,
     TSAConfig,
     TimestampRequestOptions,
+    TimestampResponseValidationOptions,
     HashAlgorithm,
     TimestampInfo,
 };
@@ -141,17 +139,15 @@ export type { VerificationOptions, ParsedTimestampResponse };
  * @param options - {@link TimestampOptions}: the PDF bytes, TSA config,
  *   and tuning flags. Only `pdf` and `tsa` are required.
  * @returns A {@link TimestampResult} with the timestamped PDF bytes,
- *   parsed {@link TimestampInfo}, optional `ltvData`, and an optional
- *   `tsaRevocationWarning` if the TSA returned status 4 or 5.
+ *   parsed {@link TimestampInfo}, and optional `ltvData`.
  *
  * @throws {TimestampError} with `code`:
  *   - `PDF_ERROR` if the input PDF can't be parsed or exceeds `maxSize`.
- *   - `TSA_ERROR` if the TSA rejected the request, or returned a
- *     revocation warning with `rejectOnRevocationWarning: true`.
+ *   - `TSA_ERROR` if the TSA returns any non-granted status.
  *   - `NETWORK_ERROR` if the TSA URL fails {@link validateUrl} (SSRF),
  *     exceeds the response size cap, or all retries are exhausted.
- *   - `INVALID_RESPONSE` if the TSA response doesn't parse, the nonce
- *     doesn't match, or the message digest doesn't match.
+ *   - `VERIFICATION_FAILED` if the TSA response fails pre-embed request
+ *     binding or CMS profile verification (for example, nonce or digest mismatch).
  *
  * @example
  * Minimal usage:
@@ -187,6 +183,13 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
     } = options;
     const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
 
+    if (tsa.requestCertificate === false) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            "timestampPdf requires tsa.requestCertificate=true; use TimestampSession.embedTimestampToken(..., { signerCertificates }) for certReq=false responses"
+        );
+    }
+
     if (pdf.length > maxPdfSize) {
         throw new TimestampError(
             TimestampErrorCode.PDF_ERROR,
@@ -208,17 +211,19 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 hashAlgorithm: tsa.hashAlgorithm,
             });
 
-            const request = await session.createTimestampRequest();
+            const request = await session.createTimestampRequest({
+                hashAlgorithm: tsa.hashAlgorithm,
+                ...(tsa.policy !== undefined && { policy: tsa.policy }),
+                requestCertificate: true,
+            });
 
             // We need to fetch a real token to know its size
             const responseBytes = await sendTimestampRequest(request, tsa);
             const tsResponse = parseTimestampResponse(responseBytes);
 
-            if (tsResponse.token) {
-                const optimalSize = TimestampSession.calculateOptimalSize(tsResponse.token);
-                session.setSignatureSize(optimalSize);
-                currentSignatureSize = optimalSize;
-            }
+            const optimalSize = TimestampSession.calculateOptimalSize(tsResponse.token);
+            session.setSignatureSize(optimalSize);
+            currentSignatureSize = optimalSize;
         } catch {
             // If optimization probe fails, proceed with standard logic
         }
@@ -236,37 +241,17 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 hashAlgorithm: tsa.hashAlgorithm,
             });
 
-            const request = await session.createTimestampRequest();
+            const request = await session.createTimestampRequest({
+                hashAlgorithm: tsa.hashAlgorithm,
+                ...(tsa.policy !== undefined && { policy: tsa.policy }),
+                requestCertificate: true,
+            });
             const responseBytes = await sendTimestampRequest(request, tsa);
             tsResponse = parseTimestampResponse(responseBytes);
 
-            if (
-                tsResponse.status !== TSAStatus.GRANTED &&
-                tsResponse.status !== TSAStatus.GRANTED_WITH_MODS &&
-                tsResponse.status !== TSAStatus.REVOCATION_WARNING &&
-                tsResponse.status !== TSAStatus.REVOCATION_NOTIFICATION
-            ) {
-                throw new TimestampError(
-                    TimestampErrorCode.TSA_ERROR,
-                    `TSA server returned error: ${tsResponse.statusString ?? "Unknown error"} (Status: ${String(tsResponse.status)})`
-                );
-            }
-
-            // M4: surface revocation warnings. Optionally treat them as fatal.
-            const isRevocationWarning =
-                tsResponse.status === TSAStatus.REVOCATION_WARNING ||
-                tsResponse.status === TSAStatus.REVOCATION_NOTIFICATION;
-            if (isRevocationWarning && options.rejectOnRevocationWarning) {
-                throw new TimestampError(
-                    TimestampErrorCode.TSA_ERROR,
-                    `TSA returned status ${String(tsResponse.status)} (revocation warning/notification): ${tsResponse.statusString ?? "TSA signing certificate is being revoked"}. Rejected because rejectOnRevocationWarning is true.`
-                );
-            }
-
-            // The status guard above narrows to a granted branch, so
-            // `tsResponse.token` is now non-optional in the type. No runtime
-            // check needed.
-            let finalPdf = await session.embedTimestampToken(tsResponse.token);
+            // Preserve the complete response for the session's mandatory
+            // validator; never downgrade the one-call path to a raw token.
+            let finalPdf = await session.embedTimestampToken(responseBytes);
 
             let ltvData: TimestampResult["ltvData"] = undefined;
             if (enableLTV) {
@@ -297,14 +282,10 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 finalPdf = await addDSS(finalPdf, completed.data);
             }
 
-            // Likewise: granted branches carry `info: TimestampInfo`.
-
-
             return {
                 pdf: finalPdf,
                 timestamp: tsResponse.info,
                 ltvData,
-                ...(isRevocationWarning && { tsaRevocationWarning: tsResponse.status }),
             };
         } catch (error) {
             // Check if error is due to placeholder size

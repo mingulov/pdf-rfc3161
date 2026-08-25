@@ -151,11 +151,16 @@ trust-store types, error types). Lower-level helpers moved to a new
 - } from "pdf-rfc3161";
 + import {
 +     addDSS, addVRI, extractLTVData, completeLTVData, getDSSInfo,
-+     embedTimestampToken, preparePdfForTimestamp, extractBytesToHash,
++     preparePdfForTimestamp, extractBytesToHash,
 +     getOCSPURI, createOCSPRequest, parseOCSPResponse,
 +     getCaIssuers, fetchCertificate, getCRLDistributionPoints,
 + } from "pdf-rfc3161/internals";
 ```
+
+The raw PDF embed primitive is intentionally no longer published. Move manual
+flows to TimestampSession.createTimestampRequest() followed by
+TimestampSession.embedTimestampToken(), which applies mandatory token
+validation immediately before the PDF write.
 
 The main bundle's `.d.ts` is now ~50% smaller (41 KB -> 21 KB).
 
@@ -173,16 +178,17 @@ builds its own client.
 
 `timestampPdfMultiple` previously only forwarded `reason`, `location`,
 `contactInfo`, and `enableLTV` to each underlying `timestampPdf` call.
-0.2.0 forwards every `TimestampOptions` field (e.g. `requireTimestampingEKU`,
-`rejectOnRevocationWarning`, `revocationData`), so you can configure the
-whole pipeline once.
+0.2.0 forwards every active `TimestampOptions` field (for example,
+`requireTimestampingEKU` and `revocationData`), so you can configure the
+whole pipeline once. `rejectOnRevocationWarning` remains accepted only for
+source compatibility; it is a deprecated no-op because TSA statuses 4/5 are
+always fatal.
 
 ```typescript
 const result = await timestampPdfMultiple({
     pdf,
     tsaList: [tsa1, tsa2],
     requireTimestampingEKU: true,    // 0.2.0: forwarded; 0.1.x: silently dropped
-    rejectOnRevocationWarning: true, // 0.2.0: forwarded; 0.1.x: silently dropped
 });
 ```
 

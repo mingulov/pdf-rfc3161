@@ -208,6 +208,7 @@ describe("PDF Timestamp Extraction", () => {
                 hashAlgorithmOID: "2.16.840.1.101.3.4.2.1",
             },
             token: new Uint8Array([0x30, 0x10, 0x20, 0x30]),
+            contentsValueBytes: new Uint8Array([0x30, 0x10, 0x20, 0x30]),
             coversWholeDocument: true,
             verified: true,
             byteRange: [0, 100, 200, 50] as [number, number, number, number],
