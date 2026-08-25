@@ -36,7 +36,7 @@ vi.mock("../../../core/src/index.js", () => ({
 // Mock the logger so we can assert warn() was called on the verify-failure
 // path without polluting test output.
 const warnSpy = vi.fn();
-vi.mock("../../../core/src/utils/logger.js", async (importOriginal) => {
+vi.mock("../../../core/src/utils/logger.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const mod = await importOriginal<typeof import("../../../core/src/utils/logger.js")>();
     return {
         ...mod,

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
 import { INCOMPATIBLE_TSA_URLS } from "../../src/tsa-compatibility.js";
+import { assertQpdfCheck } from "../../src/qpdf-check.js";
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
@@ -74,30 +75,8 @@ describe("Regression: LTV xref corruption", () => {
 
             fs.writeFileSync(testPdfPath, result.pdf);
 
-            // Check with qpdf - should not have xref errors (exit code 3)
-            try {
-                execSync(`qpdf --check ${testPdfPath}`, { stdio: "ignore" });
-            } catch (e: unknown) {
-                const error = e as { status?: number };
-                // Status 2 is warnings (acceptable), Status 3 is errors (fail)
-                if (error.status === 3) {
-                    // Get detailed error
-                    let details = "";
-                    try {
-                        details = execSync(`qpdf --check ${testPdfPath} 2>&1`, {
-                            encoding: "utf8",
-                        });
-                    } catch (e2: unknown) {
-                        const err2 = e2 as { stdout?: string; stderr?: string };
-                        details = err2.stdout ?? err2.stderr ?? "";
-                    }
-                    throw new Error(
-                        `PDF has structural errors (qpdf exit code 3).\n` +
-                        `This may indicate the /Prev xref pointer bug has regressed.\n` +
-                        `Details: ${details}`
-                    );
-                }
-            }
+            // Status 3 is accepted only for nonstructural qpdf warnings.
+            assertQpdfCheck(testPdfPath);
 
             // Verify the PDF is also loadable
             const loaded = await PDFDocument.load(result.pdf);
@@ -148,12 +127,8 @@ describe("Regression: LTV xref corruption", () => {
             // Should have xref entries (format: "N/G: type; ...")
             expect(xrefOutput).toContain("/0:");
 
-            // Verify no "damaged" warnings when loading
-            const checkOutput = execSync(`qpdf --check ${testPdfPath} 2>&1`, {
-                encoding: "utf8",
-            });
-            expect(checkOutput).not.toContain("file is damaged");
-            expect(checkOutput).not.toContain("xref not found");
+            // Status 3 is accepted only for nonstructural qpdf warnings.
+            assertQpdfCheck(testPdfPath);
         } finally {
             if (fs.existsSync(testPdfPath)) {
                 fs.unlinkSync(testPdfPath);

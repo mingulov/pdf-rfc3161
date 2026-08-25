@@ -12,8 +12,8 @@ import { ensureWebCrypto } from "../utils/web-crypto.js";
 
 /**
  * A TimeStampReq DER bundled with the random nonce that was embedded inside it.
- * Callers must keep the nonce around to verify the TimeStampResp on the way back
- * (RFC 3161 §2.4.2 replay defence).
+ * For PDF timestamping, TimestampSession keeps this request context and nonce together
+ * until it verifies the TimeStampResp (RFC 3161 Section 2.4.2 replay defence).
  */
 export interface TimestampRequest {
     /** The DER-encoded TimeStampReq, ready to send to the TSA */
@@ -26,15 +26,20 @@ export interface TimestampRequest {
  * Creates an RFC 3161 TimeStampReq for the given data.
  *
  * @param data - The data to be timestamped (will be hashed)
- * @param config - TSA configuration
+ * @param options - Request-shaping options (hash algorithm, policy, certReq)
  * @returns The DER-encoded TimeStampReq paired with the nonce embedded inside it.
  *
  * @example
+ * For PDF timestamping, use TimestampSession so the request context and nonce remain
+ * coupled to the PDF ByteRange until the response is validated and embedded:
+ *
  * ```typescript
- * const { request, nonce } = await createTimestampRequest(data, { hashAlgorithm: "SHA-256" });
+ * import { TimestampSession, sendTimestampRequest } from "pdf-rfc3161";
+ *
+ * const session = new TimestampSession(pdfBytes, { hashAlgorithm: "SHA-256" });
+ * const request = await session.createTimestampRequest();
  * const responseBytes = await sendTimestampRequest(request, { url: tsaUrl });
- * const info = parseTimestampResponse(responseBytes);
- * validateTimestampResponse(info, hash, "SHA-256", nonce); // verify echoed nonce
+ * const timestampedPdf = await session.embedTimestampToken(responseBytes);
  * ```
  */
 export async function createTimestampRequest(
@@ -58,7 +63,7 @@ export async function createTimestampRequest(
  * **Sync-crypto constraint (audit M10):** unlike {@link createTimestampRequest},
  * this function is synchronous and does NOT `await ensureWebCrypto()`. It still
  * calls `globalThis.crypto.getRandomValues(nonce)` directly, which is always
- * available on Node 18+ (the library's engines floor), Cloudflare Workers,
+ * available on Node 20+ (the library's engines floor), Cloudflare Workers,
  * Deno, and modern browsers.
  *
  * If you are on an environment where `globalThis.crypto` is lazy-initialised
@@ -73,11 +78,8 @@ export async function createTimestampRequest(
  *   on the options object is ignored in favour of the explicit positional arg.
  * @returns The DER-encoded TimeStampReq paired with its nonce.
  *
- * @example
- * ```typescript
- * // note: sync, unlike createTimestampRequest
- * const { request, nonce } = createTimestampRequestFromHash(precomputedSha256, "SHA-256");
- * ```
+ * This low-level helper does not provide a supported standalone PDF
+ * embed-and-response-validation flow. Use TimestampSession for PDF timestamping.
  */
 export function createTimestampRequestFromHash(
     hash: Uint8Array,

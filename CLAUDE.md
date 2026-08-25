@@ -9,11 +9,11 @@ Pure-JS RFC 3161 PDF timestamping library. Monorepo with edge-runtime support (n
 ```bash
 pnpm install            # uses pnpm workspaces — npm/yarn won't work
 pnpm build              # builds all packages (tsup → ESM + CJS dual)
-pnpm test               # 501 unit tests; ~65s wall-clock (real backoff timers)
+pnpm test               # 836 passed, 51 skipped, 2 todo; ~5s wall-clock
 pnpm typecheck          # tsc --noEmit, all packages
 pnpm lint               # eslint --fix, all packages
 pnpm cli -- <args>      # run CLI from source (tsx)
-pnpm test:full          # adds robustness + e2e (slow)
+pnpm test:full          # workspace tests, then corpus robustness (missing/empty/all-skipped corpus fails), then demo E2E
 
 # Filtered:
 pnpm --filter pdf-rfc3161-tests test
@@ -50,8 +50,8 @@ packages/
 - TypeScript strict + `noUncheckedIndexedAccess` + `noUnusedLocals/Parameters`
 - Prettier: 4-space indent, double quotes, semicolons, 100-col, `"endOfLine":"lf"`
 - ESLint: `typescript-eslint/strict-type-checked` + `eslint-plugin-security`
-  - `security/detect-unsafe-regex` is **error** — use bounded quantifiers (`\s{1,100}` not `\s+`) for any regex over untrusted input (PDF bytes)
-  - `security/detect-non-literal-regexp` is **warn** — add `// eslint-disable-next-line` only when length is bounded by code, not input
+    - `security/detect-unsafe-regex` is **error** — use bounded quantifiers (`\s{1,100}` not `\s+`) for any regex over untrusted input (PDF bytes)
+    - `security/detect-non-literal-regexp` is **warn** — add `// eslint-disable-next-line` only when length is bounded by code, not input
 - `console.warn/error` allowed by lint; prefer `getLogger()` in library code (one offender at `pdf/archive.ts:95` — M5)
 - ASCII-only in source files (historical commit: `use ASCII only characters in source`)
 
@@ -59,7 +59,8 @@ packages/
 
 - **H3 — Default trust store is empty.** `packages/core/src/pki/default-trust-store.ts:BUNDLED_ROOT_CERTS_BASE64` is an empty array. `getDefaultTrustStore()` throws `STATE_ERROR` until a maintainer with network access and trust-anchor verification authority populates the curated root list. The procedure lives in `docs/maintain-trust-store.md`. Until then, callers must either pass a custom `SimpleTrustStore` with pinned roots, or `{ trustStore: null }` to skip chain validation explicitly.
 
-For the full history of issues fixed across 0.1.x -> 0.2.0, see `CHANGELOG.md`.
+For the full history of issues fixed across 0.1.x and the unreleased next-major work,
+see `CHANGELOG.md`.
 
 When fixing a regression, add a test in `packages/tests/test/unit/`.
 
@@ -78,7 +79,7 @@ When reviewing a Jules patch: check whether it touches files listed in "Known is
 
 ## Gotchas
 
-- Tests use **real** `setTimeout`/`AbortSignal.timeout` for retry backoff → suite takes ~65s. Don't add global `vi.useFakeTimers()` — it breaks fetcher tests. Per-test fake timers are fine (see `tests/test/unit/tsa-client.test.ts`).
+- Some focused retry tests use **real** `setTimeout`/`AbortSignal.timeout`. Don't add global `vi.useFakeTimers()` — it breaks fetcher tests. Per-test fake timers are fine (see `tests/test/unit/tsa-client.test.ts`); current unit-suite timing is about five seconds but varies by environment.
 - `tsconfig.base.json` sets `preserveSymlinks: true`. The `AGENTS.md → CLAUDE.md` symlink is intentional, don't replace with a copy.
 - Integration job only runs on `main` (TSAs rate-limit). Don't expect them on PRs.
 - Per-package `CHANGELOG.md` is gitignored; only root `CHANGELOG.md` is canonical.

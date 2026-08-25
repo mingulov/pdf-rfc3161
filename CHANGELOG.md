@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
-## [0.2.0] - 2026-05-14
+## [Unreleased]
 
-Major release combining security hardening from `REVIEW-2026-02-09.md`,
-an API redesign with stricter defaults, and audit follow-ups. See
+This section describes unreleased next-major work combining security hardening
+from `REVIEW-2026-02-09.md`, an API redesign with stricter defaults, and audit
+follow-ups. It does not announce a published version or release date. See
 [MIGRATION.md](./MIGRATION.md) for diff-level upgrade guidance from 0.1.x.
 **The basic `timestampPdf({ pdf, tsa })` call signature is unchanged**; the
 verify / extract path gain stricter defaults and several new opt-in checks.
@@ -18,15 +19,23 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 ### Added
 
 - `verifyPdfTimestamps(pdfBytes, options)` -- extract + verify in one call.
-- `archiveTimestamp` for PAdES-LTA archival (replaces `timestampPdfLTA`; old
-  name kept as a `@deprecated` alias). `ArchiveTimestampOptions extends
-  TimestampOptions`, so every applicable `TimestampOptions` field
-  (`reason`, `location`, `contactInfo`, `omitModificationTime`, `maxSize`,
+- `archiveTimestamp` for RFC 3161 document-timestamp renewal (replaces
+  `timestampPdfLTA`; old name kept as a `@deprecated` alias). It verifies
+  recognized document timestamps, merges global DSS candidate material, and
+  adds a new document timestamp. It is not a general PAdES-LTA upgrader or an
+  indefinite-validity guarantee, and it never creates VRI automatically.
+  `ArchiveTimestampOptions extends TimestampOptions`, so every applicable
+  `TimestampOptions` field
+  (`signatureFieldName`, `signatureSize`, `ignoreEncryption`, `reason`,
+  `location`, `contactInfo`, `omitModificationTime`, `maxSize`,
   `optimizePlaceholder`, `rejectOnRevocationWarning`) is forwarded to the
-  inner `timestampPdf` call. New `strictExistingVerification: true` throws
+  inner `timestampPdf` call. `enableLTV` is accepted but forced to `false`
+  because archive owns the DSS update (and warns when it was explicitly
+  `true`); `revocationData` is merged as caller-responsible candidate material
+  into that archive-owned DSS update. New `strictExistingVerification: true` throws
   on the first failing in-PDF timestamp; default is to warn via
   `getLogger().warn`. New `existingTimestampVerifyOptions?:
-  VerificationOptions` lets callers add a `trustStore` or opt out of G1/G2
+VerificationOptions` lets callers add a `trustStore` or opt out of G1/G2
   strictness when verifying legacy tokens.
 - `getDefaultTrustStore()` scaffolding (curated root CA bundle to follow).
   Throws `TimestampError(STATE_ERROR, ...)` while the bundled root list is
@@ -55,9 +64,12 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   `PDF_ERROR` and `TSA_ERROR` use, respectively).
 - `pdf-rfc3161/internals` subpath for low-level PDF/PKI helpers (main
   `.d.ts` shrunk by ~50%: 41 KB -> 21 KB).
-- `MIGRATION.md` covering 0.1.x -> 0.2.0.
+- `addVRIForSignature(pdf, { fieldName }, { validationData })` for explicit,
+  field-bound VRI updates. The legacy VRI wrappers remain available only as
+  deprecated compatibility calls.
+- `MIGRATION.md` covering 0.1.x -> the unreleased next major.
 - Production checklist + Command-line interface sections in README; API
-  tables list the full 0.2.0 fields.
+  tables list the new fields.
 - CLI verify flags `--strict-ess`, `--trust-store`, `--no-require-eku`,
   `--no-require-validity`; timestamp flags
   `--reject-on-revocation-warning` (deprecated no-op), `--ignore-encryption`,
@@ -84,8 +96,8 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   instead of a URL-less `TSAConfig`. Network options belong on
   `sendTimestampRequest`.
 - `timestampPdfMultiple` forwards every `TimestampOptions` field per-TSA.
-- `ParsedTimestampResponse` is now a discriminated union; granted statuses
-  carry non-optional `token` and `info`.
+- A successful `ParsedTimestampResponse` has a granted status and non-optional
+  `token` and `info`.
 - **H1** TSA response nonce verified against the request nonce (replay
   defence per RFC 3161 §2.4.2).
 - **H2** `verifyTimestamp` rejects SignedData whose `eContentType` is not
@@ -96,6 +108,20 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 - `TimestampSession.embedTimestampToken` pre-detects TSR vs raw-CMS-token
   shape via outer ASN.1 inspection; nonce/digest validation failures are
   no longer silently swallowed.
+- New document timestamps use `/Type /DocTimeStamp` with `/SubFilter
+/ETSI.RFC3161` while retaining `/FT /Sig` on the AcroForm field. The
+  placeholder revision uses the classic incremental writer and preserves the
+  original PDF bytes as an exact prefix.
+- `/M`, `Reason`, `Location`, and `ContactInfo` are omitted by default;
+  explicit metadata remains a compatibility opt-in. Requested signature field
+  names receive deterministic suffixes rather than overwriting existing form
+  fields or widgets.
+- `addVRIForSignature` derives its uppercase SHA-1 key from the selected
+  field's complete decoded, padded `/Contents` bytes. DSS updates preserve
+  existing global arrays, VRI entries, and unknown DSS keys; VRI references
+  share the global DSS validation streams.
+- The request-bound validation gate is mandatory immediately before every
+  embed, and the raw PDF embed primitive is no longer public.
 - `tryExtractStatusFromASN1` walks the asn1js `valueBlock.value` structure
   correctly and returns `null` for non-PKIStatusInfo shapes (no more
   sentinel "granted" for arbitrary ASN.1 input).
@@ -128,7 +154,8 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 - **L5** PDF strings (`reason`, `location`, `contactInfo`) length-capped to
   2048 chars; reject embedded NUL.
 - Performance: precomputed lookup tables for `bytesToHex` / `hexToBytes`;
-  O(N²)→O(N) issuer lookup in LTV chain building; LTA verify-once-and-reuse.
+  O(N^2) to O(N) issuer lookup in LTV chain building; archive renewal
+  verification reuse.
 
 ### Breaking
 
@@ -167,8 +194,8 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   `RFC4998_OIDS`). These were stubs -- `validateEvidenceRecord` returned
   `true` for any ASN.1 SEQUENCE, `extractTimestampsFromEvidence` returned
   `[]` -- and risked being mistaken for real implementations. RFC 4998
-  (Evidence Record Syntax) is a standalone archival format unrelated to
-  PAdES-LTA, which is what `pdf-rfc3161` covers. If you need real RFC
+  (Evidence Record Syntax) is a standalone archival format unrelated to the
+  RFC 3161 document-timestamp renewal provided here. If you need real RFC
   4998, use a dedicated library.
 - **BREAKING (deep import only)**: `pdf-rfc3161/rfcs/rfc6211`. The module's
   `validateAlgorithmProtectAttribute` always returned `true` because its
@@ -197,14 +224,18 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 - `TimestampSession` `@example` shows the correct constructor.
 - `embed.ts` `@throws` references `preparePdfForTimestamp` correctly.
 - README "Flag reference" tables corrected; CLI examples use `npx
-  pdf-rfc3161-cli`.
+pdf-rfc3161-cli`.
 - README RFC table: dropped RFC 6211 row; RFC 5544 marked Implemented; RFC
   8933 row added.
-- README PAdES-LTA example imports `archiveTimestamp`.
+- README and migration guidance describe `archiveTimestamp` as RFC 3161
+  document-timestamp renewal, not a general PAdES-LTA or indefinite-validity
+  claim. They also document the explicit VRI migration, the offline and packed
+  artifact gates, manual Acrobat observation protocol, and separate official
+  PDF-loader limitations.
 - `createTimestampRequestFromHash` JSDoc documents the sync-crypto
   constraint and the `ensureWebCrypto` workaround.
 - README setup commands corrected to `pnpm install` + `pnpm --filter
-  pdf-rfc3161-demo dev`.
+pdf-rfc3161-demo dev`.
 - **L7** Documented serverless caveat on `CircuitBreakerMap`.
 - `CLAUDE.md` known-issues block refreshed; only H3 (default trust store
   empty) remains open.
@@ -213,8 +244,8 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 
 Closes 4 of 5 high-severity items, all 6 medium-severity items, and 6 of 7
 low-severity items from `REVIEW-2026-02-09.md`. H3 (default chain
-validation with bundled roots) ships infrastructure only; the curated root
-bundle is deferred to a follow-up release.
+validation with bundled roots) has infrastructure only; the curated root
+bundle is deferred to later work; publishing it remains a release decision.
 
 ## [0.1.4] - 2026-01-14
 
@@ -237,7 +268,8 @@ bundle is deferred to a follow-up release.
 
 ### Added
 
-- PAdES-LTA support: `timestampPdfLTA` for archival workflows
+- Historical `timestampPdfLTA` archive helper for archival workflows; it is
+  now a deprecated alias and is not a general PAdES-LTA conformance guarantee
 - Structural validation tests for LTV
 
 ### Changed
@@ -267,7 +299,8 @@ bundle is deferred to a follow-up release.
 - Initial release
 - `timestampPdf()` function for adding RFC 3161 timestamps to PDFs
 - Support for SHA-256, SHA-384, and SHA-512 hash algorithms
-- Document timestamp (DocTimeStamp with ETSI.RFC3161 SubFilter)
+- Initial RFC 3161 PDF timestamp support (later DocTimeStamp dictionary
+  metadata corrections are documented in the Unreleased section)
 - Cloudflare Workers and edge runtime compatibility
 - Browser support via Web Crypto API
 - TypeScript type definitions

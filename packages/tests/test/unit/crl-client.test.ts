@@ -9,7 +9,7 @@ global.fetch = fetchMock;
 
 // Mock Logger
 const warnSpy = vi.fn();
-vi.mock('../../../core/src/utils/logger.js', async (importOriginal) => {
+vi.mock('../../../core/src/utils/logger.js', async (importOriginal: <T = unknown>() => Promise<T>) => {
     const mod = await importOriginal<typeof import('../../../core/src/utils/logger.js')>();
     return {
         ...mod,

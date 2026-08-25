@@ -25,7 +25,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - uses: actions/setup-node@v6
         with:
@@ -33,11 +33,37 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v9
+        with:
+          version: '0.12.5'
+
+      - name: Install qpdf and OpenSSL
+        run: sudo apt-get update && sudo apt-get install --yes qpdf openssl
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install pyHanko
+        run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
+
       - name: Build
         run: pnpm -r build
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Offline PAdES conformance
+        run: pnpm --filter pdf-rfc3161-tests test:conformance
+
+      - name: Packed consumer test
+        run: pnpm --filter pdf-rfc3161-tests test:package
 
       - name: Publish
         run: pnpm -r publish --provenance --no-git-checks --access public

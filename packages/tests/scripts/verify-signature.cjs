@@ -1,103 +1,128 @@
-const fs = require('fs');
-const crypto = require('crypto');
-const { execSync } = require('child_process');
+const fs = require("node:fs");
+const path = require("node:path");
 
-function verify(pdfPath) {
-    console.log(`Verifying ${pdfPath}...`);
-    const pdf = fs.readFileSync(pdfPath);
-    const pdfStr = pdf.toString('latin1');
+class UsageError extends Error {}
 
-    // 1. Extract ByteRange
-    const brMatch = pdfStr.match(/\/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]/);
-    if (!brMatch) {
-        console.error('No ByteRange found!');
-        return;
+function printHelp(stream = process.stdout) {
+    stream.write("Usage:\n  node packages/tests/scripts/verify-signature.cjs <pdf-path> [<pdf-path> ...]\n\n");
+    stream.write("Verify RFC 3161 document timestamps with the built pdf-rfc3161 public API.\n\n");
+    stream.write("The script checks document ByteRange binding, CMS signature consistency, ");
+    stream.write("timestamp EKU and generation-time validity. It does not establish TSA trust: ");
+    stream.write("the default trust store is intentionally empty (H3).\n\n");
+    stream.write("Options:\n");
+    stream.write("  -h, --help  Show this help and exit\n");
+}
+
+function parseArguments(argv) {
+    if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) {
+        return { help: true };
     }
-    const br = [
-        parseInt(brMatch[1]),
-        parseInt(brMatch[2]),
-        parseInt(brMatch[3]),
-        parseInt(brMatch[4])
-    ];
-    console.log('ByteRange:', br);
-
-    // 2. Extract Signed Data
-    const part1 = pdf.subarray(br[0], br[0] + br[1]);
-    const part2 = pdf.subarray(br[2], br[2] + br[3]);
-    const signedData = Buffer.concat([part1, part2]);
-    console.log(`Extracted ${signedData.length} bytes of signed data.`);
-
-    // 3. Hash it (SHA-256)
-    const hash = crypto.createHash('sha256').update(signedData).digest('hex');
-    console.log('calculated_hash:', hash);
-
-    // 4. Extract Token from Contents
-    const contentsMatch = pdfStr.match(/\/Contents\s*<([^>]+)>/);
-    if (!contentsMatch) {
-        console.error('No /Contents found!');
-        return;
+    if (argv.length === 0) {
+        throw new UsageError("At least one PDF path is required");
     }
-    let hex = contentsMatch[1];
-    const hexClean = hex.replace(/\s/g, '');
-    const tokenBuffer = Buffer.from(hexClean, 'hex');
+    for (const argument of argv) {
+        if (argument.startsWith("-")) {
+            throw new UsageError(`Unknown option: ${argument}`);
+        }
+    }
+    return { help: false, pdfPaths: argv };
+}
 
-    fs.writeFileSync('/tmp/token.der', tokenBuffer);
-
-    // 5. Extract message imprint
+function loadBuiltPackage() {
     try {
-        const textOut = execSync('openssl ts -reply -in /tmp/token.der -token_in -text', { encoding: 'utf8' });
-        console.log('--- OpenSSL Output ---');
-        console.log(textOut);
-        console.log('----------------------');
-
-        // Improved matching for OpenSSL multi-line hex dump
-        const lines = textOut.split('\n');
-        let messageDataHex = '';
-        let capturing = false;
-        for (const line of lines) {
-            if (line.includes('Message data:')) {
-                capturing = true;
-                continue;
-            }
-            if (capturing) {
-                // If the line has ' - ', it's a hex dump line.
-                // e.g. "    0000 - 05 97 14 1a ..."
-                const dumpMatch = line.match(/^\s*[0-9A-Fa-f]+ - (([0-9A-Fa-f]{2}[\s-]+)+)/);
-                if (dumpMatch) {
-                    messageDataHex += dumpMatch[1].replace(/[^0-9A-Fa-f]/g, '');
-                } else if (line.trim() !== '' && messageDataHex.length > 0) {
-                    // Stop if we hit a non-hex line after we started capturing
-                    capturing = false;
-                }
-            }
-        }
-
-        if (messageDataHex) {
-            const tokenHash = messageDataHex.toLowerCase().trim();
-            console.log('token_imprint:  ', tokenHash);
-
-            if (tokenHash === hash) {
-                console.log('SUCCESS: Hash matches!');
-            } else {
-                console.error('FAILURE: Hash Mismatch!');
-                console.log('Diff:');
-                console.log(' Calc: ', hash);
-                console.log(' Tok:  ', tokenHash);
-            }
-        } else {
-            console.log('Could not find Message data in openssl output.');
-        }
-
-    } catch (e) {
-        console.error('OpenSSL failed:', e.message);
-        console.log(e.stdout ? e.stdout.toString() : '');
+        return require("pdf-rfc3161");
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+            `Could not load the built pdf-rfc3161 package. Run pnpm build first. ${detail}`
+        );
     }
 }
 
-const args = process.argv.slice(2);
-if (args.length > 0) {
-    verify(args[0]);
-} else {
-    const base = '/home/user/src/m/test_files';
-    verify(`${base}/final-test-no-ltv.pdf`);
+function timestampTime(timestamp) {
+    const value = timestamp.info?.genTime;
+    return value instanceof Date ? value.toISOString() : "not available";
 }
+
+async function verifyPdf(library, pdfPath) {
+    if (
+        typeof library.extractTimestamps !== "function" ||
+        typeof library.verifyTimestamp !== "function"
+    ) {
+        throw new Error("Built pdf-rfc3161 package is missing extractTimestamps or verifyTimestamp");
+    }
+
+    const resolvedPath = path.resolve(pdfPath);
+    const pdf = new Uint8Array(fs.readFileSync(resolvedPath));
+    process.stdout.write(`Verifying ${resolvedPath}\n`);
+
+    const timestamps = await library.extractTimestamps(pdf);
+    if (timestamps.length === 0) {
+        throw new Error("No RFC 3161 document timestamps found");
+    }
+
+    let allPassed = true;
+    for (const timestamp of timestamps) {
+        const verified = await library.verifyTimestamp(timestamp, {
+            pdf,
+            requireTimestampingEKU: true,
+            requireCertValidAtGenTime: true,
+            strictESSValidation: true,
+        });
+        const label = verified.fieldName || "unnamed timestamp field";
+        const result = verified.verified ? "PASS" : "FAIL";
+        process.stdout.write(`  ${label}: cryptographic consistency ${result}\n`);
+        process.stdout.write(`  ${label}: timestamp time ${timestampTime(verified)}\n`);
+        process.stdout.write(
+            `  ${label}: ByteRange covers supplied file ${verified.coversWholeDocument ? "yes" : "no"}\n`
+        );
+        if (!verified.verified) {
+            allPassed = false;
+            process.stderr.write(
+                `  ${label}: ${verified.verificationError ?? "verification returned failure"}\n`
+            );
+        }
+    }
+
+    process.stdout.write(
+        "  Trust policy / H3: NOT EVALUATED (supply a caller-owned trust store for path trust)\n"
+    );
+    return allPassed;
+}
+
+async function main() {
+    const options = parseArguments(process.argv.slice(2));
+    if (options.help) {
+        printHelp();
+        return;
+    }
+
+    const library = loadBuiltPackage();
+    let allPassed = true;
+    for (const pdfPath of options.pdfPaths) {
+        try {
+            if (!(await verifyPdf(library, pdfPath))) {
+                allPassed = false;
+            }
+        } catch (error) {
+            allPassed = false;
+            const detail = error instanceof Error ? error.message : String(error);
+            process.stderr.write(`Verification failed for ${pdfPath}: ${detail}\n`);
+        }
+    }
+    if (!allPassed) {
+        process.exitCode = 1;
+    }
+}
+
+main().catch((error) => {
+    if (error instanceof UsageError) {
+        process.stderr.write(`Error: ${error.message}\n\n`);
+        printHelp(process.stderr);
+        process.exitCode = 2;
+        return;
+    }
+    const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`Signature verification failed: ${detail}\n`);
+    process.exitCode = 1;
+});

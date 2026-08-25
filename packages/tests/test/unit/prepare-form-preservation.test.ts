@@ -96,7 +96,7 @@ describe("preparePdfForTimestamp form preservation", () => {
         { indirectAcroForm: true, indirectFields: false, indirectAnnots: true },
         { indirectAcroForm: true, indirectFields: true, indirectAnnots: false },
         { indirectAcroForm: true, indirectFields: true, indirectAnnots: true },
-    ])("preserves existing form references for %#", async (options) => {
+    ])("preserves existing form references for %#", async (options: FormFixtureOptions) => {
         // A missed mark-for-save on an indirect array drops the appended widget/field.
         const fixture = await createFormFixture(options);
 
@@ -134,7 +134,7 @@ describe("preparePdfForTimestamp form preservation", () => {
 
     it.each(["AcroForm", "Fields", "Annots"] as const)(
         "rejects a present malformed /%s value",
-        async (malformedValue) => {
+        async (malformedValue: "AcroForm" | "Fields" | "Annots") => {
             // Replacing a malformed object graph silently discards form content.
             const document = await PDFDocument.create();
             const page = document.addPage([100, 100]);
@@ -209,7 +209,7 @@ describe("preparePdfForTimestamp form preservation", () => {
         { indirectChild: true, indirectKids: true },
     ])(
         "uses fully qualified names from direct and indirect /Kids entries when allocating a name",
-        async ({ indirectChild, indirectKids }) => {
+        async ({ indirectChild, indirectKids }: { indirectChild: boolean; indirectKids: boolean }) => {
             // Omitting a nested field would duplicate its fully qualified name.
             const document = await PDFDocument.create();
             document.addPage([100, 100]);

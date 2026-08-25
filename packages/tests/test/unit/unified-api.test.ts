@@ -39,7 +39,7 @@ vi.mock("../../../core/src/session.js", () => {
     return { TimestampSession: FakeSession };
 });
 
-vi.mock("../../../core/src/tsa/index.js", async (importOriginal) => {
+vi.mock("../../../core/src/tsa/index.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const original = await importOriginal<typeof import("../../../core/src/tsa/index.js")>();
     return {
         ...original,
@@ -106,6 +106,7 @@ describe("Unified API Tests", () => {
         expect(state.embed).not.toHaveBeenCalled();
     });
 
+    /* eslint-disable @typescript-eslint/no-deprecated -- compatibility coverage */
     it("retains intentionally deprecated public option and result fields", () => {
         const legacyOptions: TimestampOptions = {
             pdf: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
@@ -121,6 +122,7 @@ describe("Unified API Tests", () => {
         expect(legacyOptions.rejectOnRevocationWarning).toBe(false);
         expect(legacyResult.tsaRevocationWarning).toBeUndefined();
     });
+    /* eslint-enable @typescript-eslint/no-deprecated */
 
     it("documents request-binding failures with the public verification error code", () => {
         const indexSource = readFileSync(

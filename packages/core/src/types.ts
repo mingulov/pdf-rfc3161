@@ -173,8 +173,8 @@ export interface TimestampInfo {
     /**
      * Nonce echoed from the TimeStampReq (RFC 3161 Sec. 2.4.2).
      * Optional in the protocol; populated when the TSTInfo includes a nonce field.
-     * Used for replay-attack defence -- compare against the nonce that was sent
-     * with the original request via validateTimestampResponse(..., expectedNonce).
+     * Used by TimestampSession's request-bound replay defence when it compares
+     * the response with the nonce from the original request.
      */
     nonce?: Uint8Array;
 }

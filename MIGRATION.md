@@ -2,35 +2,47 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
-## 0.1.x -> 0.2.0 (breaking)
+## 0.1.x -> unreleased next major (breaking)
 
-0.2.0 is a major release combining security hardening, an API redesign with
-stricter defaults, and follow-up audit fixes. The basic `timestampPdf({ pdf,
+This guide describes unreleased next-major work combining security hardening,
+an API redesign with stricter defaults, and follow-up audit fixes. It does not
+announce a published version or release date. The basic `timestampPdf({ pdf,
 tsa })` call signature is unchanged, but the verify / extract path and several
-helpers acquired new defaults that are stricter than 0.1.x.
+helpers acquire defaults that are stricter than 0.1.x.
 
 ### 1. `createTimestampRequest` / `createTimestampRequestFromHash` return `{ request, nonce }`
 
 The functions previously returned just `Uint8Array` (the DER-encoded request).
-0.2.0 returns an object containing the request *and* the 8-byte nonce that was
-embedded inside it, so callers can verify the TSA echoed the nonce back (RFC
-3161 Sec. 2.4.2).
+The unreleased API returns an object containing the request _and_ the 8-byte
+nonce that was embedded inside it, so callers can verify the TSA echoed the
+nonce back (RFC 3161 Sec. 2.4.2).
 
 ```diff
 - const request = await createTimestampRequest(data, config);
 - const responseBytes = await sendTimestampRequest(request, config);
-- const info = parseTimestampResponse(responseBytes);
 + const { request, nonce } = await createTimestampRequest(data, config);
 + const responseBytes = await sendTimestampRequest(request, config);
-+ const info = parseTimestampResponse(responseBytes);
-+ // Strongly recommended:
-+ validateTimestampResponse(info, hash, "SHA-256", nonce);
++ // Keep `nonce` with this exact request/response pair.
 ```
 
-`validateTimestampResponse(info, hash, alg, nonce)` rejects replays and
-echo-mismatch attacks. Pass the `nonce` from `createTimestampRequest` and the
-hash you originally fed in. Skipping the nonce check defeats the protection
-the new shape exists to enable.
+The main entry does not publish a standalone `validateTimestampResponse`
+helper. Do not import an internal response helper to embed into a PDF. Use the
+supported session flow, which performs request-bound validation immediately
+before embedding the timestamp into the PDF:
+
+```typescript
+import { TimestampSession, sendTimestampRequest } from "pdf-rfc3161";
+
+const session = new TimestampSession(pdfBytes, { hashAlgorithm: "SHA-256" });
+const request = await session.createTimestampRequest();
+const responseBytes = await sendTimestampRequest(request, { url: tsaUrl });
+const timestampedPdf = await session.embedTimestampToken(responseBytes);
+```
+
+The session preserves its request nonce and checks it with the prepared
+ByteRange, requested policy, CMS signer, ESS binding, and timestamping EKU.
+Skipping that checked session embed defeats the protection the new request
+shape is meant to enable.
 
 ### 2. `createTimestampRequest` / `createTimestampRequestFromHash` take `TimestampRequestOptions`
 
@@ -60,9 +72,9 @@ point.
 ### 3. `extractTimestamps`: `ignoreEncryption` defaults to `false`
 
 In 0.1.x, the library silently treated encrypted PDFs as if they were plain
-documents, which produced misleading "no timestamps found" results. In 0.2.0,
-the default is `false`: calling `extractTimestamps` on an encrypted PDF now
-throws `TimestampError` with code `INVALID_PDF`. If you need the old behaviour
+documents, which produced misleading "no timestamps found" results. In the
+unreleased API, the default is `false`: calling `extractTimestamps` on an
+encrypted PDF now throws `TimestampError` with code `PDF_ERROR`. If you need the old behaviour
 (useful for diagnostic tooling on hostile inputs), set it explicitly:
 
 ```diff
@@ -76,14 +88,14 @@ This flag is also exposed on the `verify` CLI command.
 
 In 0.1.x, `timestampPdf` defaulted `enableLTV` to `false`. This was
 inconsistent with `TimestampSession` (which defaulted to `true`) and meant a
-typical call would produce a signature without the LTV bundle, requiring
-opt-in to get the production-ready behaviour. 0.2.0 flips the default. If
-you intentionally want a signature *without* the embedded validation data,
+typical call would produce a signature without candidate validation material,
+requiring an opt-in to embed it. The unreleased API flips the default. If
+you intentionally want a signature _without_ the embedded validation data,
 set `enableLTV: false` explicitly.
 
 ```diff
 - const result = await timestampPdf({ pdf, tsa });            // no LTV in 0.1.x
-+ const result = await timestampPdf({ pdf, tsa });            // LTV in 0.2.0
++ const result = await timestampPdf({ pdf, tsa });            // LTV in the unreleased API
 + // Or, to keep 0.1.x behaviour:
 + const result = await timestampPdf({ pdf, tsa, enableLTV: false });
 ```
@@ -92,13 +104,13 @@ set `enableLTV: false` explicitly.
 
 The two security checks (G1 and G2 in the audit) previously had to be opted
 into via `requireTimestampingEKU: true` / `requireCertValidAtGenTime: true`.
-In 0.2.0 both default to `true`. Verifying a legacy token that pre-dates the
-RFC 3161 EKU requirement (or whose TSA cert had expired by signing time) now
-fails by default; pass `{ requireTimestampingEKU: false }` or
+In the unreleased API both default to `true`. Verifying a legacy token that
+pre-dates the RFC 3161 EKU requirement (or whose TSA cert had expired by
+signing time) now fails by default; pass `{ requireTimestampingEKU: false }` or
 `{ requireCertValidAtGenTime: false }` to restore the looser behaviour.
 
 ```typescript
-// 0.2.0+: same call, stricter result
+// Unreleased API: same call, stricter result
 const verified = await verifyTimestamp(ts, { trustStore });
 
 // To match 0.1.x leniency exactly:
@@ -128,18 +140,21 @@ const result = await verifyTimestamp(ts, { trustStore });
 // 2. Skip chain validation explicitly (cryptographic-only verify):
 const result = await verifyTimestamp(ts, { trustStore: null });
 
-// 3. Don't call getDefaultTrustStore() at all -- omit the trustStore option
-//    entirely, which is equivalent to #2 for now and will pick up the
-//    curated bundle automatically once it ships:
+// 3. Omit trustStore only when cryptographic-only verification is intentional:
 const result = await verifyTimestamp(ts);
 ```
 
+Omitting `trustStore` does not select default roots now or automatically later.
+For a trust decision, explicitly provide and maintain a trust store appropriate
+to the relying party's policy.
+
 ### 7. Low-level helpers moved to `pdf-rfc3161/internals`
 
-The top-level entry now exports only the high-frequency signing/verification
-surface (`timestampPdf`, `archiveTimestamp`, `timestampPdfMultiple`,
-`extractTimestamps`, `verifyTimestamp`, `verifyPdfTimestamps`, `TimestampSession`,
-trust-store types, error types). Lower-level helpers moved to a new
+The top-level entry retains the common signing/verification surface
+(`timestampPdf`, `archiveTimestamp`, `timestampPdfMultiple`,
+`extractTimestamps`, `verifyTimestamp`, `verifyPdfTimestamps`,
+`TimestampSession`), request/response helpers, trust-store types, errors,
+constants, and RFC helpers. Lower-level PDF and PKI helpers moved to the
 `pdf-rfc3161/internals` subpath.
 
 ```diff
@@ -158,9 +173,12 @@ trust-store types, error types). Lower-level helpers moved to a new
 ```
 
 The raw PDF embed primitive is intentionally no longer published. Move manual
-flows to TimestampSession.createTimestampRequest() followed by
-TimestampSession.embedTimestampToken(), which applies mandatory token
-validation immediately before the PDF write.
+flows to `TimestampSession.createTimestampRequest()` followed by
+`TimestampSession.embedTimestampToken()`. The session validates the response
+against the prepared ByteRange, request nonce, requested policy, CMS signer,
+ESS binding, and exclusive critical timestamping EKU immediately before it
+embeds the timestamp into the PDF. This is mandatory request-bound pre-embed validation, not an
+optional post-write check.
 
 The main bundle's `.d.ts` is now ~50% smaller (41 KB -> 21 KB).
 
@@ -178,8 +196,8 @@ builds its own client.
 
 `timestampPdfMultiple` previously only forwarded `reason`, `location`,
 `contactInfo`, and `enableLTV` to each underlying `timestampPdf` call.
-0.2.0 forwards every active `TimestampOptions` field (for example,
-`requireTimestampingEKU` and `revocationData`), so you can configure the
+The unreleased API forwards every active `TimestampOptions` field (for example,
+`signatureFieldName` and `revocationData`), so you can configure the
 whole pipeline once. `rejectOnRevocationWarning` remains accepted only for
 source compatibility; it is a deprecated no-op because TSA statuses 4/5 are
 always fatal.
@@ -188,7 +206,8 @@ always fatal.
 const result = await timestampPdfMultiple({
     pdf,
     tsaList: [tsa1, tsa2],
-    requireTimestampingEKU: true,    // 0.2.0: forwarded; 0.1.x: silently dropped
+    signatureFieldName: "Timestamp", // forwarded to each timestamp request
+    enableLTV: false,
 });
 ```
 
@@ -213,22 +232,26 @@ Several CLI flag groups switched from positive to negative form. The default
 behaviour for each is now to ENFORCE the security check (matching the new
 library defaults). Pass the new `--no-*` form to opt out.
 
-| Was (0.1.x)              | Now (0.2.0)               | New default     |
-| ------------------------ | ------------------------- | --------------- |
-| `--ltv`                  | `--no-ltv`                | LTV enabled     |
-| `--require-eku`          | `--no-require-eku`        | EKU enforced    |
-| `--require-validity`     | `--no-require-validity`   | validity enforced |
-| (n/a)                    | `--strict-ess`            | strict ESS still opt-in (library default is `false`) |
+| Was (0.1.x)          | Now (unreleased API)    | New default                                          |
+| -------------------- | ----------------------- | ---------------------------------------------------- |
+| `--ltv`              | `--no-ltv`              | LTV enabled                                          |
+| `--require-eku`      | `--no-require-eku`      | EKU enforced                                         |
+| `--require-validity` | `--no-require-validity` | validity enforced                                    |
+| (n/a)                | `--strict-ess`          | strict ESS still opt-in (library default is `false`) |
 
 If you were invoking the CLI with an explicit positive flag (e.g.
 `pdf-rfc3161-cli timestamp ... --ltv`), drop the flag -- the protections are
-now on by default. To restore the pre-0.2.0 CLI behaviour of producing a
+now on by default. To restore the 0.1.x CLI behaviour of producing a
 non-LTV signature, pass `--no-ltv` explicitly.
 
 `archive --no-update` previously was documented but ineffective. It now
 works: without it, `archiveTimestamp` harvests revocation data from existing
 in-PDF signatures; with it, the harvest is skipped and only freshly-fetched
-OCSP/CRL go into the new DSS.
+OCSP/CRL go into the new DSS. The archive path is RFC 3161 document-timestamp
+renewal: it verifies recognized document timestamps, merges global DSS
+candidate material, and adds a new document timestamp. It is not a general
+PAdES-LTA upgrader or an indefinite-validity guarantee, and it never creates
+VRI entries automatically.
 
 ### 11. Removed: `rfcs/rfc4998` deep import
 
@@ -249,6 +272,84 @@ case -- a real RFC 4998 implementation is on the roadmap.
 always returned `true` because its underlying `getProtectedAlgorithms`
 returned `[]`. The real RFC 8933 algorithm protection is exposed via
 `validateTimestampTokenRFC8933Compliance` from the main entry point.
+
+### 13. Document timestamp metadata is PAdES-safe by default
+
+New document timestamps write a value dictionary with `/Type /DocTimeStamp`
+and `/SubFilter /ETSI.RFC3161`. The AcroForm field remains `/FT /Sig`; a
+DocTimeStamp is not an approval or certification signature merely because it
+uses the signature field type.
+
+`/M`, `Reason`, `Location`, and `ContactInfo` are omitted unless requested.
+`omitModificationTime: false` restores the legacy `/M` behavior for a
+compatibility case. Treat metadata as an explicit opt-in, not as a baseline
+default.
+
+`signatureFieldName` is a requested base name. When a fully qualified field
+name already exists, the library adds a deterministic numeric suffix rather
+than overwriting an existing form field. Existing field and widget structures
+remain unchanged; the new timestamp field and widget are appended. Do not
+assume the requested string is always the literal final field name in a
+pre-existing AcroForm.
+
+### 14. Replace legacy VRI calls with `addVRIForSignature`
+
+VRI is field-specific and optional. The legacy wrappers are still callable but
+deprecated. They now require a `signatureFieldName`, reject reusable PDF
+references from another load context, and reject unsupported key choices.
+Move code that supplied a certificate and loose references to raw validation
+bytes bound to one named PDF signature field:
+
+```diff
+- import { addVRI } from "pdf-rfc3161/internals";
++ import { addVRIForSignature } from "pdf-rfc3161/internals";
+
+- const updated = await addVRI(pdf, signingCert, { crls, ocspResponses });
++ const updated = await addVRIForSignature(
++     pdf,
++     { fieldName: "Timestamp" },
++     {
++         validationData: {
++             certificates: [certificateDer], // DER-encoded Uint8Array
++             crls,
++             ocspResponses,
++         },
++     }
++ );
+```
+
+The replacement resolves the field in the loaded PDF, derives an uppercase
+SHA-1 VRI key from that signature's complete decoded, padded `/Contents`
+value, and puts VRI below Catalog `/DSS`. It preserves existing global DSS
+arrays, VRI entries, and unknown DSS keys, reusing byte-identical validation
+streams where possible. The decoded-and-padded interpretation is this
+project's implementation reading of the relevant PDF and ETSI material; the
+current ETSI text calls the input the complete hexadecimal `/Contents`
+string, so do not treat this sentence as a verbatim ETSI quote or an assertion
+that every producer uses the same encoding.
+
+VRI is optional, and ETSI EN 319 142-1 says it `SHOULD NOT` be used in the
+baseline profile. `archiveTimestamp` merges global DSS candidate material but
+does not create VRI automatically. Use the explicit API only for a
+field-specific interoperability need.
+
+### 15. Validate the published artifact and document loader limits
+
+Run the offline structural and packed-consumer gates on a built artifact:
+
+```bash
+pnpm build
+pnpm --filter pdf-rfc3161-tests test:conformance
+pnpm --filter pdf-rfc3161-tests test:package
+```
+
+For the tool-role boundaries and a reproducible later Acrobat Reader
+observation, see [docs/validation-tools.md](./docs/validation-tools.md) and
+[docs/manual-acrobat-validation.md](./docs/manual-acrobat-validation.md).
+These tests do not change the official `pdf-lib-incremental-save@1.17.4`
+loader boundary. Its hostile-PDF parsing and resource limitations remain
+separate and deferred; see
+[docs/pdf-lib-incremental-save-limitations.md](./docs/pdf-lib-incremental-save-limitations.md).
 
 ---
 

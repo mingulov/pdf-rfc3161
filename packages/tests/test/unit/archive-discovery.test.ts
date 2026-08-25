@@ -20,7 +20,7 @@ import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 vi.mock("../../../core/src/index.js", () => ({ timestampPdf: vi.fn() }));
 
 const warnSpy = vi.fn();
-vi.mock("../../../core/src/utils/logger.js", async (importOriginal) => {
+vi.mock("../../../core/src/utils/logger.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const mod = await importOriginal<typeof import("../../../core/src/utils/logger.js")>();
     return {
         ...mod,

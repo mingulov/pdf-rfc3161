@@ -20,7 +20,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@v6
@@ -33,6 +33,10 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Verify packed consumer
+        if: matrix.node == '24'
+        run: pnpm --filter pdf-rfc3161-tests test:package
 
       - name: Type check
         run: pnpm typecheck
@@ -59,7 +63,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -76,6 +80,48 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+  pades-conformance:
+    name: Offline PAdES Conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          version: '0.12.5'
+
+      - name: Install qpdf and OpenSSL
+        run: sudo apt-get update && sudo apt-get install --yes qpdf openssl
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pyHanko
+        run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run offline PAdES conformance
+        run: pnpm --filter pdf-rfc3161-tests test:conformance
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -87,7 +133,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 10.30.3
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
