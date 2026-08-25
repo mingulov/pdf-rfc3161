@@ -11,7 +11,7 @@ import {
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-import { checkedRegister, preflightPdfXref, restoreLargestObjectNumber } from "./internals.js";
+import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
 
 /**
  * L5: caps how long a single user-supplied PDF string (reason / location /
@@ -285,18 +285,33 @@ export async function preparePdfForTimestamp(
     // Create placeholder content
     const placeholderHex = "0".repeat(placeholderHexLength);
 
-    // Prove every xref/object-stream byte the dependency can decode before
-    // handing untrusted PDF input to its loader.
-    const xrefProof = preflightPdfXref(pdfBytes);
-
-    // Load the PDF document
-    const sigPdfDoc = await PDFDocument.load(pdfBytes, {
-        updateMetadata: false,
-        ignoreEncryption: options.ignoreEncryption ?? false,
-    });
+    // Load the PDF document. The official dependency can throw its own parser
+    // errors, but callers of this API receive TimestampError failure codes.
+    let sigPdfDoc: PDFDocument;
+    try {
+        sigPdfDoc = await PDFDocument.load(pdfBytes, {
+            updateMetadata: false,
+            ignoreEncryption: options.ignoreEncryption ?? false,
+        });
+    } catch (error) {
+        if (error instanceof TimestampError) {
+            throw error;
+        }
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `Failed to load PDF for timestamp preparation: ${error instanceof Error ? error.message : String(error)}`,
+            error
+        );
+    }
+    if (!(sigPdfDoc.catalog instanceof PDFDict)) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            "Failed to load PDF for timestamp preparation: catalog is missing"
+        );
+    }
 
     const sigContext = sigPdfDoc.context;
-    restoreLargestObjectNumber(pdfBytes, sigContext, xrefProof);
+    restoreLargestObjectNumber(pdfBytes, sigContext);
 
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();

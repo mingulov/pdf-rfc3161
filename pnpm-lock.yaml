@@ -72,9 +72,6 @@ importers:
       asn1js:
         specifier: ^3.0.10
         version: 3.0.10
-      pako:
-        specifier: 1.0.11
-        version: 1.0.11
       pdf-lib-incremental-save:
         specifier: 1.17.4
         version: 1.17.4
@@ -210,9 +207,6 @@ importers:
       eslint:
         specifier: ^10.4.0
         version: 10.4.0
-      pako:
-        specifier: 1.0.11
-        version: 1.0.11
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
