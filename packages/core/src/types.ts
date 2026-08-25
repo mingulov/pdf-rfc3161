@@ -38,6 +38,12 @@ export interface TimestampRequestOptions {
     requestCertificate?: boolean;
 }
 
+/** Options for authenticating a manual RFC 3161 response before PDF embedding. */
+export interface TimestampResponseValidationOptions {
+    /** DER X.509 candidates required for a manual certReq=false response. */
+    signerCertificates?: readonly Uint8Array[];
+}
+
 /**
  * Supported hash algorithms for timestamping
  */
@@ -57,7 +63,10 @@ export interface TimestampOptions {
     location?: string;
     /** Optional contact information */
     contactInfo?: string;
-    /** Optional name for the signature field */
+    /**
+     * Optional requested base name for the signature field. A numeric suffix may be added to
+     * avoid an existing fully qualified field name.
+     */
     signatureFieldName?: string;
     /** Maximum allowed PDF size in bytes (default: 250MB) */
     maxSize?: number;
@@ -68,7 +77,8 @@ export interface TimestampOptions {
     signatureSize?: number;
     /**
      * Whether to omit the modification time (/M) from the signature dictionary.
-     * Some users prefer to omit this as the timestamp token already contains the authoritative time.
+     * The field is omitted by default because the timestamp token contains the authoritative time;
+     * explicit `false` restores the legacy metadata.
      */
     omitModificationTime?: boolean;
     /**
@@ -104,15 +114,8 @@ export interface TimestampOptions {
      */
     ignoreEncryption?: boolean;
     /**
-     * When true, treat TSA status REVOCATION_WARNING (4) and
-     * REVOCATION_NOTIFICATION (5) as fatal errors instead of accepting
-     * the token with a warning.
-     *
-     * Per RFC 3161 these statuses indicate the TSA's signing key/cert
-     * is being revoked, so the token MAY fail strict validation by
-     * relying parties. Default is `false` for backward compatibility.
-     *
-     * @default false
+     * @deprecated All non-granted TSA statuses are fatal before embedding.
+     * Retained only for source compatibility and has no effect.
      */
     rejectOnRevocationWarning?: boolean;
 }
@@ -134,11 +137,7 @@ export interface TimestampResult {
         /** OCSP responses embedded for LTV */
         ocspResponses: Uint8Array[];
     };
-    /**
-     * Set when the TSA returned REVOCATION_WARNING (4) or REVOCATION_NOTIFICATION (5).
-     * The token was still embedded (unless `rejectOnRevocationWarning` was set);
-     * relying parties may treat the resulting timestamp as untrusted.
-     */
+    /** @deprecated Successful timestamp operations never set this field. */
     tsaRevocationWarning?: TSAStatus;
 }
 
@@ -230,32 +229,18 @@ export enum TSAStatus {
 /**
  * Internal representation of a parsed TimeStampResp.
  *
- * Granted-class statuses (`GRANTED`, `GRANTED_WITH_MODS`, `REVOCATION_WARNING`,
- * `REVOCATION_NOTIFICATION`) carry a non-optional `token` and `info`.
- * Rejection-class statuses (`REJECTION`, `WAITING`) have neither but may
- * carry a `failInfo` bit and human-readable `statusString`.
- *
- * Narrow on the `status` field to access the right branch.
+ * Only successful statuses (0/1) are returned. All other TSA statuses throw
+ * `TimestampErrorCode.TSA_ERROR` before a token can be used.
  */
-export type ParsedTimestampResponse =
-    | {
-          status:
-              | TSAStatus.GRANTED
-              | TSAStatus.GRANTED_WITH_MODS
-              | TSAStatus.REVOCATION_WARNING
-              | TSAStatus.REVOCATION_NOTIFICATION;
-          statusString?: string;
-          token: Uint8Array;
-          info: TimestampInfo;
-          failInfo?: undefined;
-      }
-    | {
-          status: TSAStatus.REJECTION | TSAStatus.WAITING;
-          statusString?: string;
-          failInfo?: number;
-          token?: undefined;
-          info?: undefined;
-      };
+export interface ParsedTimestampResponse {
+    status: TSAStatus.GRANTED | TSAStatus.GRANTED_WITH_MODS;
+    /** Optional TSA status text preserved for accepted statuses 0 and 1. */
+    statusString?: string;
+    token: Uint8Array;
+    info: TimestampInfo;
+    /** Present only for source compatibility; successful statuses have no failure bits. */
+    failInfo?: undefined;
+}
 
 /**
  * Options for extracting timestamps or inspecting LTV info from a PDF
@@ -284,9 +269,9 @@ export interface VerificationOptions {
     trustStore?: TrustStore | null;
 
     /**
-     * Enforce strict PAdES compliance (ESIC).
-     * If true, verifies that the 'signing-certificate' or 'signing-certificate-v2' (ESS) attribute is present.
-     * This attribute binds the signature to a specific certificate.
+     * Enforce strict PAdES ESS validation. If true, verifies the complete
+     * signed SigningCertificate and/or SigningCertificateV2 binding to the
+     * SID-selected signer certificate.
      */
     strictESSValidation?: boolean;
 
@@ -299,10 +284,9 @@ export interface VerificationOptions {
 
     /**
      * Require the signing TSA certificate to carry the id-kp-timeStamping
-     * ExtendedKeyUsage (1.3.6.1.5.5.7.3.8) per RFC 3161 Sec. 2.3, or
-     * anyExtendedKeyUsage (2.5.29.37.0) as a catch-all.
-     * When true, a token signed by a cert without one of those EKU values
-     * is rejected with TimestampError.
+     * ExtendedKeyUsage (1.3.6.1.5.5.7.3.8) per RFC 3161 Sec. 2.3. The
+     * certificate must have exactly one critical EKU extension containing
+     * that sole purpose.
      *
      * Default `true` since 0.2.0. Pass `false` to verify legacy tokens that
      * pre-date the RFC 3161 EKU requirement.

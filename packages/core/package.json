@@ -98,7 +98,8 @@
     },
     "dependencies": {
         "asn1js": "^3.0.10",
-        "pdf-lib-incremental-save": "^1.17.4",
+        "pako": "1.0.11",
+        "pdf-lib-incremental-save": "1.17.4",
         "pkijs": "^3.3.3"
     },
     "devDependencies": {

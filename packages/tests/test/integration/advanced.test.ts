@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-    timestampPdf,
-    timestampPdfMultiple,
-    KNOWN_TSA_URLS,
-} from "pdf-rfc3161";
+import { timestampPdf, timestampPdfMultiple, KNOWN_TSA_URLS } from "pdf-rfc3161";
 import { INCOMPATIBLE_TSA_URLS } from "../../src/tsa-compatibility.js";
 
 // Create a minimal valid PDF for testing
@@ -27,7 +23,7 @@ xref
 trailer
 << /Size 4 /Root 1 0 R >>
 startxref
-210
+203
 %%EOF`;
     return new TextEncoder().encode(pdfContent);
 }

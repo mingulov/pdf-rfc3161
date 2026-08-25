@@ -11,7 +11,7 @@ import {
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-import { restoreLargestObjectNumber } from "./internals.js";
+import { checkedRegister, preflightPdfXref, restoreLargestObjectNumber } from "./internals.js";
 
 /**
  * L5: caps how long a single user-supplied PDF string (reason / location /
@@ -70,15 +70,150 @@ export interface PrepareOptions {
     location?: string;
     /** Optional contact info */
     contactInfo?: string;
-    /** Optional name for the signature field (default: "Timestamp") */
+    /**
+     * Optional requested base name for the signature field (default: "Timestamp").
+     * A numeric suffix may be added to avoid an existing fully qualified field name.
+     */
     signatureFieldName?: string;
-    /** Whether to omit the modification time (/M) from the signature dictionary */
+    /** Whether to omit the modification time (/M) from the signature dictionary (default: true) */
     omitModificationTime?: boolean;
     /**
      * Whether to ignore PDF encryption when loading the document.
      * @default false
      */
     ignoreEncryption?: boolean;
+}
+
+interface ResolvedPdfValue<T extends PDFObject> {
+    value: T;
+    ref?: PDFRef;
+}
+
+function pdfError(message: string): TimestampError {
+    return new TimestampError(TimestampErrorCode.PDF_ERROR, message);
+}
+
+function resolvePdfValue<T extends PDFObject>(
+    context: PDFDict["context"],
+    rawValue: PDFObject | undefined,
+    isExpectedType: (value: PDFObject) => value is T,
+    description: string,
+    expectedType: string
+): ResolvedPdfValue<T> | undefined {
+    if (rawValue === undefined) {
+        return undefined;
+    }
+
+    const ref = rawValue instanceof PDFRef ? rawValue : undefined;
+    const value = ref === undefined ? rawValue : context.lookup(ref);
+    if (value === undefined || !isExpectedType(value)) {
+        throw pdfError(`${description} must be a ${expectedType}`);
+    }
+
+    return ref === undefined ? { value } : { value, ref };
+}
+
+function resolvePdfDict(
+    context: PDFDict["context"],
+    rawValue: PDFObject | undefined,
+    description: string
+): ResolvedPdfValue<PDFDict> | undefined {
+    return resolvePdfValue(
+        context,
+        rawValue,
+        (value): value is PDFDict => value instanceof PDFDict,
+        description,
+        "PDF dictionary"
+    );
+}
+
+function resolvePdfArray(
+    context: PDFDict["context"],
+    rawValue: PDFObject | undefined,
+    description: string
+): ResolvedPdfValue<PDFArray> | undefined {
+    return resolvePdfValue(
+        context,
+        rawValue,
+        (value): value is PDFArray => value instanceof PDFArray,
+        description,
+        "PDF array"
+    );
+}
+
+function resolveFieldName(
+    context: PDFDict["context"],
+    rawValue: PDFObject | undefined
+): string | undefined {
+    if (rawValue === undefined) {
+        return undefined;
+    }
+
+    const value = rawValue instanceof PDFRef ? context.lookup(rawValue) : rawValue;
+    if (!(value instanceof PDFString) && !(value instanceof PDFHexString)) {
+        throw pdfError("Field /T must be a PDF string");
+    }
+    return value.decodeText();
+}
+
+function collectFieldNames(context: PDFDict["context"], fields: PDFArray): Set<string> {
+    const names = new Set<string>();
+    const ancestors = new Set<PDFObject>();
+
+    const visitField = (rawField: PDFObject, parentName: string | undefined): void => {
+        const field = resolvePdfDict(context, rawField, "Field");
+        if (field === undefined) {
+            throw pdfError("Field must be a PDF dictionary");
+        }
+
+        const identity = field.ref ?? field.value;
+        if (ancestors.has(identity)) {
+            throw pdfError("Field hierarchy contains a cycle");
+        }
+        ancestors.add(identity);
+
+        const partialName = resolveFieldName(context, field.value.get(PDFName.of("T"), true));
+        const qualifiedName =
+            partialName === undefined
+                ? parentName
+                : parentName === undefined
+                  ? partialName
+                  : `${parentName}.${partialName}`;
+        if (partialName !== undefined && qualifiedName !== undefined) {
+            names.add(qualifiedName);
+        }
+
+        const kids = resolvePdfArray(
+            context,
+            field.value.get(PDFName.of("Kids"), true),
+            "Field /Kids"
+        );
+        if (kids !== undefined) {
+            for (let index = 0; index < kids.value.size(); index++) {
+                visitField(kids.value.get(index), qualifiedName);
+            }
+        }
+
+        ancestors.delete(identity);
+    };
+
+    for (let index = 0; index < fields.size(); index++) {
+        visitField(fields.get(index), undefined);
+    }
+
+    return names;
+}
+
+function allocateSignatureFieldName(requestedBaseName: string, existingNames: Set<string>): string {
+    if (!existingNames.has(requestedBaseName)) {
+        return requestedBaseName;
+    }
+
+    let suffix = 2;
+    while (existingNames.has(`${requestedBaseName}_${String(suffix)}`)) {
+        suffix++;
+    }
+    return `${requestedBaseName}_${String(suffix)}`;
 }
 
 /**
@@ -145,10 +280,14 @@ export async function preparePdfForTimestamp(
             ? options.signatureSize
             : DEFAULT_SIGNATURE_SIZE;
     const placeholderHexLength = signatureSize * 2; // Each byte = 2 hex chars
-    const signatureFieldName = options.signatureFieldName ?? "Timestamp";
+    const requestedSignatureFieldName = options.signatureFieldName ?? "Timestamp";
 
     // Create placeholder content
     const placeholderHex = "0".repeat(placeholderHexLength);
+
+    // Prove every xref/object-stream byte the dependency can decode before
+    // handing untrusted PDF input to its loader.
+    const xrefProof = preflightPdfXref(pdfBytes);
 
     // Load the PDF document
     const sigPdfDoc = await PDFDocument.load(pdfBytes, {
@@ -157,21 +296,21 @@ export async function preparePdfForTimestamp(
     });
 
     const sigContext = sigPdfDoc.context;
-    restoreLargestObjectNumber(pdfBytes, sigContext);
+    restoreLargestObjectNumber(pdfBytes, sigContext, xrefProof);
 
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();
 
     // Create new signature dictionary
     const sigDictFields: Record<string, PDFObject> = {
-        Type: PDFName.of("Sig"),
+        Type: PDFName.of("DocTimeStamp"),
         Filter: PDFName.of("Adobe.PPKLite"),
         SubFilter: PDFName.of("ETSI.RFC3161"),
         ByteRange: PDFArray.withContext(sigContext),
         Contents: PDFHexString.of(placeholderHex),
     };
 
-    if (!options.omitModificationTime) {
+    if (options.omitModificationTime === false) {
         sigDictFields.M = PDFString.of(formatPdfDate(new Date()));
     }
 
@@ -190,7 +329,10 @@ export async function preparePdfForTimestamp(
     // up front: extremely long strings bloat the signature dictionary and
     // embedded NULs / control chars confuse some PDF readers.
     if (options.reason !== undefined) {
-        newSigDict.set(PDFName.of("Reason"), PDFString.of(sanitizePdfString(options.reason, "reason")));
+        newSigDict.set(
+            PDFName.of("Reason"),
+            PDFString.of(sanitizePdfString(options.reason, "reason"))
+        );
     }
     if (options.location !== undefined) {
         newSigDict.set(
@@ -205,22 +347,52 @@ export async function preparePdfForTimestamp(
         );
     }
 
-    const newSigRef = sigContext.register(newSigDict);
+    const newSigRef = checkedRegister(sigContext, newSigDict);
 
-    // Get or create AcroForm
-    let newAcroForm = sigPdfDoc.catalog.lookup(PDFName.of("AcroForm")) as PDFDict | undefined;
-    if (!newAcroForm) {
-        newAcroForm = sigContext.obj({
+    const catalogRef = sigContext.trailerInfo.Root;
+    const markCatalogForSave = (): void => {
+        if (catalogRef instanceof PDFRef) {
+            snapshot.markRefForSave(catalogRef);
+        }
+    };
+
+    // Get or create AcroForm without replacing any present malformed value.
+    let acroForm = resolvePdfDict(
+        sigContext,
+        sigPdfDoc.catalog.get(PDFName.of("AcroForm"), true),
+        "AcroForm"
+    );
+    if (acroForm === undefined) {
+        const newAcroForm = sigContext.obj({
             SigFlags: 3,
             Fields: PDFArray.withContext(sigContext),
         });
-        const newAcroFormRef = sigContext.register(newAcroForm);
+        const newAcroFormRef = checkedRegister(sigContext, newAcroForm);
         sigPdfDoc.catalog.set(PDFName.of("AcroForm"), newAcroFormRef);
+        markCatalogForSave();
+        acroForm = { value: newAcroForm, ref: newAcroFormRef };
     } else {
-        if (!newAcroForm.has(PDFName.of("SigFlags"))) {
-            newAcroForm.set(PDFName.of("SigFlags"), PDFNumber.of(3));
+        if (!acroForm.value.has(PDFName.of("SigFlags"))) {
+            acroForm.value.set(PDFName.of("SigFlags"), PDFNumber.of(3));
+            if (acroForm.ref === undefined) {
+                markCatalogForSave();
+            } else {
+                snapshot.markRefForSave(acroForm.ref);
+            }
         }
     }
+
+    const existingFields = resolvePdfArray(
+        sigContext,
+        acroForm.value.get(PDFName.of("Fields"), true),
+        "AcroForm /Fields array"
+    );
+    const signatureFieldName = allocateSignatureFieldName(
+        requestedSignatureFieldName,
+        existingFields === undefined
+            ? new Set<string>()
+            : collectFieldNames(sigContext, existingFields.value)
+    );
 
     // Create signature field widget
     const sigPages = sigPdfDoc.getPages();
@@ -248,35 +420,50 @@ export async function preparePdfForTimestamp(
     newRectArray.push(PDFNumber.of(0));
     newRectArray.push(PDFNumber.of(0));
 
-    const newSigFieldRef = sigContext.register(newSigField);
+    const newSigFieldRef = checkedRegister(sigContext, newSigField);
 
-    const newFields = newAcroForm.get(PDFName.of("Fields"));
-    if (newFields instanceof PDFArray) {
-        newFields.push(newSigFieldRef);
-    } else {
+    if (existingFields === undefined) {
         const freshFields = PDFArray.withContext(sigContext);
         freshFields.push(newSigFieldRef);
-        newAcroForm.set(PDFName.of("Fields"), freshFields);
+        acroForm.value.set(PDFName.of("Fields"), freshFields);
+        if (acroForm.ref === undefined) {
+            markCatalogForSave();
+        } else {
+            snapshot.markRefForSave(acroForm.ref);
+        }
+    } else {
+        existingFields.value.push(newSigFieldRef);
+        if (existingFields.ref === undefined) {
+            if (acroForm.ref === undefined) {
+                markCatalogForSave();
+            } else {
+                snapshot.markRefForSave(acroForm.ref);
+            }
+        } else {
+            snapshot.markRefForSave(existingFields.ref);
+        }
     }
 
-    let newAnnots = sigFirstPage.node.lookup(PDFName.of("Annots")) as PDFArray | undefined;
-    if (!newAnnots) {
-        newAnnots = PDFArray.withContext(sigContext);
+    const existingAnnots = resolvePdfArray(
+        sigContext,
+        sigFirstPage.node.get(PDFName.of("Annots"), true),
+        "Page /Annots array"
+    );
+    if (existingAnnots === undefined) {
+        const newAnnots = PDFArray.withContext(sigContext);
+        newAnnots.push(newSigFieldRef);
         sigFirstPage.node.set(PDFName.of("Annots"), newAnnots);
-    }
-    newAnnots.push(newSigFieldRef);
-
-    // Mark modified objects for incremental save
-    const acroFormRef = sigPdfDoc.catalog.get(PDFName.of("AcroForm"));
-    if (acroFormRef instanceof PDFRef) {
-        snapshot.markRefForSave(acroFormRef);
-    }
-    snapshot.markRefForSave(sigFirstPage.ref);
-    const catalogRef = sigContext.trailerInfo.Root;
-    if (catalogRef instanceof PDFRef) {
-        snapshot.markRefForSave(catalogRef);
+        snapshot.markRefForSave(sigFirstPage.ref);
+    } else {
+        existingAnnots.value.push(newSigFieldRef);
+        if (existingAnnots.ref === undefined) {
+            snapshot.markRefForSave(sigFirstPage.ref);
+        } else {
+            snapshot.markRefForSave(existingAnnots.ref);
+        }
     }
 
+    sigContext.pdfFileDetails.useObjectStreams = false;
     const incrementalBytes = await sigPdfDoc.saveIncremental(snapshot);
 
     const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);

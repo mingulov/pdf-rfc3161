@@ -38,10 +38,10 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   enforce signing cert validity at the timestamp's `genTime`. Closes G2.
 - `VerificationOptions.trustStore` accepts `TrustStore | null` so the
   documented `{ trustStore: null }` opt-out typechecks.
-- `TimestampOptions.rejectOnRevocationWarning` -- turn TSA status 4/5 into
-  fatal errors. Closes M4.
-- `TimestampResult.tsaRevocationWarning` -- surfaces TSA status 4/5 to
-  callers.
+- `TimestampOptions.rejectOnRevocationWarning` -- retained as a deprecated
+  no-op for source compatibility; TSA statuses 4/5 are always fatal.
+- `TimestampResult.tsaRevocationWarning` -- retained as a deprecated field
+  that is never set because TSA statuses 4/5 are always fatal.
 - `TimestampOptions.ignoreEncryption`, `TimestampSessionOptions.ignoreEncryption`,
   `ExtractOptions` -- control PDF-encryption handling.
 - `TimestampInfo.nonce` -- populated from the TSTInfo nonce when present.
@@ -59,9 +59,9 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 - Production checklist + Command-line interface sections in README; API
   tables list the full 0.2.0 fields.
 - CLI verify flags `--strict-ess`, `--trust-store`, `--no-require-eku`,
-  `--no-require-validity`; timestamp flags `--reject-on-revocation-warning`,
-  `--ignore-encryption`, `--no-ltv`; archive `--no-update` (now wired
-  correctly).
+  `--no-require-validity`; timestamp flags
+  `--reject-on-revocation-warning` (deprecated no-op), `--ignore-encryption`,
+  `--no-ltv`; archive `--no-update` (now wired correctly).
 - `docs/maintain-trust-store.md` for curating the bundled root list.
 - `pdf/internals.ts` (`restoreLargestObjectNumber`) and `utils/pdf-date.ts`
   (PDF date parser) -- both extracted from duplicated inline workarounds.
