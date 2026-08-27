@@ -12,12 +12,12 @@ It then uses `dpkg-deb --extract` into a policy-versioned local test directory.
 Package maintainer scripts never run, the runner's dpkg database is never
 changed, and neither host OpenSSL nor host qpdf is downgraded or replaced.
 
-| Package | Ubuntu 24.04 revision | Artifact | SHA-256 |
-| --- | --- | --- | --- |
-| qpdf | `11.9.0-1.1ubuntu0.1` | [qpdf_11.9.0-1.1ubuntu0.1_amd64.deb](https://archive.ubuntu.com/ubuntu/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb) | `b50d1aca530cd8f7b68214f8b19bdf348c6c01b7110ca1c335e6662cdb442af8` |
-| libqpdf29t64 | `11.9.0-1.1ubuntu0.1` | [libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb](https://archive.ubuntu.com/ubuntu/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb) | `8ffa418e72ab62013d7bd97b737f6eac8311853e50e4972b3db414c6fdbab445` |
-| OpenSSL | `3.0.13-0ubuntu3.12` | [openssl_3.0.13-0ubuntu3.12_amd64.deb](https://security.ubuntu.com/ubuntu/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb) | `321b30ad5a1c3783cb3d73ae439f824f6d3874d76a93a62f4a984959b490aa7b` |
-| libssl3t64 | `3.0.13-0ubuntu3.12` | [libssl3t64_3.0.13-0ubuntu3.12_amd64.deb](https://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb) | `6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b` |
+| Package      | Ubuntu 24.04 revision | Artifact                                                                                                                                                      | SHA-256                                                            |
+| ------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| qpdf         | `11.9.0-1.1ubuntu0.1` | [qpdf_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb)             | `b50d1aca530cd8f7b68214f8b19bdf348c6c01b7110ca1c335e6662cdb442af8` |
+| libqpdf29t64 | `11.9.0-1.1ubuntu0.1` | [libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb) | `8ffa418e72ab62013d7bd97b737f6eac8311853e50e4972b3db414c6fdbab445` |
+| OpenSSL      | `3.0.13-0ubuntu3.12`  | [openssl_3.0.13-0ubuntu3.12_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb)          | `321b30ad5a1c3783cb3d73ae439f824f6d3874d76a93a62f4a984959b490aa7b` |
+| libssl3t64   | `3.0.13-0ubuntu3.12`  | [libssl3t64_3.0.13-0ubuntu3.12_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb)    | `6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b` |
 
 The installer exports the local `usr/bin` directory through `GITHUB_PATH` and
 the local library directory through `GITHUB_ENV` for subsequent workflow

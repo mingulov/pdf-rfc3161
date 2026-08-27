@@ -5,16 +5,26 @@ import { completeLTVData } from "../../../core/src/pdf/ltv.js";
 import { getCRLDistributionPoints } from "../../../core/src/pki/crl-utils.js";
 import { getOCSPURI } from "../../../core/src/pki/ocsp-utils.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
+import {
+    createCrlCandidate,
+    createOcspResponseCandidate,
+} from "../fixtures/revocation-material.js";
 
-vi.mock("../../../core/src/pki/ocsp-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => ({
-    ...(await importOriginal<typeof import("../../../core/src/pki/ocsp-utils.js")>()),
-    getOCSPURI: vi.fn(),
-}));
+vi.mock(
+    "../../../core/src/pki/ocsp-utils.js",
+    async (importOriginal: <T = unknown>() => Promise<T>) => ({
+        ...(await importOriginal<typeof import("../../../core/src/pki/ocsp-utils.js")>()),
+        getOCSPURI: vi.fn(),
+    })
+);
 
-vi.mock("../../../core/src/pki/crl-utils.js", async (importOriginal: <T = unknown>() => Promise<T>) => ({
-    ...(await importOriginal<typeof import("../../../core/src/pki/crl-utils.js")>()),
-    getCRLDistributionPoints: vi.fn(),
-}));
+vi.mock(
+    "../../../core/src/pki/crl-utils.js",
+    async (importOriginal: <T = unknown>() => Promise<T>) => ({
+        ...(await importOriginal<typeof import("../../../core/src/pki/crl-utils.js")>()),
+        getCRLDistributionPoints: vi.fn(),
+    })
+);
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.slice().buffer;
@@ -24,7 +34,10 @@ async function certificatePair(): Promise<Uint8Array[]> {
     const fixture = await createRFC3161TokenFixture({ certificates: "decoyFirst" });
     const signerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.signerCertificate));
     const issuerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.decoyCertificate));
-    if (signerAsn1.offset !== fixture.signerCertificate.length || issuerAsn1.offset !== fixture.decoyCertificate.length) {
+    if (
+        signerAsn1.offset !== fixture.signerCertificate.length ||
+        issuerAsn1.offset !== fixture.decoyCertificate.length
+    ) {
         throw new Error("fixture certificates must be complete DER");
     }
     const signer = new pkijs.Certificate({ schema: signerAsn1.result });
@@ -34,79 +47,6 @@ async function certificatePair(): Promise<Uint8Array[]> {
         new Uint8Array(signer.toSchema(true).toBER(false)),
         new Uint8Array(issuer.toSchema().toBER(false)),
     ];
-}
-
-function certificateStatus(
-    status: "good" | "revoked" | "good-constructed" | "good-nonempty"
-): asn1js.BaseBlock {
-    if (status === "good") {
-        return new asn1js.Primitive({ idBlock: { tagClass: 3, tagNumber: 0 } });
-    }
-    if (status === "good-constructed") {
-        return new asn1js.Constructed({ idBlock: { tagClass: 3, tagNumber: 0 }, value: [] });
-    }
-    if (status === "good-nonempty") {
-        return new asn1js.Primitive({
-            idBlock: { tagClass: 3, tagNumber: 0 },
-            valueHex: Uint8Array.of(0).buffer,
-        });
-    }
-    return new asn1js.Constructed({
-        idBlock: { tagClass: 3, tagNumber: 1 },
-        value: [new asn1js.GeneralizedTime({ valueDate: new Date("2024-01-01T00:00:00Z") })],
-    });
-}
-
-function basicOcspResponse(
-    status: "good" | "revoked" | "good-constructed" | "good-nonempty",
-    transformBasicResponse: (bytes: Uint8Array) => Uint8Array = (bytes) => bytes
-): Uint8Array {
-    const certID = new pkijs.CertID({
-        hashAlgorithm: new pkijs.AlgorithmIdentifier({ algorithmId: "1.3.14.3.2.26" }),
-        issuerNameHash: new asn1js.OctetString({ valueHex: new Uint8Array(20).buffer }),
-        issuerKeyHash: new asn1js.OctetString({ valueHex: new Uint8Array(20).buffer }),
-        serialNumber: new asn1js.Integer({ value: 1 }),
-    });
-    const singleResponse = new pkijs.SingleResponse({
-        certID,
-        certStatus: certificateStatus(status),
-        thisUpdate: new Date("2024-01-01T00:00:00Z"),
-    });
-    const responder = new pkijs.RelativeDistinguishedNames({
-        typesAndValues: [
-            new pkijs.AttributeTypeAndValue({
-                type: "2.5.4.3",
-                value: new asn1js.PrintableString({ value: "Candidate responder" }),
-            }),
-        ],
-    });
-    const responseData = new asn1js.Sequence({
-        value: [
-            new asn1js.Constructed({
-                idBlock: { tagClass: 3, tagNumber: 1 },
-                value: [responder.toSchema()],
-            }),
-            new asn1js.GeneralizedTime({ valueDate: new Date("2024-01-01T00:00:00Z") }),
-            new asn1js.Sequence({ value: [singleResponse.toSchema()] }),
-        ],
-    });
-    const basic = new asn1js.Sequence({
-        value: [
-            responseData,
-            new pkijs.AlgorithmIdentifier({ algorithmId: "1.2.840.113549.1.1.11" }).toSchema(),
-            new asn1js.BitString({ valueHex: Uint8Array.of(1).buffer }),
-        ],
-    });
-    const response = new pkijs.OCSPResponse({
-        responseStatus: new asn1js.Enumerated({ value: 0 }),
-        responseBytes: new pkijs.ResponseBytes({
-            responseType: "1.3.6.1.5.5.7.48.1.1",
-            response: new asn1js.OctetString({
-                valueHex: toArrayBuffer(transformBasicResponse(new Uint8Array(basic.toBER(false)))),
-            }),
-        }),
-    });
-    return new Uint8Array(response.toSchema().toBER(false));
 }
 
 function sequenceContents(bytes: Uint8Array): Uint8Array {
@@ -134,7 +74,13 @@ function nonMinimalLengthSequence(bytes: Uint8Array): Uint8Array {
     if (firstLength < 0x80) return Uint8Array.of(0x30, 0x81, firstLength, ...contents);
 
     const lengthOctets = firstLength & 0x7f;
-    return Uint8Array.of(0x30, firstLength + 1, 0x00, ...bytes.slice(2, 2 + lengthOctets), ...contents);
+    return Uint8Array.of(
+        0x30,
+        firstLength + 1,
+        0x00,
+        ...bytes.slice(2, 2 + lengthOctets),
+        ...contents
+    );
 }
 
 function derSequence(contents: Uint8Array): Uint8Array {
@@ -223,27 +169,6 @@ function nonMinimalFirstInteger(bytes: Uint8Array): Uint8Array {
     return new Uint8Array(parsed.result.toBER(false));
 }
 
-function validCrl(): Uint8Array {
-    const algorithm = new pkijs.AlgorithmIdentifier({ algorithmId: "1.2.840.113549.1.1.11" });
-    const issuer = new pkijs.RelativeDistinguishedNames({
-        typesAndValues: [
-            new pkijs.AttributeTypeAndValue({
-                type: "2.5.4.3",
-                value: new asn1js.PrintableString({ value: "Candidate issuer" }),
-            }),
-        ],
-    });
-    const crl = new pkijs.CertificateRevocationList({
-        version: 1,
-        signature: algorithm,
-        issuer,
-        thisUpdate: new pkijs.Time({ value: new Date("2024-01-01T00:00:00Z") }),
-        signatureAlgorithm: algorithm,
-        signatureValue: new asn1js.BitString({ valueHex: Uint8Array.of(1).buffer }),
-    });
-    return new Uint8Array(crl.toSchema(true).toBER(false));
-}
-
 describe("network LTV validation material", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -252,7 +177,7 @@ describe("network LTV validation material", () => {
     it("skips malformed OCSP bytes and falls back to a structurally complete CRL candidate", async () => {
         vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
         vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -272,13 +197,13 @@ describe("network LTV validation material", () => {
     it("does not accept a non-good OCSP response and uses the CRL fallback", async () => {
         vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
         vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
             {
                 fetchers: {
-                    ocspFetcher: async () => basicOcspResponse("revoked"),
+                    ocspFetcher: async () => createOcspResponseCandidate("revoked"),
                     crlFetcher: async () => crl,
                 },
             }
@@ -293,13 +218,13 @@ describe("network LTV validation material", () => {
         it(`rejects malformed ${status} OCSP CertStatus and uses the CRL fallback`, async () => {
             vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
             vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-            const crl = validCrl();
+            const crl = createCrlCandidate();
 
             const result = await completeLTVData(
                 { certificates: await certificatePair(), crls: [], ocspResponses: [] },
                 {
                     fetchers: {
-                        ocspFetcher: async () => basicOcspResponse(status),
+                        ocspFetcher: async () => createOcspResponseCandidate(status),
                         crlFetcher: async () => crl,
                     },
                 }
@@ -318,13 +243,13 @@ describe("network LTV validation material", () => {
         it(`rejects a ${description} OCSP response and uses the CRL fallback`, async () => {
             vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
             vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-            const crl = validCrl();
+            const crl = createCrlCandidate();
 
             const result = await completeLTVData(
                 { certificates: await certificatePair(), crls: [], ocspResponses: [] },
                 {
                     fetchers: {
-                        ocspFetcher: async () => transform(basicOcspResponse("good")),
+                        ocspFetcher: async () => transform(createOcspResponseCandidate("good")),
                         crlFetcher: async () => crl,
                     },
                 }
@@ -339,14 +264,14 @@ describe("network LTV validation material", () => {
     it("rejects an OCSP response with canonical outer DER and indefinite ResponseData", async () => {
         vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
         vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
             {
                 fetchers: {
                     ocspFetcher: async () =>
-                        basicOcspResponse("good", canonicalOuterWithIndefiniteFirstChild),
+                        createOcspResponseCandidate("good", canonicalOuterWithIndefiniteFirstChild),
                     crlFetcher: async () => crl,
                 },
             }
@@ -360,13 +285,14 @@ describe("network LTV validation material", () => {
     it("rejects a canonically framed OCSP response with an extra outer value and uses the CRL fallback", async () => {
         vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
         vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
             {
                 fetchers: {
-                    ocspFetcher: async () => outerSequenceWithExtraNull(basicOcspResponse("good")),
+                    ocspFetcher: async () =>
+                        outerSequenceWithExtraNull(createOcspResponseCandidate("good")),
                     crlFetcher: async () => crl,
                 },
             }
@@ -378,13 +304,19 @@ describe("network LTV validation material", () => {
     });
 
     for (const [description, response] of [
-        ["outer response status ENUMERATED", () => nonMinimalOcspStatus(basicOcspResponse("good"))],
-        ["nested CertID serial number INTEGER", () => basicOcspResponse("good", nonMinimalFirstInteger)],
+        [
+            "outer response status ENUMERATED",
+            () => nonMinimalOcspStatus(createOcspResponseCandidate("good")),
+        ],
+        [
+            "nested CertID serial number INTEGER",
+            () => createOcspResponseCandidate("good", nonMinimalFirstInteger),
+        ],
     ] as const) {
         it(`rejects a non-minimal ${description} value and uses the CRL fallback`, async () => {
             vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
             vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-            const crl = validCrl();
+            const crl = createCrlCandidate();
 
             const result = await completeLTVData(
                 { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -411,14 +343,17 @@ describe("network LTV validation material", () => {
         it(`rejects a ${description} responseStatus and uses the CRL fallback`, async () => {
             vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
             vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-            const crl = validCrl();
+            const crl = createCrlCandidate();
 
             const result = await completeLTVData(
                 { certificates: await certificatePair(), crls: [], ocspResponses: [] },
                 {
                     fetchers: {
                         ocspFetcher: async () =>
-                            ocspResponseWithStatusContent(basicOcspResponse("good"), statusContent),
+                            ocspResponseWithStatusContent(
+                                createOcspResponseCandidate("good"),
+                                statusContent
+                            ),
                         crlFetcher: async () => crl,
                     },
                 }
@@ -437,13 +372,13 @@ describe("network LTV validation material", () => {
         it(`rejects an OCSP response with a ${description} BasicOCSPResponse`, async () => {
             vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
             vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/valid"]);
-            const crl = validCrl();
+            const crl = createCrlCandidate();
 
             const result = await completeLTVData(
                 { certificates: await certificatePair(), crls: [], ocspResponses: [] },
                 {
                     fetchers: {
-                        ocspFetcher: async () => basicOcspResponse("good", transform),
+                        ocspFetcher: async () => createOcspResponseCandidate("good", transform),
                         crlFetcher: async () => crl,
                     },
                 }
@@ -464,7 +399,7 @@ describe("network LTV validation material", () => {
             "https://crl.example.test/trailing",
             "https://crl.example.test/valid",
         ]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -490,7 +425,7 @@ describe("network LTV validation material", () => {
             "https://crl.example.test/non-minimal",
             "https://crl.example.test/valid",
         ]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -515,7 +450,7 @@ describe("network LTV validation material", () => {
             "https://crl.example.test/nested-indefinite",
             "https://crl.example.test/valid",
         ]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -539,7 +474,7 @@ describe("network LTV validation material", () => {
             "https://crl.example.test/extra-null",
             "https://crl.example.test/valid",
         ]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -561,7 +496,7 @@ describe("network LTV validation material", () => {
             "https://crl.example.test/non-minimal-integer",
             "https://crl.example.test/valid",
         ]);
-        const crl = validCrl();
+        const crl = createCrlCandidate();
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
@@ -580,7 +515,7 @@ describe("network LTV validation material", () => {
     it("collects a structurally good OCSP response as candidate material without asserting revocation trust", async () => {
         vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
         vi.mocked(getCRLDistributionPoints).mockReturnValue(["https://crl.example.test/unused"]);
-        const ocsp = basicOcspResponse("good");
+        const ocsp = createOcspResponseCandidate("good");
 
         const result = await completeLTVData(
             { certificates: await certificatePair(), crls: [], ocspResponses: [] },
