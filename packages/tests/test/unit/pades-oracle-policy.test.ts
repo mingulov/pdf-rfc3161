@@ -96,6 +96,18 @@ describe("offline PAdES validation-tool policy", () => {
         }
     });
 
+    it("builds workspace declarations before type-aware release lint", () => {
+        const workflow = readFileSync(
+            resolve(REPOSITORY_ROOT, ".github/workflows/release.yml"),
+            "utf8"
+        );
+        const buildStep = workflow.indexOf("- name: Build");
+        const lintStep = workflow.indexOf("- name: Lint");
+
+        expect(buildStep).toBeGreaterThan(-1);
+        expect(lintStep).toBeGreaterThan(buildStep);
+    });
+
     it("isolates npm trusted staging and stages pnpm-normalized tarballs", () => {
         const workflow = readFileSync(
             resolve(REPOSITORY_ROOT, ".github/workflows/release.yml"),

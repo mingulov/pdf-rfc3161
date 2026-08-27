@@ -77,14 +77,14 @@ jobs:
             - name: Install pyHanko
               run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
 
+            - name: Build
+              run: pnpm -r build
+
             - name: Lint
               run: pnpm lint
 
             - name: Verify lint left the checkout unchanged
               run: git diff --exit-code
-
-            - name: Build
-              run: pnpm -r build
 
             - name: Type check
               run: pnpm typecheck
