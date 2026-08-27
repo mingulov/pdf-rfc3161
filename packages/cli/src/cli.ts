@@ -20,7 +20,6 @@ import * as asn1js from "asn1js";
 // VERSION is injected by tsup at build time (via define: { VERSION: ... })
 // For dev/tsx execution, we handle it via globalThis check.
 
-
 interface CliOptions {
     output?: string;
     algorithm: HashAlgorithm;
@@ -43,19 +42,18 @@ declare const VERSION: string;
 
 // Safe check for VERSION injection (handles both build and dev/tsx scenarios)
 
-let cliVersion = 'dev';
+let cliVersion = "dev";
 try {
-    if (typeof VERSION !== 'undefined') {
+    if (typeof VERSION !== "undefined") {
         cliVersion = VERSION;
     }
 } catch {
     // Ignore ReferenceError in dev mode
 }
 
-
 program
-    .name('pdf-rfc3161')
-    .description('CLI tool for adding RFC 3161 timestamps to PDFs')
+    .name("pdf-rfc3161")
+    .description("CLI tool for adding RFC 3161 timestamps to PDFs")
     .version(cliVersion);
 
 program
@@ -86,7 +84,7 @@ program
     .option("--retry <n>", "Number of retry attempts", "3")
     .option("-v, --verbose", "Verbose output", false)
     .option("--optimize", "Optimize signature size (2-pass)", false)
-    .option("--omit-m", "Omit modification time (/M) from signature dictionary", false)
+    .option("--omit-m", "Compatibility syntax: /M is already omitted by default", false)
     // Retained so existing scripts continue to parse the flag. The core gate
     // always rejects TSA statuses 4 and 5 before embedding.
     .option(
@@ -129,10 +127,14 @@ program
 
                     // Enable verbose logging in core library
                     const verboseLogger = {
-                        debug: (msg: string, ...args: unknown[]) => console.debug(`[DEBUG] ${msg}`, ...args),
-                        info: (msg: string, ...args: unknown[]) => console.info(`[INFO] ${msg}`, ...args),
-                        warn: (msg: string, ...args: unknown[]) => console.warn(`[WARN] ${msg}`, ...args),
-                        error: (msg: string, ...args: unknown[]) => console.error(`[ERROR] ${msg}`, ...args),
+                        debug: (msg: string, ...args: unknown[]) =>
+                            console.debug(`[DEBUG] ${msg}`, ...args),
+                        info: (msg: string, ...args: unknown[]) =>
+                            console.info(`[INFO] ${msg}`, ...args),
+                        warn: (msg: string, ...args: unknown[]) =>
+                            console.warn(`[WARN] ${msg}`, ...args),
+                        error: (msg: string, ...args: unknown[]) =>
+                            console.error(`[ERROR] ${msg}`, ...args),
                     };
                     setLogger(verboseLogger);
                 }
@@ -177,7 +179,8 @@ program
                     console.log(`  Algorithm:   ${result.timestamp.hashAlgorithm}`);
                     console.log(`  Digest:      ${result.timestamp.messageDigest.slice(0, 32)}...`);
                     console.log(
-                        `  Certificate: ${result.timestamp.hasCertificate ? "included" : "not included"
+                        `  Certificate: ${
+                            result.timestamp.hasCertificate ? "included" : "not included"
                         }`
                     );
                     console.log(`  Input size:  ${pdfBytes.length.toLocaleString()} bytes`);
@@ -257,10 +260,14 @@ program
 
                     // Enable verbose logging in core library
                     const verboseLogger = {
-                        debug: (msg: string, ...args: unknown[]) => console.debug(`[DEBUG] ${msg}`, ...args),
-                        info: (msg: string, ...args: unknown[]) => console.info(`[INFO] ${msg}`, ...args),
-                        warn: (msg: string, ...args: unknown[]) => console.warn(`[WARN] ${msg}`, ...args),
-                        error: (msg: string, ...args: unknown[]) => console.error(`[ERROR] ${msg}`, ...args),
+                        debug: (msg: string, ...args: unknown[]) =>
+                            console.debug(`[DEBUG] ${msg}`, ...args),
+                        info: (msg: string, ...args: unknown[]) =>
+                            console.info(`[INFO] ${msg}`, ...args),
+                        warn: (msg: string, ...args: unknown[]) =>
+                            console.warn(`[WARN] ${msg}`, ...args),
+                        error: (msg: string, ...args: unknown[]) =>
+                            console.error(`[ERROR] ${msg}`, ...args),
                     };
                     setLogger(verboseLogger);
                 }
@@ -308,13 +315,20 @@ program
     // --no- syntax: each option's destructured field defaults to `true`;
     // --no-* flips to `false`. Passing the field verbatim keeps the CLI
     // aligned with the library default. See audit C2.
-    .option("--no-require-eku", "Skip the id-kp-timeStamping EKU check on the TSA cert (default: enforce since 0.2.0)")
-    .option("--no-require-validity", "Skip the cert-valid-at-genTime check on the TSA cert (default: enforce since 0.2.0)")
+    .option(
+        "--no-require-eku",
+        "Skip the id-kp-timeStamping EKU check on the TSA cert (default: enforce since 0.2.0)"
+    )
+    .option(
+        "--no-require-validity",
+        "Skip the cert-valid-at-genTime check on the TSA cert (default: enforce since 0.2.0)"
+    )
     // strictESSValidation library default is `false` (not flipped in 0.2.0).
     // Keep this flag as a positive opt-in so the CLI matches the library
     // default. Audit F6 reverted the earlier over-correction to --no-strict-ess.
     .option("--strict-ess", "Enforce strict PAdES ESS-cert-id matching (off by default)", false)
     .option("--trust-store <path>", "Path to PEM file with trusted CA certificates")
+    .option("--ignore-encryption", "Process encrypted PDFs (off by default)", false)
     .action(
         async (
             inputFile: string,
@@ -324,6 +338,7 @@ program
                 requireValidity: boolean;
                 strictEss: boolean;
                 trustStore?: string;
+                ignoreEncryption: boolean;
             }
         ) => {
             try {
@@ -344,7 +359,9 @@ program
                 const pdfData = new Uint8Array(pdfBytes);
 
                 // Check for Document Security Store (LTV)
-                const dssInfo = await getDSSInfo(pdfData);
+                const dssInfo = await getDSSInfo(pdfData, {
+                    ignoreEncryption: options.ignoreEncryption,
+                });
                 if (dssInfo && (dssInfo.certs > 0 || dssInfo.crls > 0 || dssInfo.ocsps > 0)) {
                     console.log(`Document Security Store (LTV):`);
                     console.log(`  Certificates:   ${String(dssInfo.certs)}`);
@@ -361,6 +378,7 @@ program
                     requireTimestampingEKU: options.requireEku,
                     requireCertValidAtGenTime: options.requireValidity,
                     strictESSValidation: options.strictEss,
+                    ignoreEncryption: options.ignoreEncryption,
                 });
 
                 if (timestamps.length === 0) {
@@ -497,14 +515,17 @@ KNOWN TSA SERVERS:
 async function loadTrustStoreFromPem(path: string): Promise<TrustStore> {
     const pem = await readFile(path, "utf-8");
     const certs: pkijs.Certificate[] = [];
-    const blocks = pem.match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/g) ?? [];
+    const blocks =
+        pem.match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/g) ?? [];
     for (const block of blocks) {
         const base64 = block
             .replace(/-----BEGIN CERTIFICATE-----/, "")
             .replace(/-----END CERTIFICATE-----/, "")
             .replace(/\s/g, "");
         const der = Buffer.from(base64, "base64");
-        const asn1 = asn1js.fromBER(der.buffer.slice(der.byteOffset, der.byteOffset + der.byteLength));
+        const asn1 = asn1js.fromBER(
+            der.buffer.slice(der.byteOffset, der.byteOffset + der.byteLength)
+        );
         if (asn1.offset === -1) {
             throw new Error(`Failed to parse certificate in ${path}`);
         }
@@ -549,13 +570,11 @@ function generateOutputFilename(inputFile: string): string {
 function getCommonName(dn: pkijs.RelativeDistinguishedNames): string {
     for (const set of dn.typesAndValues) {
         if (set.type === "2.5.4.3") {
-
             return set.value.valueBlock.value as string;
         }
     }
     const first = dn.typesAndValues[0];
     if (first) {
-
         return first.value.valueBlock.value as string;
     }
     return "Unknown";

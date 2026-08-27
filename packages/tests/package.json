@@ -12,7 +12,7 @@
         "test:conformance": "tsx scripts/offline-pades-conformance.ts",
         "install:pades-oracles": "tsx scripts/install-pades-oracles.ts",
         "assert:pades-oracles": "tsx scripts/assert-pades-oracles.ts",
-        "test:package": "tsx scripts/test-packed-consumer.ts",
+        "test:package": "tsx scripts/test-packed-consumer.ts --",
         "test:integration": "vitest run test/integration",
         "test:robustness": "tsx scripts/test-robustness.ts",
         "typecheck": "tsc --noEmit",

@@ -71,8 +71,9 @@ export interface TimestampOptions {
     /** Maximum allowed PDF size in bytes (default: 250MB) */
     maxSize?: number;
     /**
-     * Size reserved for timestamp token in bytes (default: 8192).
-     * Set to 0 for automatic sizing (will retry with larger size if needed).
+     * Initial size reserved for the timestamp token in bytes (default: 8192).
+     * Omit or set to 0 to use that default; timestampPdf retries with a larger
+     * placeholder if the token does not fit.
      */
     signatureSize?: number;
     /**

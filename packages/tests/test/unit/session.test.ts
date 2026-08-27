@@ -45,10 +45,10 @@ describe("TimestampSession", () => {
             expect(session.signatureSize).toBe(8192); // 8KB = DEFAULT_SIGNATURE_SIZE
         });
 
-        it("should use DEFAULT_SIGNATURE_SIZE when enableLTV is undefined", () => {
+        it("should use LTV_SIGNATURE_SIZE when enableLTV is undefined", () => {
             const session = new TimestampSession(pdfBytes);
 
-            expect(session.signatureSize).toBe(8192); // Default when enableLTV is undefined (treated as true by default)
+            expect(session.signatureSize).toBe(16384); // LTV is enabled by default
         });
 
         it("should allow manual signature size override", () => {
@@ -174,6 +174,28 @@ describe("TimestampSession", () => {
     });
 
     describe("createTimestampRequest", () => {
+        it("applies the LTV-aware default to the prepared placeholder", async () => {
+            for (const [enableLTV, expectedSize] of [
+                [undefined, 16384],
+                [true, 16384],
+                [false, 8192],
+            ] as const) {
+                const session = new TimestampSession(
+                    pdfBytes,
+                    enableLTV === undefined ? {} : { enableLTV }
+                );
+
+                await session.createTimestampRequest();
+
+                const prepared = (
+                    session as unknown as {
+                        prepared: { contentsPlaceholderLength: number } | null;
+                    }
+                ).prepared;
+                expect(prepared?.contentsPlaceholderLength).toBe(expectedSize * 2);
+            }
+        });
+
         it("should create a non-empty timestamp request", async () => {
             const session = new TimestampSession(pdfBytes);
 
@@ -361,9 +383,11 @@ describe("TimestampSession", () => {
             const session = new TimestampSession(pdfBytes);
             await session.createTimestampRequest();
 
-            await expect(session.embedTimestampToken(new Uint8Array([0x00]))).rejects.toMatchObject({
-                code: TimestampErrorCode.INVALID_RESPONSE,
-            });
+            await expect(session.embedTimestampToken(new Uint8Array([0x00]))).rejects.toMatchObject(
+                {
+                    code: TimestampErrorCode.INVALID_RESPONSE,
+                }
+            );
             expect(embedSpy).not.toHaveBeenCalled();
         });
 

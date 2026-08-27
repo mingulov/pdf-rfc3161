@@ -85,8 +85,7 @@
     "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "files": [
-        "dist",
-        "!dist/**/*.map"
+        "dist"
     ],
     "scripts": {
         "build": "tsup",
@@ -94,7 +93,7 @@
         "typecheck": "tsc --noEmit",
         "lint": "eslint src --fix",
         "format": "prettier --write \"src/**/*.ts\"",
-        "prepublishOnly": "npm run build"
+        "prepack": "pnpm run build"
     },
     "dependencies": {
         "asn1js": "^3.0.10",

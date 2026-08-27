@@ -90,7 +90,10 @@ describe("offline PAdES validation-tool policy", () => {
             );
             expect(content).toContain(`runs-on: ${PADES_ORACLE_POLICY.ubuntuRunner}`);
             expect(content).not.toContain("ubuntu-latest");
-            expect(content).toContain(`python-version: '${PADES_ORACLE_POLICY.pythonVersion}'`);
+            expect(
+                content.includes(`python-version: '${PADES_ORACLE_POLICY.pythonVersion}'`) ||
+                    content.includes(`python-version: "${PADES_ORACLE_POLICY.pythonVersion}"`)
+            ).toBe(true);
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run install:pades-oracles");
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run assert:pades-oracles");
         }
@@ -150,7 +153,7 @@ describe("offline PAdES validation-tool policy", () => {
         expect(workflow).toContain("run: pnpm lint");
         expect(workflow).toContain("name: Audit packed package contents");
         expect(workflow).toContain("Unexpected file in pdf-rfc3161 tarball");
-        expect(workflow).toContain("Expected 26 files in pdf-rfc3161 tarball");
+        expect(workflow).toContain("Expected 27 files in pdf-rfc3161 tarball");
         expect(workflow).toContain("required_core=(");
         expect(workflow).toContain("dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}");
         expect(workflow).toContain("workspace:");
@@ -184,6 +187,71 @@ describe("offline PAdES validation-tool policy", () => {
         expect(contributing).toContain("./pdf-rfc3161-0.2.0-*.tgz");
         expect(contributing).toContain("./pdf-rfc3161-cli-0.2.0-*.tgz");
         expect(changesetConfig.fixed).toEqual([["pdf-rfc3161", "pdf-rfc3161-cli"]]);
+    });
+
+    it("binds staged releases to the exact audited tarballs", () => {
+        const workflow = readFileSync(
+            resolve(REPOSITORY_ROOT, ".github/workflows/release.yml"),
+            "utf8"
+        );
+        const contributing = readFileSync(resolve(REPOSITORY_ROOT, "CONTRIBUTING.md"), "utf8");
+        const compatibilityJob = workflow.indexOf("  compatibility:");
+        const verifyJob = workflow.indexOf("  verify:");
+        const pack = workflow.indexOf("- name: Pack public packages");
+        const audit = workflow.indexOf("- name: Audit packed package contents");
+        const packedConsumer = workflow.indexOf("- name: Test exact release artifacts");
+        const checksums = workflow.indexOf("- name: Generate SHA256SUMS and SHA512SUMS");
+        const upload = workflow.indexOf("- name: Upload release artifacts");
+        const coreJob = workflow.indexOf("  stage-core:");
+        const cliJob = workflow.indexOf("  stage-cli:");
+        const coreStage = workflow.indexOf(
+            "npm stage publish release-artifacts/core/*.tgz --access public"
+        );
+        const cliStage = workflow.indexOf(
+            "npm stage publish release-artifacts/cli/*.tgz --access public"
+        );
+
+        expect(compatibilityJob).toBeGreaterThan(-1);
+        expect(verifyJob).toBeGreaterThan(compatibilityJob);
+        expect(workflow.slice(compatibilityJob, verifyJob)).toContain(
+            "node-version: ${{ matrix.node }}"
+        );
+        expect(workflow.slice(compatibilityJob, verifyJob)).toContain("node: [20, 22, 24]");
+        expect(workflow.slice(verifyJob, coreJob)).toContain("needs: compatibility");
+        expect(pack).toBeGreaterThan(verifyJob);
+        expect(audit).toBeGreaterThan(pack);
+        expect(packedConsumer).toBeGreaterThan(audit);
+        expect(checksums).toBeGreaterThan(packedConsumer);
+        expect(upload).toBeGreaterThan(checksums);
+        expect(workflow.slice(packedConsumer, checksums)).toContain(
+            'pnpm --filter pdf-rfc3161-tests test:package -- "$GITHUB_WORKSPACE"/release-artifacts/core/*.tgz "$GITHUB_WORKSPACE"/release-artifacts/cli/*.tgz'
+        );
+        expect(workflow.slice(audit, packedConsumer)).toContain("package/README.md");
+        expect(workflow.slice(audit, packedConsumer)).toContain("package/dist/cli.cjs");
+        expect(workflow.slice(audit, packedConsumer)).not.toContain("package/dist/cli.js");
+        expect(workflow.slice(audit, packedConsumer)).toContain("pdf-rfc3161-cli tarball name");
+        expect(workflow.slice(audit, packedConsumer)).toContain(
+            "CLI tarball pdf-rfc3161 dependency"
+        );
+        expect(workflow.slice(checksums, upload)).toContain(
+            "sha256sum core/*.tgz cli/*.tgz > SHA256SUMS"
+        );
+        expect(workflow.slice(checksums, upload)).toContain(
+            "sha512sum core/*.tgz cli/*.tgz > SHA512SUMS"
+        );
+
+        for (const [job, stage] of [
+            [coreJob, coreStage],
+            [cliJob, cliStage],
+        ]) {
+            const jobContent = workflow.slice(job, stage);
+            expect(jobContent).toContain("sha256sum --check SHA256SUMS");
+            expect(jobContent).toContain("sha512sum --check SHA512SUMS");
+        }
+
+        expect(contributing).toContain("SHA-256/SHA-512 digest");
+        expect(contributing).toContain("npm stage download <core-stage-id>");
+        expect(contributing).toContain("npm stage download <cli-stage-id>");
     });
 
     it("downloads fixed official snapshot artifacts, verifies them, and extracts without host installation", () => {

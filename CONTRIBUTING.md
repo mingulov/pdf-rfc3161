@@ -29,28 +29,28 @@ pdf-rfc3161/
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `pnpm test` | Full unit suite across all packages |
-| `pnpm typecheck` | `tsc --noEmit` on every workspace package |
-| `pnpm lint` | ESLint `--fix` on every workspace package |
-| `pnpm format` | Prettier `--write` on every workspace package |
-| `pnpm -r build` | tsup builds for core + cli; Vite build for demo |
+| Command                                                | What it does                                     |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| `pnpm test`                                            | Full unit suite across all packages              |
+| `pnpm typecheck`                                       | `tsc --noEmit` on every workspace package        |
+| `pnpm lint`                                            | ESLint `--fix` on every workspace package        |
+| `pnpm format`                                          | Prettier `--write` on every workspace package    |
+| `pnpm -r build`                                        | tsup builds for core + cli; Vite build for demo  |
 | `pnpm --filter pdf-rfc3161-tests run test:integration` | Hits live TSAs — set `LIVE_TSA_TESTS=true` first |
-| `pnpm --filter pdf-rfc3161-tests run test:robustness` | Long-running adversarial suite |
-| `pnpm --filter pdf-rfc3161-tests run test:coverage` | v8 coverage report |
-| `pnpm --filter pdf-rfc3161-demo dev` | Vite dev server for the demo app |
-| `pnpm cli -- <args>` | Run the CLI from source via tsx |
+| `pnpm --filter pdf-rfc3161-tests run test:robustness`  | Long-running adversarial suite                   |
+| `pnpm --filter pdf-rfc3161-tests run test:coverage`    | v8 coverage report                               |
+| `pnpm --filter pdf-rfc3161-demo dev`                   | Vite dev server for the demo app                 |
+| `pnpm cli -- <args>`                                   | Run the CLI from source via tsx                  |
 
 ## Before opening a PR
 
 1. **Add a changeset** describing user-visible changes:
 
-   ```bash
-   pnpm changeset
-   ```
+    ```bash
+    pnpm changeset
+    ```
 
-   Pick affected packages and bump type. Commit the generated `.changeset/*.md` along with your code. Skip the changeset only for internal-only edits (tests, docs, CI, examples that don't affect published output).
+    Pick affected packages and bump type. Commit the generated `.changeset/*.md` along with your code. Skip the changeset only for internal-only edits (tests, docs, CI, examples that don't affect published output).
 
 2. **Run the full check**: `pnpm test && pnpm typecheck && pnpm lint`.
 
@@ -121,7 +121,9 @@ npm stage view <core-stage-id>
 npm stage view <cli-stage-id>
 ```
 
-Download both staged tarballs into an empty temporary directory, install them together,
+Download both staged tarballs into an empty temporary directory. Compare each downloaded
+tarball's SHA-256/SHA-512 digest with the recorded digest in the workflow's **Audited release
+artifacts** summary before installing anything. Then install both downloaded tarballs together
 and exercise the packaged CLI:
 
 ```bash
@@ -129,6 +131,8 @@ review_dir=$(mktemp -d)
 cd "$review_dir"
 npm stage download <core-stage-id>
 npm stage download <cli-stage-id>
+sha256sum ./pdf-rfc3161-0.2.0-*.tgz ./pdf-rfc3161-cli-0.2.0-*.tgz
+sha512sum ./pdf-rfc3161-0.2.0-*.tgz ./pdf-rfc3161-cli-0.2.0-*.tgz
 npm init -y
 npm install ./pdf-rfc3161-0.2.0-*.tgz ./pdf-rfc3161-cli-0.2.0-*.tgz
 test "$(./node_modules/.bin/pdf-rfc3161 --version)" = "0.2.0"

@@ -6,16 +6,14 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, "package.json"), "ut
 
 export default defineConfig({
     entry: ["src/cli.ts"],
-    format: ["cjs", "esm"],
+    format: ["cjs"],
     dts: false,
     clean: true,
-    sourcemap: true,
+    sourcemap: false,
     target: "es2022",
     minify: false,
     splitting: false,
     treeshake: true,
-    shims: true,
-    noExternal: ["commander"],
     banner: {
         js: "#!/usr/bin/env node",
     },

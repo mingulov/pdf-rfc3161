@@ -2,18 +2,18 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
-## 0.1.x -> unreleased next major (breaking)
+## 0.1.x -> 0.2.0 (breaking)
 
-This guide describes unreleased next-major work combining security hardening,
-an API redesign with stricter defaults, and PDF timestamp interoperability fixes. It does not
-announce a published version or release date. The basic `timestampPdf({ pdf,
-tsa })` call signature is unchanged, but the verify / extract path and several
-helpers acquire defaults that are stricter than 0.1.x.
+This guide describes the 0.2.0 release, which combines security hardening, an
+API redesign with stricter defaults, and PDF timestamp interoperability fixes.
+The basic `timestampPdf({ pdf, tsa })` call signature is unchanged, but the
+verify / extract path and several helpers have defaults that are stricter than
+0.1.x.
 
 ### 1. `createTimestampRequest` / `createTimestampRequestFromHash` return `{ request, nonce }`
 
 The functions previously returned just `Uint8Array` (the DER-encoded request).
-The unreleased API returns an object containing the request _and_ the 8-byte
+In 0.2.0, the API returns an object containing the request _and_ the 8-byte
 nonce that was embedded inside it, so callers can verify the TSA echoed the
 nonce back (RFC 3161 Sec. 2.4.2).
 
@@ -72,9 +72,9 @@ point.
 ### 3. `extractTimestamps`: `ignoreEncryption` defaults to `false`
 
 In 0.1.x, the library silently treated encrypted PDFs as if they were plain
-documents, which produced misleading "no timestamps found" results. In the
-unreleased API, the default is `false`: calling `extractTimestamps` on an
-encrypted PDF now throws `TimestampError` with code `PDF_ERROR`. If you need the old behaviour
+documents, which produced misleading "no timestamps found" results. In 0.2.0,
+the default is `false`: calling `extractTimestamps` on an encrypted PDF now
+throws `TimestampError` with code `PDF_ERROR`. If you need the old behaviour
 (useful for diagnostic tooling on hostile inputs), set it explicitly:
 
 ```diff
@@ -89,29 +89,37 @@ This flag is also exposed on the `verify` CLI command.
 In 0.1.x, `timestampPdf` defaulted `enableLTV` to `false`. This was
 inconsistent with `TimestampSession` (which defaulted to `true`) and meant a
 typical call would produce a signature without candidate validation material,
-requiring an opt-in to embed it. The unreleased API flips the default. If
+requiring an opt-in to embed it. In 0.2.0, the default is `true`. If
 you intentionally want a signature _without_ the embedded validation data,
 set `enableLTV: false` explicitly.
 
 ```diff
 - const result = await timestampPdf({ pdf, tsa });            // no LTV in 0.1.x
-+ const result = await timestampPdf({ pdf, tsa });            // LTV in the unreleased API
++ const result = await timestampPdf({ pdf, tsa });            // LTV in 0.2.0
 + // Or, to keep 0.1.x behaviour:
 + const result = await timestampPdf({ pdf, tsa, enableLTV: false });
 ```
+
+The one-call `timestampPdf()` path initially reserves 8KB for the RFC 3161
+token, including when LTV is enabled, because it adds the candidate validation
+material after embedding that token. If the token does not fit, the one-call
+retry loop grows the placeholder. A directly constructed `TimestampSession`
+uses a 16KB default when `enableLTV: true` and 8KB otherwise. Set
+`signatureSize` explicitly if the TSA token for your policy requires more
+space.
 
 ### 5. `verifyTimestamp` enforces id-kp-timeStamping EKU and cert-validity-at-genTime by default
 
 The timestamping-EKU and certificate-validity checks previously had to be
 enabled via `requireTimestampingEKU: true` / `requireCertValidAtGenTime: true`.
-In the unreleased API both default to `true`. Verifying a legacy or
+In 0.2.0 both default to `true`. Verifying a legacy or
 non-conforming token whose certificate lacks the required RFC 3161 EKU (or was
 outside its validity window at `genTime`) now fails by default; pass
 `{ requireTimestampingEKU: false }` or
 `{ requireCertValidAtGenTime: false }` to restore the looser behaviour.
 
 ```typescript
-// Unreleased API: same call, stricter result
+// 0.2.0: same call, stricter result
 const verified = await verifyTimestamp(ts, { trustStore });
 
 // To match 0.1.x leniency exactly:
@@ -126,8 +134,9 @@ const verified = await verifyTimestamp(ts, {
 
 The function returned an empty `SimpleTrustStore` in 0.1.x. This was
 hazardous: a custom `TrustStore` wrapper that returns `true` on empty trust
-could silently accept any chain. The function now throws
-`TimestampError(STATE_ERROR, ...)` until the bundled root list is populated.
+could silently accept any chain. In 0.2.0, the bundled root list is empty, so
+the function throws `TimestampError(STATE_ERROR, ...)` until maintainers
+populate it with curated roots.
 
 Three correct migrations:
 
@@ -146,8 +155,9 @@ const result = await verifyTimestamp(ts);
 ```
 
 Omitting `trustStore` does not select default roots now or automatically later.
-For a trust decision, explicitly provide and maintain a trust store appropriate
-to the relying party's policy.
+It performs cryptographic and, when `pdf` is supplied, PDF-consistency checks
+only; it does not trust the TSA chain. For a trust decision, explicitly provide
+and maintain a trust store appropriate to the relying party's policy.
 
 ### 7. Low-level helpers moved to `pdf-rfc3161/internals`
 
@@ -197,7 +207,7 @@ builds its own client.
 
 `timestampPdfMultiple` previously only forwarded `reason`, `location`,
 `contactInfo`, and `enableLTV` to each underlying `timestampPdf` call.
-The unreleased API forwards every active `TimestampOptions` field (for example,
+In 0.2.0, every active `TimestampOptions` field is forwarded (for example,
 `signatureFieldName` and `revocationData`), so you can configure the
 whole pipeline once. `rejectOnRevocationWarning` remains accepted only for
 source compatibility; it is a deprecated no-op because TSA statuses 4/5 are
@@ -233,7 +243,7 @@ Several CLI flag groups switched from positive to negative form. The default
 behaviour for each is now to ENFORCE the security check (matching the new
 library defaults). Pass the new `--no-*` form to opt out.
 
-| Was (0.1.x)          | Now (unreleased API)    | New default                                          |
+| Was (0.1.x)          | Now (0.2.0)             | New default                                          |
 | -------------------- | ----------------------- | ---------------------------------------------------- |
 | `--ltv`              | `--no-ltv`              | LTV enabled                                          |
 | `--require-eku`      | `--no-require-eku`      | EKU enforced                                         |

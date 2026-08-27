@@ -39,6 +39,11 @@ appended using the requested name or a deterministic collision-safe suffix.
 
 ## Quick Start
 
+The FreeTSA URLs in this README are testing and development examples, not a
+production trust recommendation. FreeTSA uses a self-signed root; selecting
+its URL does not trust its timestamps. For production verification, supply a
+caller-selected `TrustStore` containing only roots your policy accepts.
+
 ```typescript
 import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
 import { readFile, writeFile } from "fs/promises";
@@ -73,10 +78,11 @@ pnpm add pdf-rfc3161
 
 ## Production checklist
 
-Defaults are tuned for compatibility; production workloads should enable the
-stricter options below explicitly. SSRF protection (URL allowlist for AIA /
-OCSP / CRL fetches) is **on by default** and has no opt-out at the public-call
-level.
+In 0.2.0, LTV collection, timestamping-EKU enforcement, and certificate
+validity-at-generation-time enforcement are on by default. Production still
+requires a caller-selected TSA trust policy. SSRF protection (URL allowlist
+for AIA / OCSP / CRL fetches) is **on by default** and has no opt-out at the
+public-call level.
 
 Minimal timestamp metadata is the default: `/M`, `Reason`, `Location`, and
 `ContactInfo` are omitted unless explicitly requested. `omitModificationTime:
@@ -88,7 +94,7 @@ file outside baseline recommendations.
 ```typescript
 const result = await timestampPdf({
     pdf,
-    tsa: { url: KNOWN_TSA_URLS.FREETSA },
+    tsa: { url: KNOWN_TSA_URLS.FREETSA }, // testing/development TSA
     enableLTV: true,
 });
 ```
@@ -117,19 +123,19 @@ const verified = await verifyTimestamp(ts, {
 
 ### Flag reference
 
-The unreleased next-major work flips `enableLTV`, `requireTimestampingEKU`,
-and `requireCertValidAtGenTime` to default `true`. See `MIGRATION.md` if you
-need to verify legacy or non-conforming tokens whose certificates do not satisfy the
+In 0.2.0, `enableLTV`, `requireTimestampingEKU`, and
+`requireCertValidAtGenTime` default to `true`. See `MIGRATION.md` if you need
+to verify legacy or non-conforming tokens whose certificates do not satisfy the
 RFC 3161 EKU requirement.
 
-| Flag                        | Default                        | Recommended for prod                              |
-| --------------------------- | ------------------------------ | ------------------------------------------------- |
-| `enableLTV`                 | `true` (unreleased next major) | `true`                                            |
-| `rejectOnRevocationWarning` | deprecated no-op               | not applicable; TSA statuses 4/5 are always fatal |
-| `requireTimestampingEKU`    | `true` (unreleased next major) | `true`                                            |
-| `requireCertValidAtGenTime` | `true` (unreleased next major) | `true`                                            |
-| `strictESSValidation`       | `false`                        | `true`                                            |
-| `ignoreEncryption`          | `false`                        | leave as `false`                                  |
+| Flag                        | Default          | Recommended for prod                              |
+| --------------------------- | ---------------- | ------------------------------------------------- |
+| `enableLTV`                 | `true` (0.2.0)   | `true`                                            |
+| `rejectOnRevocationWarning` | deprecated no-op | not applicable; TSA statuses 4/5 are always fatal |
+| `requireTimestampingEKU`    | `true` (0.2.0)   | `true`                                            |
+| `requireCertValidAtGenTime` | `true` (0.2.0)   | `true`                                            |
+| `strictESSValidation`       | `false`          | `true`                                            |
+| `ignoreEncryption`          | `false`          | leave as `false`                                  |
 
 ## Command-line interface
 
@@ -137,6 +143,7 @@ RFC 3161 EKU requirement.
 
 ```bash
 npx pdf-rfc3161-cli --help
+# FreeTSA is for testing/development; its root must be explicitly trusted for verification.
 npx pdf-rfc3161-cli timestamp https://freetsa.org/tsr input.pdf output.pdf
 npx pdf-rfc3161-cli verify input.pdf -v
 npx pdf-rfc3161-cli archive https://freetsa.org/tsr input.pdf output.pdf
@@ -259,9 +266,12 @@ for (const ts of timestamps) {
     console.log(`Policy: ${ts.info.policy}`);
 
     const verified = await verifyTimestamp(ts, { pdf: pdfBytes });
-    console.log(`Verified: ${verified.verified}`);
+    console.log(`Cryptographic/PDF verification: ${verified.verified}`);
 }
 ```
+
+This example does not make a TSA trust decision because it supplies no
+`trustStore`. Add a caller-selected store when TSA-chain trust is required.
 
 ### Cloudflare Workers
 
@@ -298,32 +308,33 @@ Adds an RFC 3161 timestamp to a PDF document.
 
 Options:
 
-| Name                        | Type         | Required | Description                                                                                                    |
-| --------------------------- | ------------ | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `pdf`                       | `Uint8Array` | Yes      | PDF document bytes                                                                                             |
-| `tsa.url`                   | `string`     | Yes      | TSA server URL                                                                                                 |
-| `tsa.hashAlgorithm`         | `string`     | No       | SHA-256, SHA-384, or SHA-512 (default: SHA-256)                                                                |
-| `tsa.timeout`               | `number`     | No       | Request timeout in ms (default: 30000)                                                                         |
-| `tsa.retry`                 | `number`     | No       | Retry attempts (default: 3)                                                                                    |
-| `tsa.retryDelay`            | `number`     | No       | Base retry delay in ms (default: 1000)                                                                         |
-| `enableLTV`                 | `boolean`    | No       | Embed candidate DSS material (default: `true` in the unreleased next major); not a trust or validity guarantee |
-| `maxSize`                   | `number`     | No       | Maximum PDF size in bytes (default: 250MB)                                                                     |
-| `signatureSize`             | `number`     | No       | Size reserved for token (default: 8192). Set to `0` for automatic.                                             |
-| `signatureFieldName`        | `string`     | No       | Requested field-name base; deterministic suffixes avoid collisions (default: "Timestamp")                      |
-| `reason`                    | `string`     | No       | Reason for timestamping                                                                                        |
-| `location`                  | `string`     | No       | Location metadata                                                                                              |
-| `contactInfo`               | `string`     | No       | Contact information                                                                                            |
-| `omitModificationTime`      | `boolean`    | No       | `undefined` and `true` omit `/M`; explicit `false` restores legacy metadata                                    |
-| `optimizePlaceholder`       | `boolean`    | No       | Optimize signature size (default: false)                                                                       |
-| `rejectOnRevocationWarning` | `boolean`    | No       | Deprecated no-op retained for source compatibility; TSA statuses 4/5 are always fatal                          |
-| `ignoreEncryption`          | `boolean`    | No       | Process encrypted PDFs (default: false; recommend leaving false)                                               |
-| `revocationData`            | `LTVData`    | No       | Caller-provided candidate material; caller is responsible for trust                                            |
+| Name                        | Type         | Required | Description                                                                                                                         |
+| --------------------------- | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `pdf`                       | `Uint8Array` | Yes      | PDF document bytes                                                                                                                  |
+| `tsa.url`                   | `string`     | Yes      | TSA server URL                                                                                                                      |
+| `tsa.hashAlgorithm`         | `string`     | No       | SHA-256, SHA-384, or SHA-512 (default: SHA-256)                                                                                     |
+| `tsa.timeout`               | `number`     | No       | Request timeout in ms (default: 30000)                                                                                              |
+| `tsa.retry`                 | `number`     | No       | Retry attempts (default: 3)                                                                                                         |
+| `tsa.retryDelay`            | `number`     | No       | Base retry delay in ms (default: 1000)                                                                                              |
+| `enableLTV`                 | `boolean`    | No       | Embed candidate DSS material (default: `true` in 0.2.0); not a trust or validity guarantee                                          |
+| `maxSize`                   | `number`     | No       | Maximum PDF size in bytes (default: 250MB)                                                                                          |
+| `signatureSize`             | `number`     | No       | Initial token space: 8KB for `timestampPdf()`; 16KB for an LTV-enabled `TimestampSession`. Omit or set `0` for that path's default. |
+| `signatureFieldName`        | `string`     | No       | Requested field-name base; deterministic suffixes avoid collisions (default: "Timestamp")                                           |
+| `reason`                    | `string`     | No       | Reason for timestamping                                                                                                             |
+| `location`                  | `string`     | No       | Location metadata                                                                                                                   |
+| `contactInfo`               | `string`     | No       | Contact information                                                                                                                 |
+| `omitModificationTime`      | `boolean`    | No       | `undefined` and `true` omit `/M`; explicit `false` restores legacy metadata                                                         |
+| `optimizePlaceholder`       | `boolean`    | No       | Optimize signature size (default: false)                                                                                            |
+| `rejectOnRevocationWarning` | `boolean`    | No       | Deprecated no-op retained for source compatibility; TSA statuses 4/5 are always fatal                                               |
+| `ignoreEncryption`          | `boolean`    | No       | Process encrypted PDFs (default: false; recommend leaving false)                                                                    |
+| `revocationData`            | `LTVData`    | No       | Caller-provided candidate material; caller is responsible for trust                                                                 |
 
 Returns a `TimestampResult` with the timestamped PDF, timestamp info, and optional candidate
 `ltvData`. The deprecated `tsaRevocationWarning` field is never set: TSA statuses 4/5 are always
 fatal.
 
-Note: When using LTV, `signatureSize: 0` uses a 16KB default. Specify larger value manually if you encounter "token larger than placeholder" errors.
+Specify a larger `signatureSize` manually if you encounter "token larger than
+placeholder" errors.
 
 ### `timestampPdfMultiple(options)`
 
@@ -339,19 +350,22 @@ Verifies the cryptographic signature of an extracted timestamp.
 
 Options:
 
-| Name                        | Type                 | Required | Description                                                                                |
-| --------------------------- | -------------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `pdf`                       | `Uint8Array`         | No       | Original PDF bytes for hash verification                                                   |
-| `trustStore`                | `TrustStore \| null` | No       | Trust store for chain validation. `null` skips chain check.                                |
-| `strictESSValidation`       | `boolean`            | No       | Enforce PAdES ESS-cert-id compliance (default: `false`)                                    |
-| `requireTimestampingEKU`    | `boolean`            | No       | Require id-kp-timeStamping EKU on TSA cert (default: `true` in the unreleased next major)  |
-| `requireCertValidAtGenTime` | `boolean`            | No       | Require TSA cert valid at timestamp instant (default: `true` in the unreleased next major) |
+| Name                        | Type                 | Required | Description                                                                                           |
+| --------------------------- | -------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
+| `pdf`                       | `Uint8Array`         | No       | Original PDF bytes for hash verification                                                              |
+| `trustStore`                | `TrustStore \| null` | No       | Caller-selected store for TSA-chain validation. Omit or use `null` for cryptographic/PDF checks only. |
+| `strictESSValidation`       | `boolean`            | No       | Enforce PAdES ESS-cert-id compliance (default: `false`)                                               |
+| `requireTimestampingEKU`    | `boolean`            | No       | Require id-kp-timeStamping EKU on TSA cert (default: `true` in 0.2.0)                                 |
+| `requireCertValidAtGenTime` | `boolean`            | No       | Require TSA cert valid at timestamp instant (default: `true` in 0.2.0)                                |
 
 ## TSA Servers
 
 The library includes `KNOWN_TSA_URLS` - a list of known TSA URLs for convenience.
 
-Note: Usage is governed by providers' Terms and Conditions. FreeTSA uses a self-signed CA requiring manual root certificate installation.
+Note: Usage is governed by providers' Terms and Conditions. FreeTSA is for
+testing/development and uses a self-signed root. Do not treat selecting its URL
+as trust; verify it only with an explicitly caller-selected trust store that
+contains its root when that is appropriate for your policy.
 
 ## Demo
 
@@ -406,8 +420,10 @@ requirements:
 - The document hash matches what was timestamped
 - The timestamp structure is valid
 
-Those checks do not by themselves trust the TSA, validate a certificate path, or establish
-revocation freshness. Supply a caller-owned `TrustStore` to apply a trust policy.
+Without a `trustStore`, those checks are cryptographic and, when `pdf` is
+supplied, PDF-consistency checks only. They do not trust the TSA, validate a
+certificate path, or establish revocation freshness. Supply a caller-owned
+`TrustStore` to apply a trust policy.
 
 **Modular Network Architecture:**
 
@@ -490,9 +506,11 @@ The library implements or aims to support the following standards:
 
 **TrustStore validation:**
 
-For production chain validation, pass a caller-owned `TrustStore` with the roots you accept to
-`verifyTimestamp()`. The library's default trust store is empty, so it does not provide an
-implicit TSA trust anchor or full chain-validation policy:
+For production chain validation, pass a caller-owned `TrustStore` with the
+roots you accept to `verifyTimestamp()`. In 0.2.0, `getDefaultTrustStore()`
+throws `TimestampError` with code `STATE_ERROR` while the curated bundled-root
+list is empty; it does not provide an implicit TSA trust anchor or full
+chain-validation policy:
 
 ```typescript
 import { verifyTimestamp, SimpleTrustStore } from "pdf-rfc3161";

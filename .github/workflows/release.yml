@@ -16,9 +16,41 @@ permissions:
     contents: read
 
 jobs:
+    compatibility:
+        name: Compatibility (Node ${{ matrix.node }})
+        runs-on: ubuntu-24.04
+        strategy:
+            fail-fast: false
+            matrix:
+                node: [20, 22, 24]
+        steps:
+            - uses: actions/checkout@v6
+
+            - uses: pnpm/action-setup@v6
+              with:
+                  version: 10.30.3
+
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: ${{ matrix.node }}
+                  package-manager-cache: false
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build
+              run: pnpm -r build
+
+            - name: Type check
+              run: pnpm typecheck
+
+            - name: Test
+              run: pnpm test
+
     verify:
         name: Verify and package
         if: github.ref == 'refs/heads/main'
+        needs: compatibility
         runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@v6
@@ -34,11 +66,11 @@ jobs:
 
             - uses: actions/setup-python@v6
               with:
-                  python-version: '3.12.14'
+                  python-version: "3.12.14"
 
             - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
               with:
-                  version: '0.12.5'
+                  version: "0.12.5"
 
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
@@ -95,9 +127,6 @@ jobs:
             - name: Offline PAdES interoperability checks
               run: pnpm --filter pdf-rfc3161-tests test:interoperability
 
-            - name: Packed consumer test
-              run: pnpm --filter pdf-rfc3161-tests test:package
-
             - name: Pack public packages
               run: |
                   mkdir -p release-artifacts/core release-artifacts/cli
@@ -106,6 +135,8 @@ jobs:
 
             - name: Audit packed package contents
               shell: bash
+              env:
+                  EXPECTED_VERSION: ${{ inputs.version }}
               run: |
                   shopt -s nullglob
                   core_archives=(release-artifacts/core/*.tgz)
@@ -117,13 +148,14 @@ jobs:
 
                   core_entries=$(tar -tzf "${core_archives[0]}" | LC_ALL=C sort)
                   core_count=$(printf '%s\n' "$core_entries" | wc -l)
-                  if [[ $core_count -ne 26 ]]; then
-                    echo "Expected 26 files in pdf-rfc3161 tarball, found $core_count" >&2
+                  if [[ $core_count -ne 27 ]]; then
+                    echo "Expected 27 files in pdf-rfc3161 tarball, found $core_count" >&2
                     exit 1
                   fi
 
                   required_core=(
                     package/LICENSE
+                    package/README.md
                     package/package.json
                     package/dist/advanced.cjs
                     package/dist/advanced.d.cts
@@ -154,7 +186,7 @@ jobs:
                   done
 
                   unexpected_core=$(printf '%s\n' "$core_entries" | grep -Ev \
-                    '^package/(LICENSE|package\.json|dist/(advanced|index|internals)\.(cjs|js|d\.cts|d\.ts)|dist/rfcs/rfc(5544|8933)\.(cjs|js|d\.cts|d\.ts)|dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}\.d\.(cts|ts))$' \
+                    '^package/(LICENSE|README\.md|package\.json|dist/(advanced|index|internals)\.(cjs|js|d\.cts|d\.ts)|dist/rfcs/rfc(5544|8933)\.(cjs|js|d\.cts|d\.ts)|dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}\.d\.(cts|ts))$' \
                     || true)
                   if [[ -n "$unexpected_core" ]]; then
                     echo "Unexpected file in pdf-rfc3161 tarball:" >&2
@@ -162,7 +194,7 @@ jobs:
                     exit 1
                   fi
 
-                  expected_cli=$'package/LICENSE\npackage/dist/cli.cjs\npackage/dist/cli.js\npackage/package.json'
+                  expected_cli=$'package/LICENSE\npackage/README.md\npackage/dist/cli.cjs\npackage/package.json'
                   actual_cli=$(tar -tzf "${cli_archives[0]}" | LC_ALL=C sort)
                   if [[ "$actual_cli" != "$expected_cli" ]]; then
                     echo "Unexpected file list in pdf-rfc3161-cli tarball:" >&2
@@ -174,6 +206,58 @@ jobs:
                     echo "pnpm workspace dependency leaked into pdf-rfc3161-cli tarball" >&2
                     exit 1
                   fi
+
+                  read -r core_name core_version < <(
+                    tar -xOf "${core_archives[0]}" package/package.json | node -e '
+                      const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+                      process.stdout.write(manifest.name + " " + manifest.version + "\\n");
+                    '
+                  )
+                  if [[ "$core_name" != "pdf-rfc3161" || "$core_version" != "$EXPECTED_VERSION" ]]; then
+                    echo "pdf-rfc3161 tarball name/version does not match requested release" >&2
+                    exit 1
+                  fi
+
+                  read -r cli_name cli_version cli_core_version < <(
+                    tar -xOf "${cli_archives[0]}" package/package.json | node -e '
+                      const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+                      process.stdout.write(
+                        manifest.name + " " + manifest.version + " " + manifest.dependencies?.["pdf-rfc3161"] + "\\n"
+                      );
+                    '
+                  )
+                  if [[ "$cli_name" != "pdf-rfc3161-cli" || "$cli_version" != "$EXPECTED_VERSION" ]]; then
+                    echo "pdf-rfc3161-cli tarball name/version does not match requested release" >&2
+                    exit 1
+                  fi
+                  if [[ "$cli_core_version" != "$EXPECTED_VERSION" ]]; then
+                    echo "CLI tarball pdf-rfc3161 dependency does not match requested release" >&2
+                    exit 1
+                  fi
+
+            - name: Test exact release artifacts
+              run: pnpm --filter pdf-rfc3161-tests test:package -- "$GITHUB_WORKSPACE"/release-artifacts/core/*.tgz "$GITHUB_WORKSPACE"/release-artifacts/cli/*.tgz
+
+            - name: Generate SHA256SUMS and SHA512SUMS
+              shell: bash
+              run: |
+                  cd release-artifacts
+                  sha256sum core/*.tgz cli/*.tgz > SHA256SUMS
+                  sha512sum core/*.tgz cli/*.tgz > SHA512SUMS
+
+            - name: Summarize release artifacts
+              shell: bash
+              run: |
+                  {
+                    echo "## Audited release artifacts"
+                    echo
+                    echo "Commit: $GITHUB_SHA"
+                    echo
+                    echo '```text'
+                    cat release-artifacts/SHA256SUMS
+                    cat release-artifacts/SHA512SUMS
+                    echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"
 
             - name: Upload release artifacts
               uses: actions/upload-artifact@v4
@@ -215,6 +299,13 @@ jobs:
                     exit 1
                   fi
 
+            - name: Verify release artifact checksums
+              shell: bash
+              run: |
+                  cd release-artifacts
+                  sha256sum --check SHA256SUMS
+                  sha512sum --check SHA512SUMS
+
             - name: Stage pdf-rfc3161
               run: npm stage publish release-artifacts/core/*.tgz --access public
 
@@ -249,6 +340,13 @@ jobs:
                     echo "npm 11.15.0 or newer is required, found $npm_version" >&2
                     exit 1
                   fi
+
+            - name: Verify release artifact checksums
+              shell: bash
+              run: |
+                  cd release-artifacts
+                  sha256sum --check SHA256SUMS
+                  sha512sum --check SHA512SUMS
 
             - name: Stage pdf-rfc3161-cli
               run: npm stage publish release-artifacts/cli/*.tgz --access public

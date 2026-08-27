@@ -46,6 +46,7 @@ describe("CLI smoke test", () => {
         expect(cmd).toBeDefined();
         const help = cmd!.helpInformation();
         expect(help).toContain("--rfc8933");
+        expect(help).toContain("--ignore-encryption");
     });
 
     it("archive command exposes --name option with default", async () => {
@@ -57,5 +58,4 @@ describe("CLI smoke test", () => {
         expect(help).toContain("--name");
         expect(help).toContain("ArchiveTimestamp");
     });
-
 });

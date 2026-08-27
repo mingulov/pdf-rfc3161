@@ -54,10 +54,7 @@ describe("CLI verify batch routing", () => {
         vi.mocked(readFile).mockResolvedValue(Buffer.from([0x25, 0x50, 0x44, 0x46]));
         vi.mocked(getDSSInfo).mockResolvedValue(null);
         vi.mocked(extractTimestamps).mockResolvedValue([]);
-        vi.mocked(verifyPdfTimestamps).mockResolvedValue([
-            timestamp("First"),
-            timestamp("Second"),
-        ]);
+        vi.mocked(verifyPdfTimestamps).mockResolvedValue([timestamp("First"), timestamp("Second")]);
     });
 
     it("verifies all timestamp fields through one PDF-level batch call", async () => {
@@ -75,6 +72,27 @@ describe("CLI verify batch routing", () => {
             expect(output.join("\n")).toContain("Found 2 timestamp(s)");
             expect(output.join("\n")).toContain("Timestamp 1:");
             expect(output.join("\n")).toContain("Timestamp 2:");
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    it("forwards verify --ignore-encryption to DSS inspection and timestamp discovery", async () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+        try {
+            await program.parseAsync(
+                ["node", "pdf-rfc3161", "verify", "input.pdf", "--ignore-encryption"],
+                { from: "node" }
+            );
+
+            expect(vi.mocked(getDSSInfo)).toHaveBeenCalledWith(expect.any(Uint8Array), {
+                ignoreEncryption: true,
+            });
+            expect(vi.mocked(verifyPdfTimestamps)).toHaveBeenCalledWith(
+                expect.any(Uint8Array),
+                expect.objectContaining({ ignoreEncryption: true })
+            );
         } finally {
             log.mockRestore();
         }

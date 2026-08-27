@@ -22,22 +22,21 @@
     "author": "Denis Mingulov <denis@mingulov.com>",
     "type": "module",
     "sideEffects": [
-        "./dist/cli.cjs",
-        "./dist/cli.js"
+        "./dist/cli.cjs"
     ],
     "bin": {
         "pdf-rfc3161": "dist/cli.cjs"
     },
     "files": [
-        "dist",
-        "!dist/**/*.map"
+        "dist"
     ],
     "scripts": {
         "build": "tsup",
         "dev": "tsup --watch",
         "start": "tsx src/cli.ts",
         "typecheck": "tsc --noEmit",
-        "lint": "eslint src --fix"
+        "lint": "eslint src --fix",
+        "prepack": "pnpm run build"
     },
     "dependencies": {
         "asn1js": "^3.0.10",

@@ -3,10 +3,7 @@ import { extractBytesToHash } from "./pdf/embed.js";
 import { createTimestampRequest } from "./tsa/index.js";
 import { embedTimestampToken } from "./pdf/embed.js";
 import { extractLTVData, addDSS, completeLTVData } from "./pdf/ltv.js";
-import {
-    validateTimestampToken,
-    type TimestampRequestContext,
-} from "./tsa/token-validation.js";
+import { validateTimestampToken, type TimestampRequestContext } from "./tsa/token-validation.js";
 import {
     type HashAlgorithm,
     TimestampErrorCode,
@@ -95,8 +92,7 @@ export class TimestampSession {
         this.options = options;
         this.currentPrepareOptions = {
             ...(options.prepareOptions ?? {}),
-            ignoreEncryption:
-                options.ignoreEncryption ?? options.prepareOptions?.ignoreEncryption,
+            ignoreEncryption: options.ignoreEncryption ?? options.prepareOptions?.ignoreEncryption,
         };
     }
 
@@ -112,7 +108,7 @@ export class TimestampSession {
         }
         // Logic interpretation: signatureSize: 0 means default/auto
         // If LTV is enabled, we need a larger default (usually 16KB)
-        return this.options.enableLTV ? LTV_SIGNATURE_SIZE : DEFAULT_SIGNATURE_SIZE;
+        return this.options.enableLTV !== false ? LTV_SIGNATURE_SIZE : DEFAULT_SIGNATURE_SIZE;
     }
 
     /**
@@ -175,9 +171,7 @@ export class TimestampSession {
      * @param reqOptions Optional overrides for specific request parameters
      * @returns The DER-encoded Timestamp Request (TSQ)
      */
-    async createTimestampRequest(
-        reqOptions: TimestampRequestOptions = {}
-    ): Promise<Uint8Array> {
+    async createTimestampRequest(reqOptions: TimestampRequestOptions = {}): Promise<Uint8Array> {
         this.throwIfDisposed();
         // (Legacy soft guard retained as defence-in-depth for code paths that
         // mutated internal state before the disposed flag was introduced.)
@@ -190,7 +184,10 @@ export class TimestampSession {
 
         // 1. Prepare PDF with placeholder
         // Re-prepare if needed (e.g. if size changed) or if not yet done
-        this.prepared ??= await preparePdfForTimestamp(this.pdfBytes, this.currentPrepareOptions);
+        this.prepared ??= await preparePdfForTimestamp(this.pdfBytes, {
+            ...this.currentPrepareOptions,
+            signatureSize: this.signatureSize,
+        });
 
         // 2. Extract bytes to hash
         const bytesToHash = extractBytesToHash(this.prepared);
