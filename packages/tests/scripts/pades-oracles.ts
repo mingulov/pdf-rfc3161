@@ -11,6 +11,9 @@ export interface PadesOracleArtifact {
     sha256: string;
 }
 
+const UBUNTU_SNAPSHOT = "20260825T000000Z";
+const UBUNTU_SNAPSHOT_BASE_URL = `https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}`;
+
 /**
  * Pinned external-tool policy for the offline PAdES interoperability gate.
  * Values are Ubuntu Noble package revisions and SHA-256-pinned binary
@@ -18,6 +21,7 @@ export interface PadesOracleArtifact {
  */
 export const PADES_ORACLE_POLICY = {
     ubuntuRunner: "ubuntu-24.04",
+    ubuntuSnapshot: UBUNTU_SNAPSHOT,
     architecture: "amd64",
     pythonVersion: "3.12.14",
     qpdf: {
@@ -28,7 +32,7 @@ export const PADES_ORACLE_POLICY = {
             package: "qpdf",
             packageVersion: "11.9.0-1.1ubuntu0.1",
             filename: "qpdf_11.9.0-1.1ubuntu0.1_amd64.deb",
-            url: "https://archive.ubuntu.com/ubuntu/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb`,
             sha256: "b50d1aca530cd8f7b68214f8b19bdf348c6c01b7110ca1c335e6662cdb442af8",
         },
     },
@@ -39,7 +43,7 @@ export const PADES_ORACLE_POLICY = {
             package: "libqpdf29t64",
             packageVersion: "11.9.0-1.1ubuntu0.1",
             filename: "libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb",
-            url: "https://archive.ubuntu.com/ubuntu/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb`,
             sha256: "8ffa418e72ab62013d7bd97b737f6eac8311853e50e4972b3db414c6fdbab445",
         },
     },
@@ -51,7 +55,7 @@ export const PADES_ORACLE_POLICY = {
             package: "openssl",
             packageVersion: "3.0.13-0ubuntu3.12",
             filename: "openssl_3.0.13-0ubuntu3.12_amd64.deb",
-            url: "https://security.ubuntu.com/ubuntu/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb`,
             sha256: "321b30ad5a1c3783cb3d73ae439f824f6d3874d76a93a62f4a984959b490aa7b",
         },
     },
@@ -62,7 +66,7 @@ export const PADES_ORACLE_POLICY = {
             package: "libssl3t64",
             packageVersion: "3.0.13-0ubuntu3.12",
             filename: "libssl3t64_3.0.13-0ubuntu3.12_amd64.deb",
-            url: "https://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb`,
             sha256: "6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b",
         },
     },
@@ -155,7 +159,10 @@ function runOracleCommand(command: string, args: string[]): OracleCommandResult 
 }
 
 function output(result: OracleCommandResult): string {
-    return [result.stdout, result.stderr].filter((value) => value.length > 0).join("\n").trim();
+    return [result.stdout, result.stderr]
+        .filter((value) => value.length > 0)
+        .join("\n")
+        .trim();
 }
 
 function assertSuccess(
@@ -247,7 +254,9 @@ export function assertPadesOracleTools(runner: OracleCommandRunner = runOracleCo
     const expectedQpdf = `qpdf version ${PADES_ORACLE_POLICY.qpdf.commandVersion}`;
     const qpdfBanner = qpdf.stdout.trim().split("\n")[0];
     if (qpdfBanner !== expectedQpdf) {
-        throw new Error(`Pinned qpdf banner mismatch: expected ${expectedQpdf}, got ${output(qpdf)}`);
+        throw new Error(
+            `Pinned qpdf banner mismatch: expected ${expectedQpdf}, got ${output(qpdf)}`
+        );
     }
 
     const openssl = assertSuccess(runner, "openssl", ["version"], "OpenSSL");

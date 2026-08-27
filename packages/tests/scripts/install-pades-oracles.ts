@@ -21,12 +21,13 @@ import {
 } from "./pades-oracles.js";
 
 const MAX_ARTIFACT_SIZE = 16 * 1024 * 1024;
-const OFFICIAL_UBUNTU_HOSTS = new Set(["archive.ubuntu.com", "security.ubuntu.com"]);
+const OFFICIAL_UBUNTU_HOSTS = new Set(["snapshot.ubuntu.com"]);
 
 function run(command: string, args: string[]): void {
     const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
     if (result.error) throw new Error(`${command} could not be started: ${result.error.message}`);
-    if (result.status !== 0) throw new Error(`${command} exited with status ${String(result.status)}`);
+    if (result.status !== 0)
+        throw new Error(`${command} exited with status ${String(result.status)}`);
 }
 
 function assertOfficialArtifactUrl(artifact: PadesOracleArtifact): void {
@@ -51,7 +52,9 @@ async function downloadVerifiedArtifact(
         signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok || !response.body) {
-        throw new Error(`Could not download ${artifact.filename}: HTTP ${response.status.toString()}`);
+        throw new Error(
+            `Could not download ${artifact.filename}: HTTP ${response.status.toString()}`
+        );
     }
 
     const advertisedLength = response.headers.get("content-length");
@@ -128,7 +131,9 @@ async function main(): Promise<void> {
         throw new Error("Pinned PAdES tool installation requires the Ubuntu 24.04 CI runner");
     }
     if (process.arch !== "x64") {
-        throw new Error(`Pinned PAdES tool installation requires ${PADES_ORACLE_POLICY.architecture}`);
+        throw new Error(
+            `Pinned PAdES tool installation requires ${PADES_ORACLE_POLICY.architecture}`
+        );
     }
 
     const paths = padesOraclePaths();

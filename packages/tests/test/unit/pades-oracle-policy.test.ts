@@ -90,19 +90,21 @@ describe("offline PAdES validation-tool policy", () => {
             );
             expect(content).toContain(`runs-on: ${PADES_ORACLE_POLICY.ubuntuRunner}`);
             expect(content).not.toContain("ubuntu-latest");
-            expect(content).toContain(
-                `python-version: '${PADES_ORACLE_POLICY.pythonVersion}'`
-            );
+            expect(content).toContain(`python-version: '${PADES_ORACLE_POLICY.pythonVersion}'`);
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run install:pades-oracles");
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run assert:pades-oracles");
         }
     });
 
-    it("downloads fixed official artifacts, verifies them, and extracts without host installation", () => {
+    it("downloads fixed official snapshot artifacts, verifies them, and extracts without host installation", () => {
+        const snapshot = PADES_ORACLE_POLICY.ubuntuSnapshot;
+        expect(snapshot).toMatch(/^\d{8}T\d{6}Z$/);
+
         for (const artifact of PADES_ORACLE_ARTIFACTS) {
             const url = new URL(artifact.url);
             expect(url.protocol).toBe("https:");
-            expect(["archive.ubuntu.com", "security.ubuntu.com"]).toContain(url.hostname);
+            expect(url.hostname).toBe("snapshot.ubuntu.com");
+            expect(url.pathname.startsWith(`/ubuntu/${snapshot}/pool/`)).toBe(true);
             expect(url.pathname).toContain(artifact.filename);
             expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
         }
