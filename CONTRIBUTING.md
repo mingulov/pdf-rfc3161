@@ -58,6 +58,100 @@ pdf-rfc3161/
 
 4. **Security-relevant changes**: confirm the threat model was considered. The PR template has a section for this. If you're unsure, ask in the PR description.
 
+## Releasing
+
+Publishing uses npm staged publishing. The `Release` GitHub Actions workflow verifies and
+stages `pdf-rfc3161` and `pdf-rfc3161-cli`, but it cannot make either package public. A
+maintainer must inspect and approve each staged package with npm 2FA.
+
+### One-time npm setup
+
+For both npm packages, configure the GitHub Actions trusted publisher with:
+
+- Organization or user: `mingulov`
+- Repository: `pdf-rfc3161`
+- Workflow filename: `release.yml`
+- Allowed actions: `npm stage publish` only (disable direct `npm publish`)
+
+Under each package's **Settings -> Publishing access**, select **Require two-factor
+authentication and disallow tokens**. The workflow uses GitHub OIDC and has no `NPM_TOKEN`
+secret.
+
+### Stage a release
+
+1. Merge all intended changes and their changesets into `main`.
+2. Run `pnpm changeset version`, finalize the root `CHANGELOG.md`, and commit the release
+   versions to `main`. The two public packages are a fixed Changesets group and release at
+   the same version.
+3. Wait for the normal `main` CI workflow to pass.
+4. In GitHub Actions, select **Release**, choose `main`, enter the package version without a
+   `v` prefix (for example, `0.2.0`), and click **Run workflow**. The equivalent GitHub CLI
+   commands are:
+
+    ```bash
+    gh workflow run release.yml --ref main -f version=0.2.0
+    gh run watch
+    ```
+
+5. Wait for **Verify and package**, **Stage pdf-rfc3161@VERSION on npm**, and **Stage
+   pdf-rfc3161-cli@VERSION on npm** to pass.
+
+Before retrying a failed staging job, use `npm stage list <package>` and `npm stage view
+<stage-id>` to check whether npm reserved that version despite a lost response. Rerun failed
+jobs only when the failed package has no stage. If a failed core job did create a stage,
+reject that core stage before rerunning failed jobs so the CLI dependency chain can proceed.
+If a failed CLI job did create its stage, both packages are ready for review and no rerun is
+needed.
+
+The workflow confirms the requested version matches both package manifests, builds,
+typechecks, lints, runs the unit and offline PAdES interoperability suites, checks a packed
+consumer, and audits both tarball file lists. The downloadable `npm-packages` GitHub
+artifact contains the exact tarballs sent to npm.
+
+### Review and approve
+
+Use Node 22.14.0 or newer, npm CLI 11.15.0 or newer, and an npm account with package access
+and 2FA. GitHub CLI can start and watch the workflow, but approval belongs to npm and
+cannot be done with `gh`.
+
+```bash
+npm stage list pdf-rfc3161
+npm stage list pdf-rfc3161-cli
+npm stage view <core-stage-id>
+npm stage view <cli-stage-id>
+```
+
+Download both staged tarballs into an empty temporary directory, install them together,
+and exercise the packaged CLI:
+
+```bash
+review_dir=$(mktemp -d)
+cd "$review_dir"
+npm stage download <core-stage-id>
+npm stage download <cli-stage-id>
+npm init -y
+npm install ./pdf-rfc3161-0.2.0-*.tgz ./pdf-rfc3161-cli-0.2.0-*.tgz
+test "$(./node_modules/.bin/pdf-rfc3161 --version)" = "0.2.0"
+./node_modules/.bin/pdf-rfc3161 --help
+```
+
+After review, approve core first and CLI second. Each command prompts for 2FA and makes that
+package public:
+
+```bash
+npm stage approve <core-stage-id>
+npm stage approve <cli-stage-id>
+```
+
+You can instead approve from the **Staged Packages** tab on npmjs.com. To discard a bad
+stage, use `npm stage reject <stage-id>`; rejection also requires 2FA. Finally, confirm both
+live versions:
+
+```bash
+npm view pdf-rfc3161 version
+npm view pdf-rfc3161-cli version
+```
+
 ## Code style
 
 - TypeScript strict + `noUncheckedIndexedAccess` enabled.

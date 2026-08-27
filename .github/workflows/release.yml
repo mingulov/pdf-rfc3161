@@ -1,74 +1,271 @@
 name: Release
 
 on:
-  workflow_dispatch:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: Package version to stage (for example, 0.2.0)
+                required: true
+                type: string
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+    contents: read
 
 jobs:
-  release:
-    name: Version PR or Publish
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
+    verify:
+        name: Verify and package
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-24.04
+        steps:
+            - uses: actions/checkout@v6
 
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.30.3
+            - uses: pnpm/action-setup@v6
+              with:
+                  version: 10.30.3
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  package-manager-cache: false
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12.14'
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: '3.12.14'
 
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: '0.12.5'
+            - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+              with:
+                  version: '0.12.5'
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
 
-      - name: Install pinned PAdES validation tools
-        run: pnpm --filter pdf-rfc3161-tests run install:pades-oracles
+            - name: Reject unapplied changesets
+              shell: bash
+              run: |
+                  pending_changeset=$(find .changeset -maxdepth 1 -type f ! -name config.json -print -quit)
+                  if [[ -n "$pending_changeset" ]]; then
+                    echo "Run pnpm changeset version before releasing: $pending_changeset" >&2
+                    exit 1
+                  fi
 
-      - name: Verify pinned PAdES validation-tool versions
-        run: pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
+            - name: Verify public package versions match
+              shell: bash
+              env:
+                  EXPECTED_VERSION: ${{ inputs.version }}
+              run: |
+                  core_version=$(node -p "require('./packages/core/package.json').version")
+                  cli_version=$(node -p "require('./packages/cli/package.json').version")
+                  if [[ "$core_version" != "$cli_version" ]]; then
+                    echo "Public package versions must match: core=$core_version cli=$cli_version" >&2
+                    exit 1
+                  fi
+                  if [[ "$core_version" != "$EXPECTED_VERSION" ]]; then
+                    echo "Package version $core_version does not match requested release $EXPECTED_VERSION" >&2
+                    exit 1
+                  fi
 
-      - name: Install pyHanko
-        run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
+            - name: Install pinned PAdES validation tools
+              run: pnpm --filter pdf-rfc3161-tests run install:pades-oracles
 
-      - name: Build
-        run: pnpm -r build
+            - name: Verify pinned PAdES validation-tool versions
+              run: pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
 
-      - name: Type check
-        run: pnpm typecheck
+            - name: Install pyHanko
+              run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
 
-      - name: Test
-        run: pnpm test
+            - name: Lint
+              run: pnpm lint
 
-      - name: Offline PAdES interoperability checks
-        run: pnpm --filter pdf-rfc3161-tests test:interoperability
+            - name: Verify lint left the checkout unchanged
+              run: git diff --exit-code
 
-      - name: Packed consumer test
-        run: pnpm --filter pdf-rfc3161-tests test:package
+            - name: Build
+              run: pnpm -r build
 
-      - name: Create version PR or publish
-        uses: changesets/action@v1
-        with:
-          publish: pnpm -r publish --provenance --no-git-checks --access public
-          version: pnpm changeset version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+            - name: Type check
+              run: pnpm typecheck
+
+            - name: Test
+              run: pnpm test
+
+            - name: Offline PAdES interoperability checks
+              run: pnpm --filter pdf-rfc3161-tests test:interoperability
+
+            - name: Packed consumer test
+              run: pnpm --filter pdf-rfc3161-tests test:package
+
+            - name: Pack public packages
+              run: |
+                  mkdir -p release-artifacts/core release-artifacts/cli
+                  pnpm --filter pdf-rfc3161 pack --pack-destination release-artifacts/core
+                  pnpm --filter pdf-rfc3161-cli pack --pack-destination release-artifacts/cli
+
+            - name: Audit packed package contents
+              shell: bash
+              run: |
+                  shopt -s nullglob
+                  core_archives=(release-artifacts/core/*.tgz)
+                  cli_archives=(release-artifacts/cli/*.tgz)
+                  if [[ ${#core_archives[@]} -ne 1 || ${#cli_archives[@]} -ne 1 ]]; then
+                    echo "Expected exactly one tarball for each public package" >&2
+                    exit 1
+                  fi
+
+                  core_entries=$(tar -tzf "${core_archives[0]}" | LC_ALL=C sort)
+                  core_count=$(printf '%s\n' "$core_entries" | wc -l)
+                  if [[ $core_count -ne 26 ]]; then
+                    echo "Expected 26 files in pdf-rfc3161 tarball, found $core_count" >&2
+                    exit 1
+                  fi
+
+                  required_core=(
+                    package/LICENSE
+                    package/package.json
+                    package/dist/advanced.cjs
+                    package/dist/advanced.d.cts
+                    package/dist/advanced.d.ts
+                    package/dist/advanced.js
+                    package/dist/index.cjs
+                    package/dist/index.d.cts
+                    package/dist/index.d.ts
+                    package/dist/index.js
+                    package/dist/internals.cjs
+                    package/dist/internals.d.cts
+                    package/dist/internals.d.ts
+                    package/dist/internals.js
+                    package/dist/rfcs/rfc5544.cjs
+                    package/dist/rfcs/rfc5544.d.cts
+                    package/dist/rfcs/rfc5544.d.ts
+                    package/dist/rfcs/rfc5544.js
+                    package/dist/rfcs/rfc8933.cjs
+                    package/dist/rfcs/rfc8933.d.cts
+                    package/dist/rfcs/rfc8933.d.ts
+                    package/dist/rfcs/rfc8933.js
+                  )
+                  for required_file in "${required_core[@]}"; do
+                    if ! grep -Fxq "$required_file" <<< "$core_entries"; then
+                      echo "Missing required file in pdf-rfc3161 tarball: $required_file" >&2
+                      exit 1
+                    fi
+                  done
+
+                  unexpected_core=$(printf '%s\n' "$core_entries" | grep -Ev \
+                    '^package/(LICENSE|package\.json|dist/(advanced|index|internals)\.(cjs|js|d\.cts|d\.ts)|dist/rfcs/rfc(5544|8933)\.(cjs|js|d\.cts|d\.ts)|dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}\.d\.(cts|ts))$' \
+                    || true)
+                  if [[ -n "$unexpected_core" ]]; then
+                    echo "Unexpected file in pdf-rfc3161 tarball:" >&2
+                    echo "$unexpected_core" >&2
+                    exit 1
+                  fi
+
+                  expected_cli=$'package/LICENSE\npackage/dist/cli.cjs\npackage/dist/cli.js\npackage/package.json'
+                  actual_cli=$(tar -tzf "${cli_archives[0]}" | LC_ALL=C sort)
+                  if [[ "$actual_cli" != "$expected_cli" ]]; then
+                    echo "Unexpected file list in pdf-rfc3161-cli tarball:" >&2
+                    echo "$actual_cli" >&2
+                    exit 1
+                  fi
+
+                  if tar -xOf "${cli_archives[0]}" package/package.json | grep -Fq 'workspace:'; then
+                    echo "pnpm workspace dependency leaked into pdf-rfc3161-cli tarball" >&2
+                    exit 1
+                  fi
+
+            - name: Upload release artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: npm-packages
+                  path: release-artifacts
+                  if-no-files-found: error
+                  retention-days: 7
+
+    stage-core:
+        name: Stage pdf-rfc3161@${{ inputs.version }} on npm
+        needs: verify
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+                  package-manager-cache: false
+
+            - name: Download release artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: npm-packages
+                  path: release-artifacts
+
+            - name: Verify npm supports staged publishing
+              shell: bash
+              run: |
+                  npm_version=$(npm --version)
+                  npm_major=${npm_version%%.*}
+                  npm_rest=${npm_version#*.}
+                  npm_minor=${npm_rest%%.*}
+                  if ((npm_major < 11 || (npm_major == 11 && npm_minor < 15))); then
+                    echo "npm 11.15.0 or newer is required, found $npm_version" >&2
+                    exit 1
+                  fi
+
+            - name: Stage pdf-rfc3161
+              run: npm stage publish release-artifacts/core/*.tgz --access public
+
+    stage-cli:
+        name: Stage pdf-rfc3161-cli@${{ inputs.version }} on npm
+        needs: [verify, stage-core]
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+                  package-manager-cache: false
+
+            - name: Download release artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: npm-packages
+                  path: release-artifacts
+
+            - name: Verify npm supports staged publishing
+              shell: bash
+              run: |
+                  npm_version=$(npm --version)
+                  npm_major=${npm_version%%.*}
+                  npm_rest=${npm_version#*.}
+                  npm_minor=${npm_rest%%.*}
+                  if ((npm_major < 11 || (npm_major == 11 && npm_minor < 15))); then
+                    echo "npm 11.15.0 or newer is required, found $npm_version" >&2
+                    exit 1
+                  fi
+
+            - name: Stage pdf-rfc3161-cli
+              run: npm stage publish release-artifacts/cli/*.tgz --access public
+
+            - name: Summarize manual review
+              shell: bash
+              run: |
+                  {
+                    echo "## npm packages staged for review"
+                    echo
+                    echo "The workflow stops here. Use npm CLI 11.15.0 or newer with 2FA:"
+                    echo
+                    echo '```bash'
+                    echo "npm stage list pdf-rfc3161"
+                    echo "npm stage list pdf-rfc3161-cli"
+                    echo "npm stage view <stage-id>"
+                    echo "npm stage download <stage-id>"
+                    echo "npm stage approve <stage-id>"
+                    echo '```'
+                  } >> "$GITHUB_STEP_SUMMARY"

@@ -82,8 +82,8 @@ describe("offline PAdES validation-tool policy", () => {
         ).toThrow(/SHA-256 mismatch/);
     });
 
-    it("keeps CI, release, and publish on the one pinned installation policy", () => {
-        for (const workflow of ["ci.yml", "release.yml", "publish.yml"]) {
+    it("keeps CI and release on the one pinned installation policy", () => {
+        for (const workflow of ["ci.yml", "release.yml"]) {
             const content = readFileSync(
                 resolve(REPOSITORY_ROOT, ".github/workflows", workflow),
                 "utf8"
@@ -94,6 +94,84 @@ describe("offline PAdES validation-tool policy", () => {
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run install:pades-oracles");
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run assert:pades-oracles");
         }
+    });
+
+    it("isolates npm trusted staging and stages pnpm-normalized tarballs", () => {
+        const workflow = readFileSync(
+            resolve(REPOSITORY_ROOT, ".github/workflows/release.yml"),
+            "utf8"
+        );
+        const changesetConfig = JSON.parse(
+            readFileSync(resolve(REPOSITORY_ROOT, ".changeset/config.json"), "utf8")
+        ) as { fixed?: string[][] };
+        const contributing = readFileSync(resolve(REPOSITORY_ROOT, "CONTRIBUTING.md"), "utf8");
+        const triggerBlock = workflow.slice(
+            workflow.indexOf("on:"),
+            workflow.indexOf("concurrency:")
+        );
+        const triggerKeyLines = triggerBlock
+            .split("\n")
+            .filter((line) => /^\s+[a-z_]+:/.test(line));
+        const triggerIndent = Math.min(...triggerKeyLines.map((line) => line.search(/\S/)));
+        const triggerKeys = triggerKeyLines
+            .filter((line) => line.search(/\S/) === triggerIndent)
+            .map((line) => line.trim().split(":", 1)[0]);
+        const coreJob = workflow.indexOf("  stage-core:");
+        const cliJob = workflow.indexOf("  stage-cli:");
+        const coreStage = workflow.indexOf(
+            "npm stage publish release-artifacts/core/*.tgz --access public"
+        );
+        const cliStage = workflow.indexOf(
+            "npm stage publish release-artifacts/cli/*.tgz --access public"
+        );
+
+        expect(workflow).toContain("name: Verify and package");
+        expect(triggerKeys).toEqual(["workflow_dispatch"]);
+        expect(workflow).toContain("description: Package version to stage (for example, 0.2.0)");
+        expect(workflow).toContain("EXPECTED_VERSION: ${{ inputs.version }}");
+        expect(workflow).toContain("does not match requested release");
+        expect(workflow).toContain("if: github.ref == 'refs/heads/main'");
+        expect(workflow).toContain("name: Reject unapplied changesets");
+        expect(workflow).toContain("Run pnpm changeset version before releasing");
+        expect(workflow).toContain("Public package versions must match");
+        expect(workflow).toContain("name: Lint");
+        expect(workflow).toContain("run: pnpm lint");
+        expect(workflow).toContain("name: Audit packed package contents");
+        expect(workflow).toContain("Unexpected file in pdf-rfc3161 tarball");
+        expect(workflow).toContain("Expected 26 files in pdf-rfc3161 tarball");
+        expect(workflow).toContain("required_core=(");
+        expect(workflow).toContain("dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}");
+        expect(workflow).toContain("workspace:");
+        expect(workflow).toContain("name: Stage pdf-rfc3161@${{ inputs.version }} on npm");
+        expect(workflow).toContain("name: Stage pdf-rfc3161-cli@${{ inputs.version }} on npm");
+        expect(workflow).toContain("name: Verify npm supports staged publishing");
+        expect(workflow).toContain("npm 11.15.0 or newer is required");
+        expect(workflow).toContain("package-manager-cache: false");
+        expect(workflow).toContain(
+            "pnpm --filter pdf-rfc3161 pack --pack-destination release-artifacts/core"
+        );
+        expect(workflow).toContain(
+            "pnpm --filter pdf-rfc3161-cli pack --pack-destination release-artifacts/cli"
+        );
+        expect(coreJob).toBeGreaterThan(-1);
+        expect(cliJob).toBeGreaterThan(coreJob);
+        expect(workflow.slice(coreJob, cliJob)).toContain("needs: verify");
+        expect(workflow.slice(cliJob)).toContain("needs: [verify, stage-core]");
+        expect(workflow.match(/id-token: write/g)).toHaveLength(2);
+        expect(coreStage).toBeGreaterThan(coreJob);
+        expect(coreStage).toBeLessThan(cliJob);
+        expect(cliStage).toBeGreaterThan(cliJob);
+        expect(workflow).not.toContain("npm publish ");
+        expect(workflow).not.toContain("run: npm stage approve");
+        expect(workflow).not.toContain("run: npm stage reject");
+        expect(workflow).not.toContain("NPM_TOKEN");
+        expect(workflow).not.toContain("NODE_AUTH_TOKEN");
+        expect(workflow).not.toContain("changesets/action");
+        expect(workflow).not.toContain("pnpm -r publish");
+        expect(workflow).toContain("retention-days: 7");
+        expect(contributing).toContain("./pdf-rfc3161-0.2.0-*.tgz");
+        expect(contributing).toContain("./pdf-rfc3161-cli-0.2.0-*.tgz");
+        expect(changesetConfig.fixed).toEqual([["pdf-rfc3161", "pdf-rfc3161-cli"]]);
     });
 
     it("downloads fixed official snapshot artifacts, verifies them, and extracts without host installation", () => {
