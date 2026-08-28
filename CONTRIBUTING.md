@@ -156,6 +156,29 @@ npm view pdf-rfc3161 version
 npm view pdf-rfc3161-cli version
 ```
 
+### Finalize the GitHub release
+
+After both npm approvals are visible on the public registry, run the **Finalize Release**
+workflow from the same `main` commit used by the successful staging run. Supply the
+version and that Release workflow's numeric run ID:
+
+```bash
+gh workflow run finalize-release.yml --ref main \
+  -f version=0.2.0 \
+  -f release_run_id=<successful-release-run-id>
+gh run watch
+```
+
+The finalizer verifies that both package manifests and the release's changelog section match the
+requested version, the `Unreleased` section is empty, the referenced Release run
+succeeded for the exact current commit, and both npm packages are public. It then creates
+`v0.2.0` at that commit and publishes the GitHub Release using the
+`0.2.0` changelog section. It cannot stage, approve, or publish npm packages.
+
+Do not create a release tag before npm approval. Do not finalize from a documentation-only
+commit made after staging: npm provenance, the Git tag, and the GitHub Release must identify the
+same source commit.
+
 ## Code style
 
 - TypeScript strict + `noUncheckedIndexedAccess` enabled.

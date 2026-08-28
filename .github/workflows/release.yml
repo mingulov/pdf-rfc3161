@@ -353,6 +353,9 @@ jobs:
 
             - name: Summarize manual review
               shell: bash
+              env:
+                  RELEASE_VERSION: ${{ inputs.version }}
+                  RELEASE_RUN_ID: ${{ github.run_id }}
               run: |
                   {
                     echo "## npm packages staged for review"
@@ -365,5 +368,11 @@ jobs:
                     echo "npm stage view <stage-id>"
                     echo "npm stage download <stage-id>"
                     echo "npm stage approve <stage-id>"
+                    echo '```'
+                    echo
+                    echo "After both approvals are public, finalize this exact commit:"
+                    echo
+                    echo '```bash'
+                    echo "gh workflow run finalize-release.yml --ref main -f version=$RELEASE_VERSION -f release_run_id=$RELEASE_RUN_ID"
                     echo '```'
                   } >> "$GITHUB_STEP_SUMMARY"

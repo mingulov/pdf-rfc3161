@@ -1,0 +1,151 @@
+name: Finalize Release
+
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: Public package version without a v prefix
+                required: true
+                type: string
+            release_run_id:
+                description: Successful Release workflow run that staged this version
+                required: true
+                type: string
+
+concurrency:
+    group: finalize-release-${{ inputs.version }}
+    cancel-in-progress: false
+
+permissions:
+    actions: read
+    contents: read
+
+jobs:
+    validate:
+        name: Validate release state
+        runs-on: ubuntu-24.04
+        env:
+            EXPECTED_VERSION: ${{ inputs.version }}
+            RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        outputs:
+            release_notes: ${{ steps.metadata.outputs.release_notes }}
+        steps:
+            - name: Require main branch
+              shell: bash
+              run: |
+                  if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+                    echo "Finalize Release must run from main" >&2
+                    exit 1
+                  fi
+
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+              with:
+                  node-version: 24
+                  package-manager-cache: false
+
+            - name: Prepare finalized release metadata
+              id: metadata
+              shell: bash
+              run: |
+                  notes_path="$RUNNER_TEMP/release-notes.md"
+                  node packages/tests/scripts/release-metadata.ts prepare \
+                    "$EXPECTED_VERSION" "$notes_path"
+                  release_notes=$(base64 -w 0 "$notes_path")
+                  echo "release_notes=$release_notes" >> "$GITHUB_OUTPUT"
+
+            - name: Verify successful staging run
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  if [[ ! "$RELEASE_RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
+                    echo "Release run ID must contain 1-20 decimal digits" >&2
+                    exit 1
+                  fi
+                  workflow_id=$(gh api \
+                    "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" \
+                    --jq '.id')
+                  gh run view "$RELEASE_RUN_ID" \
+                    --json conclusion,event,headBranch,headSha,jobs,workflowDatabaseId |
+                    node packages/tests/scripts/release-metadata.ts verify-run \
+                      "$EXPECTED_VERSION" "$GITHUB_SHA" "$workflow_id"
+
+            - name: Verify packages are public on npm
+              shell: bash
+              run: |
+                  core_version=$(npm view "pdf-rfc3161@$EXPECTED_VERSION" version)
+                  cli_version=$(npm view "pdf-rfc3161-cli@$EXPECTED_VERSION" version)
+                  if [[ "$core_version" != "$EXPECTED_VERSION" || "$cli_version" != "$EXPECTED_VERSION" ]]; then
+                    echo "Both npm packages must be public at $EXPECTED_VERSION before finalizing" >&2
+                    exit 1
+                  fi
+
+            - name: Verify release tag is unused
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  tag="v$EXPECTED_VERSION"
+                  if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+                    echo "Tag $tag already exists" >&2
+                    exit 1
+                  fi
+                  if gh release view "$tag" >/dev/null 2>&1; then
+                    echo "GitHub release $tag already exists" >&2
+                    exit 1
+                  fi
+
+    publish:
+        name: Tag and create GitHub release
+        needs: validate
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: write
+        env:
+            EXPECTED_VERSION: ${{ inputs.version }}
+            RELEASE_NOTES: ${{ needs.validate.outputs.release_notes }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Create GitHub release and tag
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  tag="v$EXPECTED_VERSION"
+                  if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+                    echo "Tag $tag already exists" >&2
+                    exit 1
+                  fi
+                  if gh release view "$tag" >/dev/null 2>&1; then
+                    echo "GitHub release $tag already exists" >&2
+                    exit 1
+                  fi
+                  notes_path="$RUNNER_TEMP/release-notes.md"
+                  printf '%s' "$RELEASE_NOTES" | base64 --decode > "$notes_path"
+                  gh release create "$tag" \
+                    --target "$GITHUB_SHA" \
+                    --title "pdf-rfc3161 $tag" \
+                    --notes-file "$notes_path"
+
+            - name: Verify published tag
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  tag="v$EXPECTED_VERSION"
+                  git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+                  tag_commit=$(git rev-list -n 1 "$tag")
+                  if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+                    echo "Published tag $tag points to $tag_commit, expected $GITHUB_SHA" >&2
+                    exit 1
+                  fi
+                  gh release view "$tag" --json isDraft,isPrerelease,url

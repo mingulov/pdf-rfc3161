@@ -9,9 +9,10 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
-This section describes unreleased next-major work combining security hardening,
-an API redesign with stricter defaults, and PDF timestamp interoperability fixes.
-It does not announce a published version or release date. See
+## [0.2.0] - 2026-08-28
+
+This release combines security hardening, an API redesign with stricter defaults,
+and PDF timestamp interoperability fixes. See
 [MIGRATION.md](./MIGRATION.md) for diff-level upgrade guidance from 0.1.x.
 **The basic `timestampPdf({ pdf, tsa })` call signature is unchanged**; the
 verify / extract path gain stricter defaults and several new opt-in checks.
@@ -68,7 +69,7 @@ verify / extract path gain stricter defaults and several new opt-in checks.
 - `addVRIForSignature(pdf, { fieldName }, { validationData })` for explicit,
   field-bound VRI updates. The legacy VRI wrappers remain available only as
   deprecated compatibility calls.
-- `MIGRATION.md` covering 0.1.x -> the unreleased next major.
+- `MIGRATION.md` covering 0.1.x -> 0.2.0.
 - Production checklist + Command-line interface sections in README; API
   tables list the new fields.
 - CLI verify flags `--strict-ess`, `--trust-store`, `--no-require-eku`,
@@ -300,7 +301,7 @@ is deferred to a separate release decision.
 - `timestampPdf()` function for adding RFC 3161 timestamps to PDFs
 - Support for SHA-256, SHA-384, and SHA-512 hash algorithms
 - Initial RFC 3161 PDF timestamp support (later DocTimeStamp dictionary
-  metadata corrections are documented in the Unreleased section)
+  metadata corrections are documented in the 0.2.0 section)
 - Cloudflare Workers and edge runtime compatibility
 - Browser support via Web Crypto API
 - TypeScript type definitions
