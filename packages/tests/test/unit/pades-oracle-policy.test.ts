@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -187,6 +188,45 @@ describe("offline PAdES validation-tool policy", () => {
         expect(contributing).toContain("./pdf-rfc3161-0.2.0-*.tgz");
         expect(contributing).toContain("./pdf-rfc3161-cli-0.2.0-*.tgz");
         expect(changesetConfig.fixed).toEqual([["pdf-rfc3161", "pdf-rfc3161-cli"]]);
+    });
+
+    it("emits newline-terminated package identity records for Bash read", () => {
+        const workflow = readFileSync(
+            resolve(REPOSITORY_ROOT, ".github/workflows/release.yml"),
+            "utf8"
+        );
+        const auditStart = workflow.indexOf("- name: Audit packed package contents");
+        const auditEnd = workflow.indexOf("- name: Test exact release artifacts", auditStart);
+        const audit = workflow.slice(auditStart, auditEnd);
+        const parsers = [...audit.matchAll(/node -e '\n([\s\S]*?)\n\s*'/g)].map(
+            (match) => match[1] ?? ""
+        );
+        const manifests = [
+            { name: "pdf-rfc3161", version: "0.2.0" },
+            {
+                name: "pdf-rfc3161-cli",
+                version: "0.2.0",
+                dependencies: { "pdf-rfc3161": "0.2.0" },
+            },
+        ];
+
+        expect(parsers).toHaveLength(manifests.length);
+        for (const [index, parser] of parsers.entries()) {
+            const manifest = manifests[index];
+            if (manifest === undefined) throw new Error("Release manifest fixture is required");
+            const node = spawnSync(process.execPath, ["-e", parser], {
+                input: JSON.stringify(manifest),
+                encoding: "utf8",
+            });
+            expect(node.status).toBe(0);
+
+            const bash = spawnSync(
+                "bash",
+                ["-euo", "pipefail", "-c", "read -r name version dependency < <(printf %s \"$IDENTITY\")"],
+                { env: { ...process.env, IDENTITY: node.stdout }, encoding: "utf8" }
+            );
+            expect(bash.status).toBe(0);
+        }
     });
 
     it("binds staged releases to the exact audited tarballs", () => {

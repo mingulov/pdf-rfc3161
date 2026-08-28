@@ -210,7 +210,7 @@ jobs:
                   read -r core_name core_version < <(
                     tar -xOf "${core_archives[0]}" package/package.json | node -e '
                       const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-                      process.stdout.write(manifest.name + " " + manifest.version + "\\n");
+                      process.stdout.write(manifest.name + " " + manifest.version + "\n");
                     '
                   )
                   if [[ "$core_name" != "pdf-rfc3161" || "$core_version" != "$EXPECTED_VERSION" ]]; then
@@ -222,7 +222,7 @@ jobs:
                     tar -xOf "${cli_archives[0]}" package/package.json | node -e '
                       const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
                       process.stdout.write(
-                        manifest.name + " " + manifest.version + " " + manifest.dependencies?.["pdf-rfc3161"] + "\\n"
+                        manifest.name + " " + manifest.version + " " + manifest.dependencies?.["pdf-rfc3161"] + "\n"
                       );
                     '
                   )
