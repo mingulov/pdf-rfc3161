@@ -125,6 +125,33 @@ jobs:
       - name: Run offline PAdES interoperability checks
         run: pnpm --filter pdf-rfc3161-tests test:interoperability
 
+  native-pdf-compatibility:
+    name: Native PDF compatibility (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26, windows-2025]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test native PDF readers
+        run: pnpm --filter pdf-rfc3161-tests exec vitest run test/unit/native-pdf-compatibility.test.ts
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-24.04
