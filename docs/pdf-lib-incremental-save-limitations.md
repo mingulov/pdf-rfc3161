@@ -5,7 +5,53 @@
 package, pinned exactly to `1.17.4` in `packages/core/package.json` and
 `packages/tests/package.json`. The upstream package is MIT licensed; its installed
 license is available at `packages/core/node_modules/pdf-lib-incremental-save/LICENSE.md`
-after installation.
+after installation. The dependency is used unmodified: no `pnpm patch` is applied, because
+install-time patches do not reach consumers of the published `pdf-rfc3161` package.
+
+Two dependency behaviors matter for the timestamp write path. First, `saveIncremental`
+picks its writer from `pdfFileDetails.useObjectStreams`, which `PDFXRefStreamParser` sets
+to `true` as soon as it parses *any* cross-reference stream anywhere in the input, not only
+in the input's last revision. Left alone, that flag makes a hybrid-history file -- an
+xref-stream document whose most recent revision is a classic table, which is exactly what
+this library itself produced up to 0.2.0 -- receive a cross-reference stream whose `/Prev`
+points at a classic table. A section whose `/Prev` points into the other format is what
+macOS CoreGraphics (Preview / Quick Look) refuses to open, and what strict Ghostscript
+refuses to follow, in either direction.
+
+So the flag is not used as the dependency sets it. `applyLastRevisionXrefFormat()` in
+`packages/core/src/pdf/internals.ts` sniffs the physical section the input's *terminal*
+`startxref` points at -- `xref` keyword means table, an `N G obj` header means stream --
+and overwrites `pdfFileDetails.useObjectStreams` with that verdict before every incremental
+save, because an update chains to the last revision and must match it. The sniff is a
+bounded tail scan and a compatibility heuristic, not a PDF parse: the tail may be
+unreadable (a terminal `startxref` beyond the 2 KiB scan window, a linearized
+`startxref 0` sentinel, an out-of-range offset, an offset landing on whitespace or
+garbage, an oversized digit run).
+
+When it is, the flag is forced to `false` -- a classic table -- rather than left as
+pdf-lib set it. Leaving it is not neutral: the flag is on for any input containing a
+cross-reference stream anywhere, so on the hybrid-history file described above an
+unreadable tail would append a cross-reference stream over a classic table. That is the
+inverse of the shape this fix removes and strictly worse than 0.2.0, which appended a
+table there. Forcing `false` reproduces 0.2.0's behavior exactly for the whole
+unreadable-tail class, which is what makes "never worse than 0.2.0" a total guarantee.
+The accepted cost is that a stream-terminated file whose tail cannot be read keeps
+0.2.0's macOS bug: not a regression, and better than emitting a shape no reader accepts.
+
+Regression coverage lives in `incremental-xref-format.test.ts` (byte-level, per revision),
+`xref-format-sniffing.test.ts` (the stand-down edges, each asserted from both starting
+flag values), and `strict-reader-oracle.test.ts` (ghostscript as a non-repairing reader,
+including a tail-padded hybrid-history file that forces the stand-down end to end).
+
+Second, `PDFStreamWriter` compresses ordinary dictionaries into object streams, and its
+compression exemption covers `/Type /Sig` dictionaries but not the PAdES `/Type
+/DocTimeStamp` dictionaries this library writes. Compressing the signature dictionary would
+destroy the physical file offsets that the `/ByteRange` and `/Contents` placeholder logic
+depends on. `packages/core/src/pdf/prepare.ts` therefore serializes the finished signature
+dictionary itself and registers the resulting bytes as a `PDFInvalidObject`, which both
+incremental writers exempt from object-stream compression unconditionally. The dictionary
+is emitted verbatim, so `/ByteRange` and `/Contents` keep physical offsets in either
+cross-reference format, with no dependency modification.
 
 ## Intended input and responsibility boundary
 
@@ -165,9 +211,16 @@ loader has returned:
   safe number or fails closed. It must never justify reuse of a possibly occupied number.
 - Every new core mutation-time object registration goes through `checkedRegister()`.
   It rejects unsafe arithmetic and verifies the number returned by the dependency.
-- `prepare.ts` and `validation-store.ts` force the incremental writer's
-  `context.pdfFileDetails.useObjectStreams = false`. This prevents the mutation writer
-  from inventing unchecked ObjStm/XRef container references in the new revision.
+- `prepare.ts` and `validation-store.ts` set the incremental writer's
+  `context.pdfFileDetails.useObjectStreams` from the input's last revision through
+  `applyLastRevisionXrefFormat()` (see the first section). They no longer force it to
+  `false`: doing so appended a classic table to xref-stream documents, the shape macOS
+  CoreGraphics rejects. When that leaves the stream writer selected, it can invent ObjStm
+  and XRef container references outside `checkedRegister()`, so both call sites decide the
+  format first and then call `assertIncrementalWriterHeadroom()`, which refuses the save
+  unless the largest object number leaves room for every reference the stream writer may
+  invent (one container per 50 compressed objects, plus the xref stream, plus the `/Size`
+  written one past them).
 
 These guards do not validate the input xref graph, resolve indirect stream lengths,
 bound parser decompression, decide whether a physical object is active, or prove that a

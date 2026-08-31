@@ -9,11 +9,11 @@ Pure-JS RFC 3161 PDF timestamping library. Monorepo with edge-runtime support (n
 ```bash
 pnpm install            # uses pnpm workspaces — npm/yarn won't work
 pnpm build              # builds all packages (tsup → ESM + CJS dual)
-pnpm test               # 965 passed, 51 skipped, 2 todo; ~6s wall-clock
+pnpm test               # needs a current `pnpm build` first (see below); 1027 passed, 51 skipped, 2 todo; ~6s wall-clock
 pnpm typecheck          # tsc --noEmit, all packages
 pnpm lint               # eslint --fix, all packages
 pnpm cli -- <args>      # run CLI from source (tsx)
-pnpm test:full          # workspace tests, then corpus robustness (missing/empty/all-skipped corpus fails), then demo E2E
+pnpm test:full          # workspace tests, corpus robustness (missing/empty/all-skipped corpus fails), packed consumer, then demo E2E
 
 # Filtered:
 pnpm --filter pdf-rfc3161-tests test
@@ -43,7 +43,7 @@ packages/
 
 **Module-level singletons:** OCSP/CRL/cert clients use shared `CircuitBreaker` instances. Serverless cold starts reset them; long-lived processes share state across calls. Tests must call `reset*Circuits()` between cases.
 
-**Test imports point at source, not dist:** `packages/tests/vitest.config.ts` aliases `pdf-rfc3161` → `../core/src/index.ts`. Tests don't require a build, but type errors in core surface only via `pnpm typecheck`.
+**Test imports point at source, not dist:** `packages/tests/vitest.config.ts` aliases `pdf-rfc3161` → `../core/src/index.ts`, so library changes need no rebuild to be tested, and type errors in core surface only via `pnpm typecheck`. **But `pnpm test` as a whole does require a current build:** the CLI suites run the real `packages/cli/dist/cli.cjs` and throw at collection (`missing build`/`missing build manifest`/`stale build: run \`pnpm build\``) when it is absent or was built from different `packages/cli/src` or `packages/core/src` sources. Run `pnpm build` first, and again after editing core or CLI sources.
 
 ## Code style
 
