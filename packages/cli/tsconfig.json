@@ -5,7 +5,8 @@
         "baseUrl": "."
     },
     "include": [
-        "src/**/*"
+        "src/**/*",
+        "scripts/**/*"
     ],
     "exclude": [
         "node_modules",
