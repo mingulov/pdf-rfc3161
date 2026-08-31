@@ -229,6 +229,133 @@ export function restoreLargestObjectNumber(
     context.largestObjectNumber = largest;
 }
 
+/** PDFStreamWriter's default objectsPerStream; one ObjStm reference per chunk. */
+const WRITER_OBJECTS_PER_STREAM = 50;
+
+/**
+ * Counts the context's indirect objects without materializing them.
+ * `enumerateIndirectObjects()` allocates an array and sorts it, which is pure
+ * waste when only the count is wanted. pdf-lib keeps the objects in a Map whose
+ * `.size` is O(1) but declares the field private, so read it defensively and
+ * fall back to the public enumeration if a future build changes that shape.
+ */
+function countIndirectObjects(context: ObjectNumberContext): number {
+    const objects: unknown = (context as unknown as { indirectObjects?: unknown }).indirectObjects;
+    if (objects instanceof Map) {
+        return objects.size;
+    }
+    return context.enumerateIndirectObjects().length;
+}
+
+/**
+ * PDFStreamWriter invents object-stream container and cross-reference-stream
+ * references starting at largestObjectNumber + 1, outside checkedRegister. It
+ * creates one container per chunk of WRITER_OBJECTS_PER_STREAM compressed saved
+ * objects plus one cross-reference stream, then writes /Size one past the
+ * highest number it used. Counting every indirect object rather than only the
+ * compressed saved subset keeps the bound conservative without walking the
+ * snapshot, so proving headroom for (containers + 2) keeps every invented
+ * number inside the supported safe-integer range.
+ *
+ * saveIncremental only reaches that writer when pdfFileDetails.useObjectStreams
+ * is set; the classic PDFWriter invents no references at all, and its /Size of
+ * largestObjectNumber + 1 is already bounded by MAX_SUPPORTED_OBJECT_NUMBER.
+ * Reserving for it too would reject classic updates that remain safe.
+ */
+export function assertIncrementalWriterHeadroom(
+    context: ObjectNumberContext & { pdfFileDetails: { useObjectStreams: boolean } }
+): void {
+    if (!context.pdfFileDetails.useObjectStreams) {
+        return;
+    }
+    const containers = Math.ceil(countIndirectObjects(context) / WRITER_OBJECTS_PER_STREAM);
+    assertSupportedObjectNumber(
+        context.largestObjectNumber + containers + 2,
+        "PDF incremental save object allocation"
+    );
+}
+
+/**
+ * Bytes of the file tail scanned for the terminal `startxref`. A conforming
+ * trailer keeps it within the last few dozen bytes; 2 KiB absorbs generous
+ * padding and stray comments without ever walking a large file.
+ */
+const MAX_PDF_TAIL_SCAN = 2048;
+
+/** Enough bytes at the recorded offset to classify `xref` or an `N G obj` header. */
+const MAX_XREF_PROBE_BYTES = 40;
+
+function isXrefKeyword(bytes: Uint8Array): boolean {
+    return (
+        bytes[0] === 0x78 &&
+        bytes[1] === 0x72 &&
+        bytes[2] === 0x65 &&
+        bytes[3] === 0x66 &&
+        isPdfWhitespace(bytes[4])
+    );
+}
+
+/**
+ * Classifies the physical cross-reference section the file's terminal
+ * `startxref` points at. Returns undefined whenever the tail cannot be read
+ * with confidence -- notably a linearized `startxref 0` sentinel, an offset
+ * past the end of the file, or bytes that are neither `xref` nor an object
+ * header. This is a compatibility heuristic, not a PDF parse.
+ */
+function lastRevisionXrefFormat(pdfBytes: Uint8Array): "table" | "stream" | undefined {
+    const decoder = new TextDecoder("latin1");
+    const tail = pdfBytes.subarray(Math.max(0, pdfBytes.length - MAX_PDF_TAIL_SCAN));
+    // Bounded quantifiers: these bytes are untrusted PDF input.
+    const matches = [...decoder.decode(tail).matchAll(/startxref\s{1,16}(\d{1,20})/g)];
+    const digits = matches.at(-1)?.[1];
+    if (digits === undefined) {
+        return undefined;
+    }
+
+    const offset = Number(digits);
+    if (!Number.isSafeInteger(offset) || offset <= 0 || offset >= pdfBytes.length) {
+        return undefined;
+    }
+
+    const probe = pdfBytes.subarray(offset, offset + MAX_XREF_PROBE_BYTES);
+    if (isXrefKeyword(probe)) {
+        return "table";
+    }
+    if (/^\d{1,20}\s{1,4}\d{1,5}\s{1,4}obj/.test(decoder.decode(probe))) {
+        return "stream";
+    }
+    return undefined;
+}
+
+/**
+ * Chooses the cross-reference format for the next incremental section.
+ *
+ * pdf-lib sets `pdfFileDetails.useObjectStreams` in the xref-stream parser's
+ * constructor, so ANY cross-reference stream anywhere in the file's history
+ * turns it on. An update chains to the LAST revision through /Prev, and a
+ * section whose /Prev points at the other format is what macOS CoreGraphics
+ * and strict Ghostscript refuse to follow. Sniff the physical format at the
+ * final startxref offset instead.
+ *
+ * When the tail cannot be read, fall back to the classic table -- do NOT leave
+ * pdf-lib's flag alone. Leaving it is not neutral: for a hybrid-history file
+ * (xref-stream base, classic-table last revision, exactly what v0.2.0 itself
+ * emitted) the flag is on, so an unreadable tail would append a cross-reference
+ * STREAM over a classic TABLE. That is the inverse of the shape this fix
+ * removes and strictly worse than v0.2.0, which appended a table there.
+ * Clearing the flag reproduces v0.2.0's behaviour exactly for the whole
+ * unreadable-tail class, which is what makes "never worse than v0.2.0" a total
+ * guarantee. The accepted cost is that a stream-terminated file whose tail we
+ * cannot read keeps v0.2.0's macOS bug: not a regression, and better than
+ * emitting a shape no reader accepts.
+ */
+export function applyLastRevisionXrefFormat(
+    pdfBytes: Uint8Array,
+    context: { pdfFileDetails: { useObjectStreams: boolean } }
+): void {
+    context.pdfFileDetails.useObjectStreams = lastRevisionXrefFormat(pdfBytes) === "stream";
+}
+
 /**
  * Allocate through pdf-lib only while its next object number remains exactly
  * representable. Callers must use this for every mutation-time registration.

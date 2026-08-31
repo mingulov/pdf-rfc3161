@@ -13,7 +13,12 @@ import { TimestampError, TimestampErrorCode, type ExtractOptions } from "../type
 import { bytesToHex, toArrayBuffer } from "../utils.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import type { LTVData } from "./ltv.js";
-import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
+import {
+    applyLastRevisionXrefFormat,
+    assertIncrementalWriterHeadroom,
+    checkedRegister,
+    restoreLargestObjectNumber,
+} from "./internals.js";
 import { collectAcroFormFields } from "./field-traversal.js";
 
 export interface ValidationStoreUpdate {
@@ -669,9 +674,16 @@ export async function updateValidationStore(
             snapshot.markRefForSave(catalogRef);
         }
 
-        // PDFStreamWriter invents object-stream and xref-stream references outside
-        // checkedRegister. The classic incremental writer allocates none of those.
-        context.pdfFileDetails.useObjectStreams = false;
+        // saveIncremental picks PDFStreamWriter when the parser saw an xref
+        // stream (pdfFileDetails.useObjectStreams). The update section must use
+        // the same cross-reference format as the revision it chains to, i.e.
+        // the input's LAST one: CoreGraphics refuses a section whose /Prev
+        // points at the other format (PR#63). pdf-lib's own flag is set by any
+        // xref stream anywhere in the history, so re-derive it from the tail.
+        // PDFStreamWriter invents ObjStm/XRef refs outside checkedRegister, so
+        // decide the format first, then prove the allocation headroom.
+        applyLastRevisionXrefFormat(pdfBytes, context);
+        assertIncrementalWriterHeadroom(context);
         const incrementalBytes = await pdfDoc.saveIncremental(snapshot);
         const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);
         finalBytes.set(pdfBytes, 0);
