@@ -44,6 +44,9 @@ jobs:
             - name: Type check
               run: pnpm typecheck
 
+            - name: Install ghostscript (strict PDF oracle)
+              run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ghostscript
+
             - name: Test
               run: pnpm test
 
@@ -120,6 +123,9 @@ jobs:
 
             - name: Type check
               run: pnpm typecheck
+
+            - name: Install ghostscript (strict PDF oracle)
+              run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ghostscript
 
             - name: Test
               run: pnpm test
