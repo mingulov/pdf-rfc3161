@@ -9,6 +9,25 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-30
+
+Patch release: macOS Preview/Quick Look compatibility fix for timestamped
+output. No API changes.
+
+### Fixed
+
+- PDFs timestamped from inputs that use cross-reference streams (the modern
+  default) failed to open in macOS Preview/Quick Look and strict Ghostscript,
+  because incremental updates always appended classic xref tables. Incremental
+  sections now use a cross-reference stream whenever the input contains one,
+  and a classic xref table for pure classic-table inputs. The `/DocTimeStamp`
+  signature dictionary is serialized and written as a pre-rendered object so
+  neither incremental writer can compress it into an object stream (reported
+  in #63; regression harness in #65). Note that files already produced by
+  0.2.0 from cross-reference-stream inputs stay unopenable in macOS Preview
+  and are not repaired by re-timestamping them; regenerate them by
+  timestamping the original input again.
+
 ## [0.2.0] - 2026-08-28
 
 This release combines security hardening, an API redesign with stricter defaults,

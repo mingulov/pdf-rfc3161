@@ -1,6 +1,6 @@
 {
     "name": "pdf-rfc3161-cli",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Command-line interface for pdf-rfc3161",
     "keywords": [
         "pdf",
@@ -35,7 +35,7 @@
         "dev": "tsup --watch",
         "start": "tsx src/cli.ts",
         "typecheck": "tsc --noEmit",
-        "lint": "eslint src --fix",
+        "lint": "eslint src scripts --fix",
         "prepack": "pnpm run build"
     },
     "dependencies": {
