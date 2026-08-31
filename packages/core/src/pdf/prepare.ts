@@ -1,6 +1,7 @@
 import {
     PDFDocument,
     PDFDict,
+    PDFInvalidObject,
     PDFName,
     PDFHexString,
     PDFArray,
@@ -8,6 +9,7 @@ import {
     PDFString,
     PDFRef,
     PDFObject,
+    type PDFContext,
 } from "pdf-lib-incremental-save";
 import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
@@ -15,7 +17,12 @@ import {
     MAX_FIELD_HIERARCHY_DEPTH,
     MAX_FIELD_HIERARCHY_NODES,
 } from "./field-traversal.js";
-import { checkedRegister, restoreLargestObjectNumber } from "./internals.js";
+import {
+    applyLastRevisionXrefFormat,
+    assertIncrementalWriterHeadroom,
+    checkedRegister,
+    restoreLargestObjectNumber,
+} from "./internals.js";
 
 /**
  * L5: caps how long a single user-supplied PDF string (reason / location /
@@ -285,6 +292,76 @@ function formatPdfDate(date: Date): string {
 }
 
 /**
+ * Builds the /DocTimeStamp signature dictionary and registers it as a
+ * pre-rendered object instead of a live PDFDict. Both incremental writers
+ * exempt PDFInvalidObject from object-stream compression unconditionally, so
+ * the raw /ByteRange and /Contents placeholder bytes keep physical file offsets
+ * whichever cross-reference format the input uses. A live PDFDict would only
+ * survive PDFStreamWriter (used for cross-reference-stream inputs) if that
+ * writer exempted /Type /DocTimeStamp, which it does not.
+ *
+ * The mutable dictionary never leaves this function: once its bytes are copied
+ * out they are frozen, and a later `set` would silently vanish from the output.
+ * Returning only the ref makes that invariant a scope rule rather than a
+ * comment the next editor has to notice.
+ */
+function registerFrozenSignatureDictionary(
+    sigContext: PDFContext,
+    placeholderHex: string,
+    options: PrepareOptions
+): PDFRef {
+    const sigDictFields: Record<string, PDFObject> = {
+        Type: PDFName.of("DocTimeStamp"),
+        Filter: PDFName.of("Adobe.PPKLite"),
+        SubFilter: PDFName.of("ETSI.RFC3161"),
+        ByteRange: PDFArray.withContext(sigContext),
+        Contents: PDFHexString.of(placeholderHex),
+    };
+
+    if (options.omitModificationTime === false) {
+        sigDictFields.M = PDFString.of(formatPdfDate(new Date()));
+    }
+
+    const newSigDict = sigContext.obj(sigDictFields);
+
+    const newByteRangeArr = newSigDict.get(PDFName.of("ByteRange")) as PDFArray;
+    newByteRangeArr.push(PDFNumber.of(0));
+    newByteRangeArr.push(PDFNumber.of(111111111111));
+    newByteRangeArr.push(PDFNumber.of(111111111111));
+    newByteRangeArr.push(PDFNumber.of(111111111111));
+    newByteRangeArr.push(PDFNumber.of(111111111111));
+    newByteRangeArr.push(PDFNumber.of(111111111111));
+
+    // L5: sanitize and length-cap user-supplied PDF strings before passing them
+    // to pdf-lib. pdf-lib's PDFString.of handles encoding, but rejects nothing
+    // up front: extremely long strings bloat the signature dictionary and
+    // embedded NULs / control chars confuse some PDF readers.
+    if (options.reason !== undefined) {
+        newSigDict.set(
+            PDFName.of("Reason"),
+            PDFString.of(sanitizePdfString(options.reason, "reason"))
+        );
+    }
+    if (options.location !== undefined) {
+        newSigDict.set(
+            PDFName.of("Location"),
+            PDFString.of(sanitizePdfString(options.location, "location"))
+        );
+    }
+    if (options.contactInfo !== undefined) {
+        newSigDict.set(
+            PDFName.of("ContactInfo"),
+            PDFString.of(sanitizePdfString(options.contactInfo, "contactInfo"))
+        );
+    }
+
+    // Nothing may mutate newSigDict past this point: the bytes are frozen here.
+    const sigDictBytes = new Uint8Array(newSigDict.sizeInBytes());
+    newSigDict.copyBytesInto(sigDictBytes, 0);
+    return checkedRegister(sigContext, PDFInvalidObject.of(sigDictBytes));
+}
+
+/**
  * Prepares a PDF for DocTimeStamp by adding a signature field with placeholder content.
  * Returns the prepared PDF and information needed to calculate the final ByteRange.
  *
@@ -337,53 +414,7 @@ export async function preparePdfForTimestamp(
     // Take snapshot before modifications
     const snapshot = sigPdfDoc.takeSnapshot();
 
-    // Create new signature dictionary
-    const sigDictFields: Record<string, PDFObject> = {
-        Type: PDFName.of("DocTimeStamp"),
-        Filter: PDFName.of("Adobe.PPKLite"),
-        SubFilter: PDFName.of("ETSI.RFC3161"),
-        ByteRange: PDFArray.withContext(sigContext),
-        Contents: PDFHexString.of(placeholderHex),
-    };
-
-    if (options.omitModificationTime === false) {
-        sigDictFields.M = PDFString.of(formatPdfDate(new Date()));
-    }
-
-    const newSigDict = sigContext.obj(sigDictFields);
-
-    const newByteRangeArr = newSigDict.get(PDFName.of("ByteRange")) as PDFArray;
-    newByteRangeArr.push(PDFNumber.of(0));
-    newByteRangeArr.push(PDFNumber.of(111111111111));
-    newByteRangeArr.push(PDFNumber.of(111111111111));
-    newByteRangeArr.push(PDFNumber.of(111111111111));
-    newByteRangeArr.push(PDFNumber.of(111111111111));
-    newByteRangeArr.push(PDFNumber.of(111111111111));
-
-    // L5: sanitize and length-cap user-supplied PDF strings before passing them
-    // to pdf-lib. pdf-lib's PDFString.of handles encoding, but rejects nothing
-    // up front: extremely long strings bloat the signature dictionary and
-    // embedded NULs / control chars confuse some PDF readers.
-    if (options.reason !== undefined) {
-        newSigDict.set(
-            PDFName.of("Reason"),
-            PDFString.of(sanitizePdfString(options.reason, "reason"))
-        );
-    }
-    if (options.location !== undefined) {
-        newSigDict.set(
-            PDFName.of("Location"),
-            PDFString.of(sanitizePdfString(options.location, "location"))
-        );
-    }
-    if (options.contactInfo !== undefined) {
-        newSigDict.set(
-            PDFName.of("ContactInfo"),
-            PDFString.of(sanitizePdfString(options.contactInfo, "contactInfo"))
-        );
-    }
-
-    const newSigRef = checkedRegister(sigContext, newSigDict);
+    const newSigRef = registerFrozenSignatureDictionary(sigContext, placeholderHex, options);
 
     const catalogRef = sigContext.trailerInfo.Root;
     const markCatalogForSave = (): void => {
@@ -499,7 +530,13 @@ export async function preparePdfForTimestamp(
         }
     }
 
-    sigContext.pdfFileDetails.useObjectStreams = false;
+    // Match the LAST revision's cross-reference format (see
+    // updateValidationStore for the full rationale); the signature dictionary
+    // is registered as a pre-rendered PDFInvalidObject above so ByteRange
+    // offsets stay physical. The format has to be decided before the headroom
+    // guard, which only reserves on the stream path.
+    applyLastRevisionXrefFormat(pdfBytes, sigContext);
+    assertIncrementalWriterHeadroom(sigContext);
     const incrementalBytes = await sigPdfDoc.saveIncremental(snapshot);
 
     const finalBytes = new Uint8Array(pdfBytes.length + incrementalBytes.length);
