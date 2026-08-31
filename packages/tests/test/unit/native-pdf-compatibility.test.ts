@@ -5,13 +5,16 @@ import { dirname, join } from "node:path";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { timestampPdf } from "pdf-rfc3161";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRFC3161TokenFixtureFromRequest } from "../fixtures/rfc3161-token.js";
+import { stubTsaFetch } from "../utils/timestamp-fixtures.js";
 
 const MACOS_ORACLE = `
 import Foundation
 import PDFKit
 
-let path = CommandLine.arguments.last!
+guard let path = ProcessInfo.processInfo.environment["PDF_RFC3161_NATIVE_PDF"] else {
+    fputs("PDF_RFC3161_NATIVE_PDF is not set\\n", stderr)
+    exit(1)
+}
 guard let document = PDFDocument(url: URL(fileURLWithPath: path)) else {
     fputs("PDFKit could not open the PDF\\n", stderr)
     exit(1)
@@ -85,21 +88,7 @@ async function createTimestampedLtvPdf(): Promise<string> {
     document.addPage([200, 200]);
     const input = await document.save();
 
-    vi.stubGlobal(
-        "fetch",
-        vi.fn(async (_url: string | URL | Request, options?: RequestInit) => {
-            if (!(options?.body instanceof ArrayBuffer)) {
-                throw new Error("Expected the TSA request as an ArrayBuffer");
-            }
-            const fixture = await createRFC3161TokenFixtureFromRequest(
-                new Uint8Array(options.body),
-                { form: "response" }
-            );
-            return new Response(new Uint8Array(fixture.response).buffer, {
-                headers: { "content-type": "application/timestamp-reply" },
-            });
-        })
-    );
+    stubTsaFetch();
 
     const result = await timestampPdf({
         pdf: input,
@@ -124,8 +113,9 @@ function commandFailure(status: number | null, stdout: string, stderr: string): 
 describe.runIf(process.platform === "darwin")("macOS native PDF compatibility", () => {
     it("opens a multi-page timestampPdf LTV result with PDFKit", async () => {
         const path = await createTimestampedLtvPdf();
-        const result = spawnSync("xcrun", ["swift", "-e", MACOS_ORACLE, "--", path], {
+        const result = spawnSync("xcrun", ["swift", "-e", MACOS_ORACLE], {
             encoding: "utf8",
+            env: { ...process.env, PDF_RFC3161_NATIVE_PDF: path },
             timeout: 20_000,
         });
 
