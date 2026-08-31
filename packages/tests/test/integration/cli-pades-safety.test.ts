@@ -13,10 +13,13 @@ import {
     CLI_PADES_TIMESTAMP_RESPONSE,
 } from "../fixtures/cli-pades/cli-pades-response-fixture.js";
 import { extractTimestamps } from "pdf-rfc3161";
+import { assertCliDistIsFresh, CLI_DIST_PATH } from "../utils/cli-dist.js";
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(TEST_DIRECTORY, "../../../..");
-const CLI_PATH = join(REPOSITORY_ROOT, "packages/cli/dist/cli.cjs");
+const CLI_PATH = CLI_DIST_PATH;
+// These cases run the built bundle, so a stale dist would test old code.
+assertCliDistIsFresh();
 const DETERMINISTIC_WEBCRYPTO_PRELOAD = join(
     TEST_DIRECTORY,
     "../fixtures/cli-pades/deterministic-webcrypto.cjs"

@@ -4,6 +4,12 @@ import { spawn } from "child_process";
 import { writeFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { assertCliDistIsFresh, CLI_DIST_PATH } from "../utils/cli-dist.js";
+
+// This suite spawns the built bundle, so a stale or missing
+// packages/cli/dist/cli.cjs would test yesterday's code. Fail at collection
+// instead, the same way cli-pades-safety.test.ts does.
+assertCliDistIsFresh();
 
 describe("CLI Integration Tests", () => {
     const testDir = tmpdir();
@@ -499,8 +505,7 @@ describe("CLI Integration Tests", () => {
         stderr: string;
     }> {
         return new Promise((resolve) => {
-            const child = spawn("node", ["../cli/dist/cli.cjs", ...args], {
-                cwd: process.cwd(),
+            const child = spawn(process.execPath, [CLI_DIST_PATH, ...args], {
                 stdio: ["pipe", "pipe", "pipe"],
             });
 
