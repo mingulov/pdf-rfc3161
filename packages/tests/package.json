@@ -16,7 +16,7 @@
         "test:integration": "vitest run test/integration",
         "test:robustness": "tsx scripts/test-robustness.ts",
         "typecheck": "tsc --noEmit",
-        "lint": "eslint test scripts/test-packed-consumer.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts scripts/pades-oracles.ts scripts/install-pades-oracles.ts scripts/assert-pades-oracles.ts scripts/release-metadata.ts --fix"
+        "lint": "eslint test scripts/test-packed-consumer.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts scripts/packed-consumer-config.ts scripts/pades-oracles.ts scripts/install-pades-oracles.ts scripts/assert-pades-oracles.ts scripts/release-metadata.ts --fix"
     },
     "dependencies": {
         "asn1js": "^3.0.10",

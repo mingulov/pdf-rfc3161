@@ -9,6 +9,27 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-07
+
+Release tooling and dependency refresh. **Node.js >=22.12.0 is now required**
+for both the library and CLI; Node.js 20 is no longer supported.
+
+### Fixed
+
+- Packed-consumer tests now use pnpm 12's workspace override so the CLI and
+  consumer both load the supplied core tarball. Unpublished releases can be
+  tested before publishing, and a resolution check rejects a registry core
+  substituted for the candidate artifact.
+
+### Changed
+
+- Refreshed dependencies and development tools, including Commander 15,
+  pnpm 12, TypeScript 7, and the pinned PDF validation tools.
+- Updated CI coverage to Node.js 22, 24, and 26, pinned GitHub Actions to
+  immutable commits, and made the dependency audit blocking.
+- Added independent timestamp verification with verifiedby to the offline
+  PAdES conformance checks.
+
 ## [0.2.1] - 2026-08-30
 
 Patch release: macOS Preview/Quick Look compatibility fix for timestamped
