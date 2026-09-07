@@ -11,7 +11,7 @@ import {
     type VerificationOptions,
 } from "pdf-rfc3161";
 import { addVRIForSignature } from "pdf-rfc3161/internals";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 type HasNoStandaloneResponseValidator =
     "validateTimestampResponse" extends keyof typeof import("pdf-rfc3161") ? false : true;
@@ -37,14 +37,14 @@ async function typecheckMigrationExamples(
     } satisfies TimestampRequestOptions;
     const { request, nonce } = await createTimestampRequest(pdf, requestOptions);
     const responseBytes = await sendTimestampRequest(request, tsa);
-    void nonce;
 
     const session = new TimestampSession(pdf, { hashAlgorithm: "SHA-256" });
     const sessionRequest = await session.createTimestampRequest();
     const sessionResponse = await sendTimestampRequest(sessionRequest, tsa);
     const timestampedPdf = await session.embedTimestampToken(sessionResponse);
-    void responseBytes;
-    void timestampedPdf;
+    expectTypeOf(nonce).toEqualTypeOf<Uint8Array>();
+    expectTypeOf(responseBytes).toEqualTypeOf<Uint8Array>();
+    expectTypeOf(timestampedPdf).toEqualTypeOf<Uint8Array>();
 
     const verificationOptions = {
         requireTimestampingEKU: false,

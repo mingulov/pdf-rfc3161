@@ -33,7 +33,7 @@ Build the package and generate a fresh sample into a caller-selected directory. 
 generator has no default TSA URL or output path.
 
 ```bash
-corepack pnpm@10.30.3 build
+pnpm build
 node packages/tests/scripts/generate-check-files.cjs \
   --output-dir <absolute-output-directory> \
   --tsa-url <https-or-http-tsa-url>
@@ -55,7 +55,7 @@ yet exist; its parent directory must already exist:
 ```bash
 ARTIFACT_DIR=<absolute-new-artifact-directory>
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
-  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability \
+  pnpm --filter pdf-rfc3161-tests test:interoperability \
     --output-dir "$ARTIFACT_DIR"
 for FILE_NAME in timestamped.pdf root.pem response.tsr covered.bin request.tsq; do
   sha256sum "$ARTIFACT_DIR/$FILE_NAME"

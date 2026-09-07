@@ -10,7 +10,7 @@ const versionInfo = () => {
             let version = "0.0.0";
             try {
                 const pkg = JSON.parse(
-                    fs.readFileSync(path.resolve(__dirname, "../core/package.json"), "utf-8")
+                    fs.readFileSync(path.resolve(import.meta.dirname, "../core/package.json"), "utf-8")
                 );
                 version = pkg.version || "0.0.0";
             } catch {
@@ -37,11 +37,11 @@ export default defineConfig({
     plugins: [react(), versionInfo()],
     resolve: {
         alias: {
-            "pdf-rfc3161/internals": path.resolve(__dirname, "../core/src/internals.ts"),
-            "pdf-rfc3161/advanced": path.resolve(__dirname, "../core/src/advanced.ts"),
-            "pdf-rfc3161/rfcs/rfc5544": path.resolve(__dirname, "../core/src/rfcs/rfc5544.ts"),
-            "pdf-rfc3161/rfcs/rfc8933": path.resolve(__dirname, "../core/src/rfcs/rfc8933.ts"),
-            "pdf-rfc3161": path.resolve(__dirname, "../core/src/index.ts"),
+            "pdf-rfc3161/internals": path.resolve(import.meta.dirname, "../core/src/internals.ts"),
+            "pdf-rfc3161/advanced": path.resolve(import.meta.dirname, "../core/src/advanced.ts"),
+            "pdf-rfc3161/rfcs/rfc5544": path.resolve(import.meta.dirname, "../core/src/rfcs/rfc5544.ts"),
+            "pdf-rfc3161/rfcs/rfc8933": path.resolve(import.meta.dirname, "../core/src/rfcs/rfc8933.ts"),
+            "pdf-rfc3161": path.resolve(import.meta.dirname, "../core/src/index.ts"),
         },
     },
     server: {
@@ -76,7 +76,7 @@ export default defineConfig({
                 manualChunks(id) {
                     // Check if the file is inside the parent src directory (the library)
                     // We normalize paths to ensure cross-platform compatibility
-                    const libPath = path.resolve(__dirname, "../core/src");
+                    const libPath = path.resolve(import.meta.dirname, "../core/src");
                     if (id.startsWith(libPath)) {
                         return "pdf-rfc3161";
                     }

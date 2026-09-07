@@ -350,10 +350,10 @@ On a clean Ubuntu 24.04 AMD64 runner, install the locked validation tools using
 then run the offline structural/interoperability and packed-consumer gates:
 
 ```bash
-corepack pnpm@10.30.3 build
+pnpm build
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
-  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:package
+  pnpm --filter pdf-rfc3161-tests test:interoperability
+pnpm --filter pdf-rfc3161-tests test:package
 ```
 
 For the tool-role boundaries and a reproducible later Acrobat Reader

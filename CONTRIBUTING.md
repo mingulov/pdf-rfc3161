@@ -1,6 +1,6 @@
 # Contributing to pdf-rfc3161
 
-Thanks for your interest! This is a pnpm 10 monorepo targeting Node 20+.
+Thanks for your interest! This is a pnpm monorepo targeting Node 22.12.0+.
 
 ## Setup
 
@@ -12,7 +12,9 @@ pnpm -r build
 pnpm test
 ```
 
-You'll need Node 20 or newer (`.nvmrc` pins 24 for CI; older minors are tested in the matrix) and pnpm 10+ (`engines.pnpm`).
+You'll need Node 22.12.0 or newer (`.nvmrc` pins 26 for CI; older minors are tested in the matrix) and pnpm (version pinned by the root `packageManager`).
+TypeScript 7 runs `tsc`; the aliased TypeScript 6 package is the temporary compiler-API bridge
+for lint and declaration tooling.
 
 ## Project structure
 

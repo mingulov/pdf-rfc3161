@@ -166,7 +166,7 @@ describe("assertCliDistIsFreshAt", () => {
 
         expect(() => {
             assertCliDistIsFreshAt(fixture.root);
-        }).not.toThrowError();
+        }).not.toThrow();
     });
 
     it("still accepts it after the sources are touched but not changed", () => {
@@ -179,7 +179,7 @@ describe("assertCliDistIsFreshAt", () => {
 
         expect(() => {
             assertCliDistIsFreshAt(fixture.root);
-        }).not.toThrowError();
+        }).not.toThrow();
     });
 
     it("rejects a bundle built from different sources", () => {
@@ -191,7 +191,7 @@ describe("assertCliDistIsFreshAt", () => {
 
         expect(() => {
             assertCliDistIsFreshAt(fixture.root);
-        }).toThrowError(/stale build: run `pnpm build`/);
+        }).toThrow(/stale build: run `pnpm build`/);
     });
 
     it("names the missing manifest when only the bundle exists", () => {
@@ -199,7 +199,7 @@ describe("assertCliDistIsFreshAt", () => {
 
         expect(() => {
             assertCliDistIsFreshAt(fixture.root);
-        }).toThrowError(/missing build manifest: run `pnpm build`/);
+        }).toThrow(/missing build manifest: run `pnpm build`/);
     });
 
     it("names the missing bundle before looking at the manifest", () => {
@@ -209,6 +209,6 @@ describe("assertCliDistIsFreshAt", () => {
 
         expect(() => {
             assertCliDistIsFreshAt(fixture.root);
-        }).toThrowError(/missing build: run `pnpm build`/);
+        }).toThrow(/missing build: run `pnpm build`/);
     });
 });

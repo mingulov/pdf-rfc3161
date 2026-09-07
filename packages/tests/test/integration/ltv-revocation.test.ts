@@ -43,7 +43,7 @@ vi.mock(
 );
 
 describe("LTV revocation logic with a live TSA", () => {
-    const itLive: typeof it = process.env.LIVE_TSA_TESTS === "true" ? it : it.skip;
+    const itLive = process.env.LIVE_TSA_TESTS === "true" ? it : it.skip;
     const tsaUrl = KNOWN_TSA_URLS.DIGICERT as string;
 
     let pdfBytes: Uint8Array;

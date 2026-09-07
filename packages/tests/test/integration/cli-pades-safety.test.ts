@@ -88,7 +88,7 @@ async function signatureDictionary(path: string): Promise<PDFDict> {
     return document.context.lookup(signatureRef, PDFDict);
 }
 
-describe.sequential("CLI PAdES safety", () => {
+describe("CLI PAdES safety", { concurrent: false }, () => {
     let server: Server;
     let tsaUrl: string;
     let directory: string;

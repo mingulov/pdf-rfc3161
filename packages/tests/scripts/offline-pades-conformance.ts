@@ -466,7 +466,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const pyhanko = run(
             python,
             [verifierPath, timestampedPdfPath, rootCert],
-            "Install hash-locked pyHanko 0.36.2 with uv pip install --system --require-hashes -r packages/tests/python/requirements.lock."
+            "Install hash-locked pyHanko with uv pip install --system --require-hashes -r packages/tests/python/requirements.lock."
         );
         assert.equal(pyhanko.status, 0, pyhanko.stderr);
         assert.equal(
@@ -500,7 +500,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const tamperedPyhanko = run(
             python,
             [verifierPath, tamperedPdfPath, rootCert],
-            "Install hash-locked pyHanko 0.36.2 with uv pip install --system --require-hashes -r packages/tests/python/requirements.lock."
+            "Install hash-locked pyHanko with uv pip install --system --require-hashes -r packages/tests/python/requirements.lock."
         );
         assert.notEqual(tamperedPyhanko.status, 0, tamperedPyhanko.stderr);
         const tamperedOpenSsl = run(

@@ -12,7 +12,7 @@ import * as pkijs from "pkijs";
 
 // Initialize pkijs with Node.js webcrypto
 const webcrypto = await import("crypto").then((m) => m.webcrypto);
-const cryptoEngine = new pkijs.CryptoEngine({
+const cryptoEngine = new (pkijs.CryptoEngine as pkijs.CryptoEngineConstructor)({
     name: "",
     crypto: webcrypto as any,
     subtle: webcrypto.subtle as any,

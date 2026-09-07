@@ -121,7 +121,7 @@ describe("manual validation scripts", () => {
         const document = readFileSync(MANUAL_VALIDATION_DOCUMENT, "utf8");
 
         expect(document).not.toContain("Split-Path -LiteralPath $artifactDirectory -Parent");
-        expect(document).not.toContain("& corepack pnpm@10.30.3");
+        expect(document).not.toContain("corepack pnpm@");
         expect(document).toContain("containing the five transferred public files");
         expect(document).toContain('Join-Path $artifactDirectory "request.tsq"');
         expect(document).toContain("Get-FileHash -LiteralPath $_ -Algorithm SHA256");
