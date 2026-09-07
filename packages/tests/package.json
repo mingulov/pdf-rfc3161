@@ -35,6 +35,7 @@
         "pdf-lib": "^1.17.1",
         "tsx": "^4.23.13",
         "typescript": "npm:@typescript/typescript6@6.0.2",
+        "verifiedby": "0.1.0",
         "vitest": "^5.0.0"
     },
     "engines": {
