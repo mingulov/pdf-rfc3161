@@ -16,6 +16,10 @@ for both the library and CLI; Node.js 20 is no longer supported.
 
 ### Fixed
 
+- Updated the build-tool esbuild dependency to 0.28.2, removing the affected
+  version reported by GHSA-g7r4-m6w7-qqqr.
+- Kept all CodeQL steps on 4.37.9 and grouped future Dependabot updates to
+  prevent mixed-version initialization and analysis failures.
 - Packed-consumer tests now use pnpm 12's workspace override so the CLI and
   consumer both load the supplied core tarball. Unpublished releases can be
   tested before publishing, and a resolution check rejects a registry core

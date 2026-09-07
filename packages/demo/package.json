@@ -13,7 +13,7 @@
     },
     "dependencies": {
         "asn1js": "^3.0.10",
-        "lucide-react": "^1.41.0",
+        "lucide-react": "^1.42.0",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.4.0",
         "react": "^19.2.8",
@@ -22,7 +22,7 @@
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@playwright/test": "^1.63.0",
-        "@types/node": "^26.4.1",
+        "@types/node": "^26.5.0",
         "@types/react": "^19.2.18",
         "@types/react-dom": "^19.2.7",
         "@typescript/native": "npm:typescript@7.0.2",

@@ -135,6 +135,19 @@ describe("supply-chain runtime policy", () => {
         expect(readRepositoryFile("CONTRIBUTING.md")).toContain("root `packageManager`");
     });
 
+    it("keeps CodeQL steps on the same revision and groups their updates", () => {
+        const workflow = readRepositoryFile(".github/workflows/security.yml");
+        const revisions = Array.from(
+            workflow.matchAll(/github\/codeql-action\/(?:init|autobuild|analyze)@([a-f0-9]{40})/g),
+            (match) => match[1]
+        );
+        expect(revisions).toHaveLength(3);
+        expect(new Set(revisions).size).toBe(1);
+        expect(readRepositoryFile(".github/dependabot.yml")).toContain(
+            '      codeql:\n        patterns:\n          - "github/codeql-action/*"'
+        );
+    });
+
     it("requires immutable actions, least-privilege defaults, and a blocking dependency audit", () => {
         const workflowDirectory = resolve(REPOSITORY_ROOT, ".github/workflows");
         const workflowFiles = readdirSync(workflowDirectory).filter((path) => path.endsWith(".yml"));
