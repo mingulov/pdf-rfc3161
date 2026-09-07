@@ -45,7 +45,7 @@
         "pkijs": "^3.4.0"
     },
     "devDependencies": {
-        "@types/node": "^26.4.1",
+        "@types/node": "^26.5.0",
         "@typescript/native": "npm:typescript@7.0.2",
         "eslint": "^10.10.0",
         "tsup": "^8.5.1",

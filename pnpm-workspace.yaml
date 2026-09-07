@@ -4,7 +4,12 @@ packages:
 allowBuilds:
   esbuild: true
 
+minimumReleaseAgeExclude:
+  - '@types/node@26.5.0'
+  - lucide-react@1.42.0
+
 overrides:
+  esbuild: 0.28.2
   '@typescript-eslint/tsconfig-utils': 8.69.0
   '@typescript-eslint/types': 8.69.0
   eslint: 10.10.0

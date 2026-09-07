@@ -28,7 +28,7 @@
         "pvutils": "^1.2.0"
     },
     "devDependencies": {
-        "@types/node": "^26.4.1",
+        "@types/node": "^26.5.0",
         "@typescript/native": "npm:typescript@7.0.2",
         "@vitest/coverage-v8": "^5.0.0",
         "eslint": "^10.10.0",
