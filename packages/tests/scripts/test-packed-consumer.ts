@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { lastXrefFormat, xrefSections } from "../test/utils/xref-format";
 import { createLocalTsa } from "./local-tsa-fixture";
+import { writeConsumerWorkspace } from "./packed-consumer-config";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "../../..");
@@ -575,6 +576,11 @@ async function checkInstalledConsumer(
     const cliBundle = readFileSync(join(cliDirectory, "dist", "cli.cjs"), "utf8");
     const cliBundlePath = join(cliDirectory, "dist", "cli.cjs");
     const cliRequire = createRequire(realpathSync(cliBundlePath));
+    assert.equal(
+        realpathSync(cliRequire.resolve("pdf-rfc3161")),
+        realpathSync(createRequire(join(consumerDirectory, "package.json")).resolve("pdf-rfc3161")),
+        "CLI must resolve the same candidate core artifact as the consumer"
+    );
     assertResolvedInsideConsumer(consumerDirectory, cliBundlePath);
     assertResolvedInsideConsumer(consumerDirectory, cliRequire.resolve("commander"));
     if (!/require\(["']commander["']\)/.test(cliBundle)) {
@@ -631,6 +637,7 @@ async function main(): Promise<void> {
         const artifacts = packedArtifacts(temporaryDirectory);
         const failures = packageContract(artifacts);
         writeConsumerPackage(consumerDirectory, artifacts);
+        writeConsumerWorkspace(consumerDirectory, artifacts.coreTarballPath);
         const consumerPnpmVersion = runPnpm(["--version"], consumerDirectory);
         commandSucceeded(consumerPnpmVersion);
         assert.equal(
@@ -642,7 +649,6 @@ async function main(): Promise<void> {
             runPnpm(
                 [
                     "install",
-                    "--ignore-workspace",
                     "--config.node-linker=isolated",
                     "--config.virtual-store-dir=.pnpm",
                 ],

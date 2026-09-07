@@ -2,6 +2,13 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
+## 0.2.1 -> 0.2.2
+
+Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before
+installing 0.2.2 if you are using Node.js 20. The public timestamping API is
+unchanged. Repository contributors should use the pnpm version declared in
+the root `packageManager` field.
+
 ## 0.1.x -> 0.2.0 (breaking)
 
 This guide describes the 0.2.0 release, which combines security hardening, an
