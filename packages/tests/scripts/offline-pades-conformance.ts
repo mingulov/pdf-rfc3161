@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { TimestampSession } from "pdf-rfc3161";
+import { verify as verifyWithVerifiedBy } from "verifiedby";
 import { createLocalTsa, TSA_POLICY } from "./local-tsa-fixture";
 import {
     activatePadesOracleEnvironment,
@@ -447,6 +448,12 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         const timestampedPdf = await session.embedTimestampToken(responseBytes);
         writeFileSync(timestampedPdfPath, timestampedPdf);
 
+        const verifiedBy = await verifyWithVerifiedBy(timestampedPdf);
+        assert.equal(verifiedBy.status, "verified-untrusted-root");
+        assert.equal(verifiedBy.documentMatches, true);
+        assert.equal(verifiedBy.timestampCount, 1);
+        assert.equal(verifiedBy.genTimeTrusted, true);
+
         const qpdf = run(
             "qpdf",
             ["--check", timestampedPdfPath],
@@ -494,6 +501,9 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
 
         const tamperedPdf = tamperCoveredByte(timestampedPdf, structural.byteRange[1]);
         writeFileSync(tamperedPdfPath, tamperedPdf);
+        const tamperedVerifiedBy = await verifyWithVerifiedBy(tamperedPdf);
+        assert.equal(tamperedVerifiedBy.status, "mismatch");
+        assert.equal(tamperedVerifiedBy.documentMatches, false);
         const tamperedCovered = assertByteRange(tamperedPdf, structural.byteRange);
         writeFileSync(tamperedCoveredPath, tamperedCovered);
 

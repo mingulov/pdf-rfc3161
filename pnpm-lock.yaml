@@ -338,6 +338,9 @@ importers:
       typescript:
         specifier: npm:@typescript/typescript6@6.0.2
         version: '@typescript/typescript6@6.0.2'
+      verifiedby:
+        specifier: 0.1.0
+        version: 0.1.0
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@26.4.1)(@vitest/coverage-v8@5.0.0)(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(terser@5.50.0)(tsx@4.23.13)(yaml@2.9.0))
@@ -2278,6 +2281,10 @@ packages:
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
+  verifiedby@0.1.0:
+    resolution: {integrity: sha512-gLfnMC9L3MZz0M7ZVJl/Y14iS1itqbiZwXg8sGpfq71975GSrGvfQEeWSird0mi3Q3lH7F2VLkf3Tpxn3Z6NTQ==}
+    engines: {node: '>=20'}
+
   vite@8.2.2:
     resolution: {integrity: sha512-cFKLV/PRgAUlIRm5WjMjJ86jrftzpqcgH+Us+DS8mI3CDNiH30Whrz8uHL3+MOLPAgqbMBAqWdAHAphOAM+z/Q==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -4104,6 +4111,8 @@ snapshots:
   uri-js@4.4.1:
     dependencies:
       punycode: 2.3.1
+
+  verifiedby@0.1.0: {}
 
   vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(terser@5.50.0)(tsx@4.23.13)(yaml@2.9.0):
     dependencies:

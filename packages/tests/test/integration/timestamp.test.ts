@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
+import { verify as verifyWithVerifiedBy } from "verifiedby";
 import { INCOMPATIBLE_TSA_URLS } from "../../src/tsa-compatibility.js";
 
 // Create a minimal valid PDF for testing
@@ -84,6 +85,13 @@ describe("Integration: Basic Timestamping", () => {
                 const pdfString = new TextDecoder("latin1").decode(result.pdf);
                 expect(pdfString.startsWith("%PDF-")).toBe(true);
                 expect(pdfString).toContain("ETSI.RFC3161");
+
+                const verifiedBy = await verifyWithVerifiedBy(result.pdf);
+                expect(["verified", "verified-untrusted-root"]).toContain(verifiedBy.status);
+                expect(verifiedBy.documentMatches).toBe(true);
+                expect(verifiedBy.timestampCount).toBe(1);
+                expect(verifiedBy.genTimeTrusted).toBe(true);
+                expect(verifiedBy.authority).toContain("DigiCert");
             });
         },
         60000
