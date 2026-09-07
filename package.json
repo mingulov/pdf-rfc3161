@@ -1,7 +1,7 @@
 {
     "name": "pdf-rfc3161-monorepo",
     "private": true,
-    "packageManager": "pnpm@10.30.3",
+    "packageManager": "pnpm@12.3.4",
     "description": "Monorepo for pdf-rfc3161 ecosystem",
     "scripts": {
         "build": "pnpm -r run build",
@@ -15,18 +15,19 @@
         "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-tests run test:package && pnpm --filter pdf-rfc3161-demo run test:e2e"
     },
     "devDependencies": {
-        "@changesets/cli": "^2.31.0",
+        "@changesets/cli": "^3.0.2",
         "@eslint/js": "^10.0.1",
-        "eslint": "^10.9.1",
+        "@typescript/native": "npm:typescript@7.0.2",
+        "eslint": "^10.10.0",
         "eslint-plugin-security": "^4.0.1",
         "prettier": "^3.9.6",
         "tsup": "^8.5.1",
-        "tsx": "^4.23.12",
-        "typescript": "^5.9.3",
-        "typescript-eslint": "^8.68.0"
+        "tsx": "^4.23.13",
+        "typescript": "npm:@typescript/typescript6@6.0.2",
+        "typescript-eslint": "^8.69.0"
     },
     "engines": {
-        "node": ">=20.19.0",
-        "pnpm": ">=10.0.0"
+        "node": ">=22.12.0",
+        "pnpm": ">=12.0.0"
     }
 }

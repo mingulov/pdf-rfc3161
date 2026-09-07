@@ -9,7 +9,9 @@ export default defineConfig({
         "rfcs/rfc8933": "src/rfcs/rfc8933.ts",
     },
     format: ["esm", "cjs"],
-    dts: true,
+    dts: {
+        compilerOptions: { ignoreDeprecations: "6.0" },
+    },
     clean: true,
     sourcemap: false,
     target: "es2022",

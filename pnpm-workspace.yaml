@@ -1,11 +1,11 @@
 packages:
   - packages/*
 
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true
 
 overrides:
-  '@typescript-eslint/tsconfig-utils': 8.68.0
-  '@typescript-eslint/types': 8.68.0
-  eslint: 10.9.1
-  typescript-eslint: 8.68.0
+  '@typescript-eslint/tsconfig-utils': 8.69.0
+  '@typescript-eslint/types': 8.69.0
+  eslint: 10.10.0
+  typescript-eslint: 8.69.0

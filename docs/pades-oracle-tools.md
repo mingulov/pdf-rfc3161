@@ -46,7 +46,7 @@ Sources and licenses:
 ## Run from a clean checkout
 
 The pinned binary installer supports an Ubuntu 24.04 AMD64 runner. The runner
-must already provide Node.js 24 with Corepack and `uv` 0.12.5; CI installs
+must already provide Node.js 26 with pnpm and `uv` 0.12.10; CI installs
 those exact prerequisites before this recipe. Verify them first, then install
 the locked Python environment and binary artifacts. `test:interoperability`
 deliberately fails if the required tools are missing or have different
@@ -54,18 +54,18 @@ versions:
 
 ```bash
 node --version
-corepack --version
+pnpm --version
 uv --version
-corepack pnpm@10.30.3 install --frozen-lockfile
+pnpm install --frozen-lockfile
 uv python install 3.12.14
 uv venv --python 3.12.14 /tmp/pdf-rfc3161-pades-python
 uv pip install --python /tmp/pdf-rfc3161-pades-python/bin/python \
   --require-hashes -r packages/tests/python/requirements.lock
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests run install:pades-oracles
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests run assert:pades-oracles
-corepack pnpm@10.30.3 build
+pnpm --filter pdf-rfc3161-tests run install:pades-oracles
+pnpm --filter pdf-rfc3161-tests run assert:pades-oracles
+pnpm build
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
-  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
+  pnpm --filter pdf-rfc3161-tests test:interoperability
 ```
 
 The `/tmp` environment is disposable. CI uses the same hash-locked requirements

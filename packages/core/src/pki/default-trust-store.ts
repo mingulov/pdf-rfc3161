@@ -76,7 +76,7 @@ export function getDefaultTrustStore(): TrustStore {
 }
 
 function base64ToUint8Array(b64: string): Uint8Array {
-    // atob is a global in Node 18+ (our minimum), Workers, Deno, and browsers.
+    // atob is a global in Node 22.12.0+ (our minimum), Workers, Deno, and browsers.
     // No Buffer fallback -- it isn't available in Workers / Deno.
     const bin = atob(b64);
     const out = new Uint8Array(bin.length);

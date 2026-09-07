@@ -1,7 +1,6 @@
-// Node 18 does not expose `globalThis.crypto`; tests that spy on it (e.g.
-// tsa-request.test.ts) hit `ReferenceError: crypto is not defined` before
-// any production code can run `ensureWebCrypto()`. Polyfill here so tests
-// behave the same across the supported Node range (>=18).
+// Node 22.12.0 exposes `globalThis.crypto`; retain the setup fallback for
+// test environments that replace or omit the global before production code
+// can run `ensureWebCrypto()`.
 import { webcrypto } from "node:crypto";
 
 if (typeof globalThis.crypto === "undefined") {

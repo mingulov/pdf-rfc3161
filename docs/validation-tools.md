@@ -23,7 +23,7 @@ and [ETSI TS 102 778-4](https://www.etsi.org/deliver/etsi_TS/102700_102799/10277
 | -------------------- | -------------------------------------------------- | -------------------------- |
 | qpdf                 | PDF syntax, xref, and JSON object-graph input      | CMS/TSA trust or DSS policy |
 | OpenSSL              | RFC 3161 token and imprint cryptography            | PDF object semantics       |
-| pyHanko 0.36.2       | timestamp discovery, integrity, local-root trust   | normative VRI-key encoding |
+| pyHanko 0.37.0       | timestamp discovery, integrity, local-root trust   | normative VRI-key encoding |
 | Adobe Acrobat Reader | manual viewer classification and UI/trust behavior | deterministic CI           |
 
 The matrix describes the project-owned test layer, not a claim that every listed tool
@@ -38,10 +38,10 @@ clean Ubuntu 24.04 AMD64 runner, first follow the
 then run:
 
 ```bash
-corepack pnpm@10.30.3 build
+pnpm build
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
-  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:package
+  pnpm --filter pdf-rfc3161-tests test:interoperability
+pnpm --filter pdf-rfc3161-tests test:package
 ```
 
 `test:interoperability` creates its own local root and TSA, checks the generated PDF with
@@ -64,13 +64,13 @@ be cleaned up by its caller.
   whether a signature dictionary is a PAdES document timestamp.
 - pyHanko discovers document timestamps and can verify integrity and a deliberately
   supplied local root. Its current VRI producer behavior is not the normative rule for
-  this project. In pinned 0.36.2, the
-  [`async_add_validation_info` path](https://github.com/MatthiasValvekens/pyHanko/blob/v0.36.2/pkgs/pyhanko/src/pyhanko/sign/validation/dss.py#L694-L703)
+  this project. In pinned 0.37.0, the
+  [`async_add_validation_info` path](https://github.com/MatthiasValvekens/pyHanko/blob/v0.37.0/pkgs/pyhanko/src/pyhanko/sign/validation/dss.py#L694-L703)
   passes lowercase ASCII hex of the decoded, padded contents to its VRI helper. That is
   not pyHanko's general producer rule: its
-  [archival timestamp-chain path](https://github.com/MatthiasValvekens/pyHanko/blob/v0.36.2/pkgs/pyhanko/src/pyhanko/sign/signers/pdf_signer.py#L1011-L1017)
+  [archival timestamp-chain path](https://github.com/MatthiasValvekens/pyHanko/blob/v0.37.0/pkgs/pyhanko/src/pyhanko/sign/signers/pdf_signer.py#L1011-L1017)
   passes raw `last_timestamp.pkcs7_content`, and
-  [normal post-sign VRI work](https://github.com/MatthiasValvekens/pyHanko/blob/v0.36.2/pkgs/pyhanko/src/pyhanko/sign/signers/pdf_signer.py#L2701-L2706)
+  [normal post-sign VRI work](https://github.com/MatthiasValvekens/pyHanko/blob/v0.37.0/pkgs/pyhanko/src/pyhanko/sign/signers/pdf_signer.py#L2626-L2630)
   starts from raw `fill_with_cms` contents. These path-specific differences are not an
   error claim and do not select this project's VRI output rule. It remains a useful
   independent check rather than a normative authority.
@@ -95,7 +95,7 @@ This section is technical release guidance, not legal advice. Recheck the exact 
 and all transitive dependencies before distribution.
 
 - [qpdf](https://github.com/qpdf/qpdf/blob/main/LICENSE.txt) is Apache-2.0, and
-  [pyHanko 0.36.2](https://github.com/MatthiasValvekens/pyHanko/blob/v0.36.2/LICENSE)
+  [pyHanko 0.37.0](https://github.com/MatthiasValvekens/pyHanko/blob/v0.37.0/LICENSE)
   is MIT. [OpenSSL 3](https://docs.openssl.org/3.0/man7/migration_guide/) is Apache-2.0.
   They are suitable as separately installed CI tools for this MIT project; they are not
   bundled into the published JavaScript package.

@@ -18,13 +18,15 @@ function parseRequest(request: Uint8Array): pkijs.TimeStampReq {
 
 describe("TSA Request", () => {
     beforeEach(() => {
-        vi.spyOn(crypto, "getRandomValues").mockImplementation((array: Uint8Array) => {
-            const bytes = array as Uint8Array;
-            for (let i = 0; i < bytes.length; i++) {
-                bytes[i] = i % 256;
+        vi.spyOn(crypto, "getRandomValues").mockImplementation(
+            <T extends ArrayBufferView<ArrayBuffer>>(array: T): T => {
+                const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+                for (let i = 0; i < bytes.length; i++) {
+                    bytes[i] = i % 256;
+                }
+                return array;
             }
-            return array;
-        });
+        );
     });
 
     describe("createTimestampRequest", () => {
@@ -78,13 +80,15 @@ describe("TSA Request", () => {
 
             const { request: request1 } = await createTimestampRequest(data);
 
-            vi.spyOn(crypto, "getRandomValues").mockImplementation((array: Uint8Array) => {
-                const bytes = array as Uint8Array;
-                for (let i = 0; i < bytes.length; i++) {
-                    bytes[i] = (i + 100) % 256;
+            vi.spyOn(crypto, "getRandomValues").mockImplementation(
+                <T extends ArrayBufferView<ArrayBuffer>>(array: T): T => {
+                    const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+                    for (let i = 0; i < bytes.length; i++) {
+                        bytes[i] = (i + 100) % 256;
+                    }
+                    return array;
                 }
-                return array;
-            });
+            );
 
             const { request: request2 } = await createTimestampRequest(data);
 
@@ -99,10 +103,12 @@ describe("TSA Request", () => {
         });
 
         it("normalizes generated nonces to positive nonzero DER INTEGER values", async () => {
-            vi.spyOn(crypto, "getRandomValues").mockImplementation((array: Uint8Array) => {
-                array.fill(0xff);
-                return array;
-            });
+            vi.spyOn(crypto, "getRandomValues").mockImplementation(
+                <T extends ArrayBufferView<ArrayBuffer>>(array: T): T => {
+                    new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(0xff);
+                    return array;
+                }
+            );
 
             const { request, nonce } = await createTimestampRequest(new Uint8Array([1, 2, 3, 4]));
             const tsReq = parseRequest(request);

@@ -546,10 +546,10 @@ locked Python and binary tools using
 then run:
 
 ```bash
-corepack pnpm@10.30.3 build
+pnpm build
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python \
-  corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:interoperability
-corepack pnpm@10.30.3 --filter pdf-rfc3161-tests test:package
+  pnpm --filter pdf-rfc3161-tests test:interoperability
+pnpm --filter pdf-rfc3161-tests test:package
 ```
 
 For the tool-role boundaries and license cautions, see
@@ -558,7 +558,7 @@ Reader observation, use [manual-acrobat-validation.md](./docs/manual-acrobat-val
 
 ## Requirements
 
-- Node.js 20.0.0 or later
+- Node.js 22.12.0 or later
 - Modern browsers with Web Crypto API support
 - Edge runtimes: Cloudflare Workers, Vercel Edge, Deno Deploy
 

@@ -32,7 +32,7 @@ export class ResponseTooLargeError extends TimestampError {
  *       - non-numeric Content-Length
  *
  *  Streaming with abort-mid-body would tighten step 2 but requires the
- *  ReadableStream API which is uneven across runtimes (Node 18, Workers,
+ *  ReadableStream API which is uneven across runtimes (Node, Workers,
  *  Deno, browsers). The post-read check still prevents the timestamp
  *  pipeline from consuming oversized bodies; the cap on what fetch can
  *  buffer is a separate concern (Node imposes its own).

@@ -63,7 +63,7 @@ export async function createTimestampRequest(
  * **Sync-crypto constraint:** unlike {@link createTimestampRequest},
  * this function is synchronous and does NOT `await ensureWebCrypto()`. It still
  * calls `globalThis.crypto.getRandomValues(nonce)` directly, which is always
- * available on Node 20+ (the library's engines floor), Cloudflare Workers,
+ * available on Node 22.12.0+ (the library's engines floor), Cloudflare Workers,
  * Deno, and modern browsers.
  *
  * If you are on an environment where `globalThis.crypto` is lazy-initialised

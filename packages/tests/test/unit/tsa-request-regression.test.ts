@@ -10,13 +10,15 @@ const TEST_CONFIG = {};
 
 describe("Regression: Timestamp Request Validation", () => {
     beforeEach(() => {
-        vi.spyOn(crypto, "getRandomValues").mockImplementation((array: Uint8Array) => {
-            const bytes = array as Uint8Array;
-            for (let i = 0; i < bytes.length; i++) {
-                bytes[i] = i % 256;
+        vi.spyOn(crypto, "getRandomValues").mockImplementation(
+            <T extends ArrayBufferView<ArrayBuffer>>(array: T): T => {
+                const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+                for (let i = 0; i < bytes.length; i++) {
+                    bytes[i] = i % 256;
+                }
+                return array;
             }
-            return array;
-        });
+        );
     });
 
     it("should generate valid timestamp request", async () => {

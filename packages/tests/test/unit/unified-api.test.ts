@@ -4,8 +4,8 @@ import type { TimestampResponseValidationOptions } from "../../../core/src/index
 import { TSAStatus, type TimestampOptions, type TimestampResult } from "../../../core/src/types.js";
 
 const state = vi.hoisted(() => ({
-    createRequest: vi.fn(async () => new Uint8Array([0x30, 0x00])),
-    embed: vi.fn(async () => new Uint8Array([0x25, 0x50, 0x44, 0x46])),
+    createRequest: vi.fn(async (_options: unknown) => new Uint8Array([0x30, 0x00])),
+    embed: vi.fn(async (_response: Uint8Array) => new Uint8Array([0x25, 0x50, 0x44, 0x46])),
     send: vi.fn(async () => new Uint8Array([0x30, 0x03, 0x30, 0x01, 0x00])),
     parse: vi.fn(() => ({
         status: TSAStatus.GRANTED,

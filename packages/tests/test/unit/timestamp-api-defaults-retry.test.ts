@@ -19,7 +19,7 @@ const state = vi.hoisted(() => {
     };
     return {
         sessionOptions: vi.fn(),
-        createRequest: vi.fn(async () => new Uint8Array([0x30, 0x00])),
+        createRequest: vi.fn(async (_options: unknown) => new Uint8Array([0x30, 0x00])),
         send: vi.fn(async () => new Uint8Array([0x30, 0x00])),
         parse: vi.fn(() => ({
             status: TSAStatus.GRANTED,
@@ -27,7 +27,7 @@ const state = vi.hoisted(() => {
             info,
         })),
         embedAttempts: 0,
-        embed: vi.fn(async () => {
+        embed: vi.fn(async (_response: Uint8Array) => {
             state.embedAttempts++;
             if (state.embedAttempts === 1) throw new Error("Increase signatureSize");
             return new Uint8Array([0x25, 0x50, 0x44, 0x46]);

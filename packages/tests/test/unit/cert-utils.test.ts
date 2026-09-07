@@ -81,7 +81,7 @@ function createTestCert(options: {
     if (options.ski) {
         const skiBytes = hexToBytes(options.ski);
         const skiValue = new asn1js.OctetString({
-            valueHex: skiBytes.buffer,
+            valueHex: new Uint8Array(skiBytes).buffer,
             // Ensure we use a clean buffer if possible, but hexToBytes already creates one
         });
         cert.extensions.push(new pkijs.Extension({
@@ -95,7 +95,7 @@ function createTestCert(options: {
         const akiBytes = hexToBytes(options.aki);
         const aki = new pkijs.AuthorityKeyIdentifier({
             keyIdentifier: new asn1js.OctetString({
-                valueHex: akiBytes.buffer
+                valueHex: new Uint8Array(akiBytes).buffer
             })
         });
         cert.extensions.push(new pkijs.Extension({

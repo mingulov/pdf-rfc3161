@@ -6,7 +6,9 @@ import {
     type RFC3161TokenFixtureOptions,
 } from "../fixtures/rfc3161-token.js";
 
-const embedSpy = vi.hoisted(() => vi.fn(() => new Uint8Array([0x25, 0x50, 0x44, 0x46])));
+const embedSpy = vi.hoisted(() =>
+    vi.fn((_pdf: Uint8Array, _token: Uint8Array) => new Uint8Array([0x25, 0x50, 0x44, 0x46]))
+);
 
 vi.mock("../../../core/src/pdf/embed.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
     const original = await importOriginal<typeof import("../../../core/src/pdf/embed.js")>();

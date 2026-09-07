@@ -13,6 +13,31 @@ import {
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(TEST_DIRECTORY, "../../../..");
+const padesJobBoundaries = {
+    "ci.yml": ["  pades-conformance:", "  native-pdf-compatibility:"],
+    "release.yml": ["    verify:", "    stage-core:"],
+} as const;
+
+function readActionInputVersion(content: string, action: string): string {
+    const lines = content.split("\n");
+    const actionIndex = lines.findIndex((line) => line.includes(`uses: ${action}@`));
+    const versionLine = lines
+        .slice(actionIndex + 1, actionIndex + 5)
+        .find((line) => line.trimStart().startsWith("version:"));
+    const quotedVersion = versionLine?.split(":").slice(1).join(":").trim();
+    if (actionIndex === -1 || quotedVersion === undefined || quotedVersion.length < 3) {
+        throw new Error(`${action} must declare a version input`);
+    }
+    const quote = quotedVersion[0];
+    if ((quote !== '"' && quote !== "'") || quotedVersion.at(-1) !== quote) {
+        throw new Error(`${action} version input must be quoted`);
+    }
+    const version = quotedVersion.slice(1, -1);
+    if (!/^\d{1,5}\.\d{1,5}\.\d{1,5}$/.test(version)) {
+        throw new Error(`${action} version input must be a numeric pin`);
+    }
+    return version;
+}
 
 function pinnedOracleRunner(overrides: Record<string, string> = {}): OracleCommandRunner {
     const paths = padesOraclePaths();
@@ -84,11 +109,19 @@ describe("offline PAdES validation-tool policy", () => {
     });
 
     it("keeps CI and release on the one pinned installation policy", () => {
-        for (const workflow of ["ci.yml", "release.yml"]) {
+        let uvVersion: string | undefined;
+        for (const workflow of ["ci.yml", "release.yml"] as const) {
             const content = readFileSync(
                 resolve(REPOSITORY_ROOT, ".github/workflows", workflow),
                 "utf8"
             );
+            const [padesJobStart, padesJobEnd] = padesJobBoundaries[workflow];
+            const padesJobStartIndex = content.indexOf(padesJobStart);
+            const padesJobEndIndex = content.indexOf(padesJobEnd);
+            expect(padesJobStartIndex).toBeGreaterThan(-1);
+            expect(padesJobEndIndex).toBeGreaterThan(padesJobStartIndex);
+            const padesJob = content.slice(padesJobStartIndex, padesJobEndIndex);
+
             expect(content).toContain(`runs-on: ${PADES_ORACLE_POLICY.ubuntuRunner}`);
             expect(content).not.toContain("ubuntu-latest");
             expect(
@@ -97,6 +130,10 @@ describe("offline PAdES validation-tool policy", () => {
             ).toBe(true);
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run install:pades-oracles");
             expect(content).toContain("pnpm --filter pdf-rfc3161-tests run assert:pades-oracles");
+            expect(padesJob).toContain("node-version: 26");
+            const workflowUvVersion = readActionInputVersion(content, "astral-sh/setup-uv");
+            uvVersion ??= workflowUvVersion;
+            expect(workflowUvVersion).toBe(uvVersion);
         }
     });
 
@@ -256,7 +293,7 @@ describe("offline PAdES validation-tool policy", () => {
         expect(workflow.slice(compatibilityJob, verifyJob)).toContain(
             "node-version: ${{ matrix.node }}"
         );
-        expect(workflow.slice(compatibilityJob, verifyJob)).toContain("node: [20, 22, 24]");
+        expect(workflow.slice(compatibilityJob, verifyJob)).toContain("node: [22, 24, 26]");
         expect(workflow.slice(verifyJob, coreJob)).toContain("needs: compatibility");
         expect(pack).toBeGreaterThan(verifyJob);
         expect(audit).toBeGreaterThan(pack);
@@ -332,10 +369,22 @@ describe("offline PAdES validation-tool policy", () => {
         const activation = harness.indexOf("activatePadesOracleEnvironment();");
         const assertion = harness.indexOf("assertPadesOracleTools();");
         const localTsa = harness.indexOf("const { rootCert, config } = createLocalTsa");
+        const pyHankoVersion = readFileSync(
+            resolve(REPOSITORY_ROOT, "packages/tests/python/requirements.in"),
+            "utf8"
+        )
+            .trim()
+            .slice("pyHanko==".length);
+        const ciWorkflow = readFileSync(
+            resolve(REPOSITORY_ROOT, ".github/workflows/ci.yml"),
+            "utf8"
+        );
+        const uvVersion = readActionInputVersion(ciWorkflow, "astral-sh/setup-uv");
         expect(activation).toBeGreaterThan(-1);
         expect(assertion).toBeGreaterThan(activation);
         expect(localTsa).toBeGreaterThan(assertion);
         expect(harness).toContain("PINNED_ORACLE_INSTALLATION_GUIDANCE");
+        expect(harness).toContain("Install hash-locked pyHanko with uv pip install");
         expect(harness).toContain("Expected Python ${PADES_ORACLE_POLICY.pythonVersion}");
         expect(harness).not.toContain("apt-get");
 
@@ -346,10 +395,15 @@ describe("offline PAdES validation-tool policy", () => {
         expect(documentation).toContain(PADES_ORACLE_POLICY.qpdf.packageVersion);
         expect(documentation).toContain(PADES_ORACLE_POLICY.openssl.packageVersion);
         expect(documentation).toContain(PADES_ORACLE_POLICY.opensslRuntime.package);
-        expect(documentation).toContain("Node.js 24 with Corepack");
-        expect(documentation).toContain("`uv` 0.12.5");
-        expect(documentation).toContain("corepack pnpm@10.30.3 install --frozen-lockfile");
-        expect(documentation).toContain("uv python install 3.12.14");
+        expect(documentation).toContain("Node.js 26 with pnpm");
+        expect(documentation).toContain(`\`uv\` ${uvVersion}`);
+        expect(documentation).toContain(
+            "pnpm install --frozen-lockfile"
+        );
+        expect(documentation).not.toContain("corepack");
+        expect(documentation).toContain(
+            `uv python install ${PADES_ORACLE_POLICY.pythonVersion}`
+        );
         expect(documentation).toMatch(
             /dynamic loader and remaining transitive system libraries are\s+host-runner dependencies/
         );
@@ -358,6 +412,13 @@ describe("offline PAdES validation-tool policy", () => {
             expect(documentation).toContain(artifact.sha256);
         }
         expect(documentation).toContain("Bumping the policy");
+
+        const validationTools = readFileSync(
+            resolve(REPOSITORY_ROOT, "docs/validation-tools.md"),
+            "utf8"
+        );
+        expect(validationTools).toContain(`pyHanko ${pyHankoVersion}`);
+        expect(validationTools).toContain("pdf_signer.py#L2626-L2630");
     });
 
     it("keeps the normal CLI PAdES regression independent from ambient OpenSSL", () => {

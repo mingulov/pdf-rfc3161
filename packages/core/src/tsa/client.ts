@@ -12,7 +12,7 @@ import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
  *
  * This function uses the Fetch API which is available in:
  * - Modern browsers
- * - Node.js 18+
+ * - Node.js 22.12.0+
  * - Cloudflare Workers
  * - Deno
  * - Vercel Edge Runtime

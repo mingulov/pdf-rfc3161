@@ -3,7 +3,7 @@
 // resolution, a browser bundle, the CLI binary, and one real timestamping call.
 //
 // External tools:
-//   - corepack/pnpm, tar, tsc, vite  -- required everywhere.
+//   - pnpm, tar, tsc, vite  -- required everywhere.
 //   - OpenSSL WITH the `ts` subcommand -- required for the timestamp-behavior
 //     check only. Stock macOS ships LibreSSL, which has no `ts` app, so that
 //     one check is skipped (loudly) on such machines while every
@@ -24,16 +24,30 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { lastXrefFormat, xrefSections } from "../test/utils/xref-format";
 import { createLocalTsa } from "./local-tsa-fixture";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "../../..");
 const CORE_DIRECTORY = resolve(SCRIPT_DIRECTORY, "../../core");
 const CLI_DIRECTORY = resolve(SCRIPT_DIRECTORY, "../../cli");
-const PNPM_VERSION = "10.30.3";
+const rootPackage = JSON.parse(
+    readFileSync(join(REPOSITORY_ROOT, "package.json"), "utf8")
+) as { packageManager?: unknown };
+const packageManager = rootPackage.packageManager;
+if (typeof packageManager !== "string" || !packageManager.startsWith("pnpm@")) {
+    throw new Error("root package.json packageManager must be a pnpm version");
+}
+const ROOT_PNPM_VERSION = packageManager.slice("pnpm@".length);
+function requirePnpmEntrypoint(): string {
+    const entrypoint = process.env.npm_execpath;
+    if (!entrypoint) throw new Error("Run this check through pnpm run test:package");
+    return entrypoint;
+}
+const PNPM_ENTRYPOINT = requirePnpmEntrypoint();
 const CORE_EXPORTS = [
     ["pdf-rfc3161", "timestampPdf"],
     ["pdf-rfc3161/advanced", "ValidationSession"],
@@ -97,12 +111,15 @@ function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessE
     return { command, args, result };
 }
 
-function runPnpm(args: string[], cwd: string): CommandResult {
-    return run(
-        process.platform === "win32" ? "corepack.cmd" : "corepack",
-        ["pnpm@" + PNPM_VERSION, ...args],
-        cwd
-    );
+function runPnpm(
+    args: string[],
+    cwd: string,
+    env?: NodeJS.ProcessEnv
+): CommandResult {
+    const extension = extname(PNPM_ENTRYPOINT).toLowerCase();
+    return [".js", ".cjs", ".mjs"].includes(extension)
+        ? run(process.execPath, [PNPM_ENTRYPOINT, ...args], cwd, env)
+        : run(PNPM_ENTRYPOINT, args, cwd, env);
 }
 
 function commandSucceeded(commandResult: CommandResult): void {
@@ -217,6 +234,7 @@ function writeConsumerPackage(consumerDirectory: string, artifacts: PackedArtifa
                 name: "pdf-rfc3161-packed-consumer",
                 private: true,
                 type: "module",
+                packageManager: packageManager,
                 dependencies: {
                     "pdf-rfc3161": "file:" + artifacts.coreTarballPath,
                     "pdf-rfc3161-cli": "file:" + artifacts.cliTarballPath,
@@ -225,11 +243,6 @@ function writeConsumerPackage(consumerDirectory: string, artifacts: PackedArtifa
                     "@types/node": "25.9.1",
                     typescript: "5.9.3",
                     vite: "8.2.2",
-                },
-                pnpm: {
-                    overrides: {
-                        "pdf-rfc3161": "file:" + artifacts.coreTarballPath,
-                    },
                 },
             },
             null,
@@ -590,14 +603,14 @@ async function checkInstalledConsumer(
         process.platform === "win32" ? "pdf-rfc3161.cmd" : "pdf-rfc3161"
     );
     assert(existsSync(executable), "installed CLI executable does not exist: " + executable);
-    const version = run(executable, ["--version"], consumerDirectory, env);
+    const version = runPnpm(["exec", "pdf-rfc3161", "--version"], consumerDirectory, env);
     commandSucceeded(version);
     assert.equal(
         commandOutput(version.result).trim(),
         manifestVersion(CLI_DIRECTORY),
         "installed CLI version output"
     );
-    const help = run(executable, ["--help"], consumerDirectory, env);
+    const help = runPnpm(["exec", "pdf-rfc3161", "--help"], consumerDirectory, env);
     commandSucceeded(help);
     assert.match(commandOutput(help.result), /Usage: pdf-rfc3161/, "installed CLI help output");
 }
@@ -605,12 +618,26 @@ async function checkInstalledConsumer(
 async function main(): Promise<void> {
     let temporaryDirectory: string | undefined;
     try {
+        const pnpmVersion = runPnpm(["--version"], REPOSITORY_ROOT);
+        commandSucceeded(pnpmVersion);
+        assert.equal(
+            commandOutput(pnpmVersion.result).trim(),
+            ROOT_PNPM_VERSION,
+            "pnpm version must match root packageManager"
+        );
         temporaryDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-packed-consumer-"));
         const consumerDirectory = join(temporaryDirectory, "consumer");
         mkdirSync(consumerDirectory, { recursive: true });
         const artifacts = packedArtifacts(temporaryDirectory);
         const failures = packageContract(artifacts);
         writeConsumerPackage(consumerDirectory, artifacts);
+        const consumerPnpmVersion = runPnpm(["--version"], consumerDirectory);
+        commandSucceeded(consumerPnpmVersion);
+        assert.equal(
+            commandOutput(consumerPnpmVersion.result).trim(),
+            ROOT_PNPM_VERSION,
+            "consumer pnpm version must match root packageManager"
+        );
         commandSucceeded(
             runPnpm(
                 [

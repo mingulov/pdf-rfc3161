@@ -210,17 +210,17 @@ describe("assertIncrementalWriterHeadroom", () => {
     it("rejects an xref-stream save without room for the invented references", () => {
         expect(() =>
             assertIncrementalWriterHeadroom(headroomContext(true, Number.MAX_SAFE_INTEGER - 3))
-        ).toThrowError(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
+        ).toThrow(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
     });
 
     it("accepts an xref-stream save with room for the invented references", () => {
-        expect(() => assertIncrementalWriterHeadroom(headroomContext(true, 4))).not.toThrowError();
+        expect(() => assertIncrementalWriterHeadroom(headroomContext(true, 4))).not.toThrow();
     });
 
     it("reserves nothing for the classic writer, which invents no references", () => {
         expect(() =>
             assertIncrementalWriterHeadroom(headroomContext(false, Number.MAX_SAFE_INTEGER - 3))
-        ).not.toThrowError();
+        ).not.toThrow();
     });
 
     it("reserves one object-stream container per 50 objects, not one per object", () => {
@@ -232,7 +232,7 @@ describe("assertIncrementalWriterHeadroom", () => {
             assertIncrementalWriterHeadroom(
                 headroomContext(true, MAX_SUPPORTED_OBJECT_NUMBER - 50, 100)
             )
-        ).not.toThrowError();
+        ).not.toThrow();
     });
 
     it("still rejects a large-context save that genuinely overflows", () => {
@@ -240,7 +240,7 @@ describe("assertIncrementalWriterHeadroom", () => {
             assertIncrementalWriterHeadroom(
                 headroomContext(true, MAX_SUPPORTED_OBJECT_NUMBER - 3, 100)
             )
-        ).toThrowError(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
+        ).toThrow(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
     });
 
     it("falls back to the public enumeration when no indirectObjects map is present", () => {
@@ -253,13 +253,13 @@ describe("assertIncrementalWriterHeadroom", () => {
             pdfFileDetails: { useObjectStreams: true },
             enumerateIndirectObjects: (): [PDFRef, unknown][] => entries,
         };
-        expect(() => assertIncrementalWriterHeadroom(context)).not.toThrowError();
+        expect(() => assertIncrementalWriterHeadroom(context)).not.toThrow();
 
         expect(() =>
             assertIncrementalWriterHeadroom({
                 ...context,
                 largestObjectNumber: MAX_SUPPORTED_OBJECT_NUMBER - 3,
             })
-        ).toThrowError(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
+        ).toThrow(expect.objectContaining({ code: TimestampErrorCode.PDF_ERROR }));
     });
 });
