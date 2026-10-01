@@ -9,6 +9,18 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security (trust-target binding):** `TrustStore.verifyChain(chain)` now
+  verifies `chain[0]` as the trust target; every other entry is an
+  untrusted path-building candidate. Previously the underlying path engine
+  selected its own leaf, so an untrusted signer accompanied by an unrelated
+  trusted intermediate in the CMS certificate bag could verify as trusted.
+  `verifyTimestamp`/`verifyPdfTimestamps` with a custom trust store now
+  reject such tokens with "Certificate chain not trusted". Callers that
+  relied on the old order-dependent behavior must place the selected signer
+  first; see MIGRATION.md.
+
 ## [0.2.2] - 2026-09-07
 
 Release tooling and dependency refresh. **Node.js >=22.12.0 is now required**

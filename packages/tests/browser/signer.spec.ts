@@ -39,6 +39,8 @@ export interface T00Urls {
     rejectEku: string;
     /** Valid crafted token: control for the rejection family (same fixture). */
     craftedValid: string;
+    /** Token whose CMS bag carries an unrelated trusted intermediate (T01). */
+    trustTarget: string;
     /** Expired signer certificate (T09 hook: observation only). */
     expiredSigner: string;
     /** Correctly signed responses WITHOUT CORS headers (must fail in page). */
@@ -117,6 +119,18 @@ export interface SignerValidityObservation {
     embedded: boolean;
     code: string | null;
     message: string;
+}
+
+/** Post-embed trust verdict for a token with a poisoned certificate bag. */
+export interface TrustTargetOutcome {
+    name: string;
+    /** The pre-embed gate accepts the token; only trust must fail. */
+    embedded: boolean;
+    count: number;
+    verified: boolean;
+    error: string | null;
+    /** Proves the unrelated intermediate rode along in the CMS bag. */
+    certificateCount: number;
 }
 
 export interface TransportObservation {
@@ -683,6 +697,52 @@ export async function runCorsCases(
 }
 
 /**
+ * T01 trust-target regression: embeds a token whose unsigned CMS bag
+ * carries an unrelated intermediate chaining to the pinned root, then
+ * verifies through the post-embed journey. The signer itself is
+ * untrusted, so the verdict must be false: the bag entry must not
+ * verify in the signer's place.
+ */
+export async function runTrustTargetCase(
+    input: number[],
+    urls: T00Urls,
+    policy: string,
+    rootDer: number[]
+): Promise<TrustTargetOutcome> {
+    const session = new TimestampSession(new Uint8Array(input), { enableLTV: false });
+    try {
+        const request = await session.createTimestampRequest({
+            hashAlgorithm: "SHA-256",
+            policy,
+            requestCertificate: true,
+        });
+        const response = await sendTimestampRequest(request, {
+            url: urls.trustTarget,
+            retry: 0,
+        });
+        const pdf = await session.embedTimestampToken(response);
+        check(pdf.length > input.length, "trust-target: poisoned token must embed");
+        const custom = new SimpleTrustStore();
+        custom.addCertificate(new Uint8Array(rootDer));
+        const verified = await verifyPdfTimestamps(pdf, {
+            trustStore: custom,
+            strictESSValidation: true,
+        });
+        const result = verified[0];
+        return {
+            name: "trust-target",
+            embedded: true,
+            count: verified.length,
+            verified: result?.verified ?? false,
+            error: result?.verificationError ?? null,
+            certificateCount: result?.certificates?.length ?? 0,
+        };
+    } finally {
+        session.dispose();
+    }
+}
+
+/**
  * T09 hook: signer validity at genTime is NOT enforced pre-embed on
  * current code. This probe embeds a token whose signer certificate is
  * expired and returns the observation; the strict rejection assertion
@@ -916,6 +976,7 @@ export async function runWorkerJourney(
     runCraftedValidControl,
     probeResourceLimit,
     runCorsCases,
+    runTrustTargetCase,
     probeSignerValidityAtGenTime,
     probeTransportHooks,
     runWorkerJourney,

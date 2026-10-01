@@ -771,8 +771,10 @@ async function verifyTimestampWithIndex(
 
         // If trust store is provided, verify the certificate chain
         if (options.trustStore) {
-            // Put the SID-selected signer first. This remains caller-owned
-            // trust policy; self-consistency alone never establishes TSA trust.
+            // Put the SID-selected signer first: the trust store verifies
+            // chain[0] and treats the remaining CMS bag entries as untrusted
+            // path-building candidates. This remains caller-owned trust
+            // policy; self-consistency alone never establishes TSA trust.
             const chain = [
                 signingCertificate,
                 ...certificates.filter((certificate) => certificate !== signingCertificate),
