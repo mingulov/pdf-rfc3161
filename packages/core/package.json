@@ -106,7 +106,7 @@
         "@typescript/native": "npm:typescript@7.0.2",
         "eslint": "^10.10.0",
         "eslint-plugin-security": "^4.0.1",
-        "prettier": "^3.9.6",
+        "prettier": "^3.9.9",
         "tsup": "^8.5.1",
         "tsx": "^4.23.13",
         "typescript": "npm:@typescript/typescript6@6.0.2",
