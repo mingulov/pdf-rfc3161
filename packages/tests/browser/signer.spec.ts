@@ -786,8 +786,8 @@ export async function probeSignerValidityAtGenTime(
  * boundary directly with a raw no-cors fetch of a candidate-built TSQ:
  * the server returns a correctly signed token with valid CORS headers,
  * yet the page can read nothing back. Observation only: no assertions
- * here; strict transport assertions land with T02 (its C06 cases for
- * redirect:manual handling).
+ * here. (The redirect:manual strictness itself is asserted by the runner
+ * since T02; this probe only documents why opaque bytes stay unreadable.)
  */
 async function probeOpaqueResponse(
     input: number[],
@@ -838,9 +838,10 @@ async function probeOpaqueResponse(
 }
 
 /**
- * T02 hooks: redirect, opaque-response, and stalled-body transport
- * probes. These return the observed outcome without asserting: strict
- * transport assertions land with T02 (its C06 transport cases). Each
+ * T02 transport probes: redirect and stalled-body outcomes are asserted
+ * strictly by the runner (its C06 transport cases: redirect rejected, stall
+ * rejected with TIMEOUT). The opaque-response probe stays
+ * observation-only (raw no-cors fetch, never the product path). Each
  * product-path attempt races a hook-level bound so a never-settling
  * transport documents as "hung" instead of hanging the gate.
  */

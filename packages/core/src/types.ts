@@ -208,6 +208,13 @@ export enum TimestampErrorCode {
     STATE_ERROR = "STATE_ERROR",
     /** Caller passed an invalid argument */
     INVALID_ARGUMENT = "INVALID_ARGUMENT",
+    /**
+     * The per-URL circuit breaker is open, so no request was attempted.
+     * Distinct from NETWORK_ERROR/TIMEOUT: those mean attempts were made
+     * and failed, while CIRCUIT_OPEN means the call was short-circuited
+     * locally without consuming fetch or backoff budget.
+     */
+    CIRCUIT_OPEN = "CIRCUIT_OPEN",
 }
 
 /**

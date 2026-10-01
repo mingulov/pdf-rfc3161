@@ -41,12 +41,18 @@ jobs:
           done
 
       # Main ESM entry-point budget; update deliberately when public exports grow.
-      - name: Enforce ESM bundle size budget (<= 225 KiB)
+      # R13 (T02 fix round 2): 235 KiB. The T02 transport hardening
+      # (streaming bounded reader, error classification, abort/deadline
+      # machinery) is mandated security behavior that grew the main entry
+      # point past 225 KiB; compaction inside T02's files would gut
+      # requirements. Revisit in program task T19; further breaches get
+      # per-breach rulings.
+      - name: Enforce ESM bundle size budget (<= 235 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=230400
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 225 KiB)"
+          MAX=240640
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 235 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 225 KiB (230400 bytes) budget"
+            echo "::error::ESM bundle exceeds 235 KiB (240640 bytes) budget"
             exit 1
           fi

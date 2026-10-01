@@ -896,9 +896,13 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
     assert.equal(direct.length, 22, "total direct TSA requests");
     assert.equal(world.redirectHits.length, 1, "the redirect hook must execute its initial POST");
     const followUps = world.requests.filter((captured) => captured.viaRedirect);
-    assert.ok(followUps.length <= 1, "at most one redirect follow-up POST may arrive");
+    assert.equal(
+        followUps.length,
+        0,
+        "redirect:manual must prevent the browser from following the TSA redirect (C06 behavior change)"
+    );
     progress(
-        `redirect follow-ups observed: ${followUps.length.toString()} (observation only, T02 owns the verdict)`
+        `redirect follow-ups observed: ${followUps.length.toString()} (strict since T02: rejection expected)`
     );
     // requestCertificate:false omits certReq from the TSQ (parsed as null).
     const certReqFalse = world.requests.filter((captured) => captured.certReq !== true);
@@ -1467,6 +1471,49 @@ function assertResourceLimit(outcome: RejectionOutcome): void {
     );
 }
 
+/**
+ * T02 strict transport assertions (C06). The redirect and stalled-body
+ * hooks flipped from observation-only to strict: redirect:manual rejects
+ * the 307 instead of following it to a signature, and the per-attempt
+ * deadline now covers the body so the stall rejects with TIMEOUT instead
+ * of hanging. The opaque probe stays observation-only: it uses a raw
+ * page-side no-cors fetch (never the product path, which cannot produce
+ * opacity), with harness integrity covered by the opaqueHits count.
+ */
+function assertTransportHooks(transportHooks: TransportObservation[]): void {
+    const byName = new Map(transportHooks.map((hook) => [hook.name, hook]));
+    assert.equal(transportHooks.length, 3, "transport hook count");
+
+    const redirect = byName.get("redirect");
+    assert.ok(redirect !== undefined, "redirect hook must run");
+    assert.equal(redirect.outcome, "rejected", "TSA redirect must be rejected, not followed");
+    assert.equal(redirect.code, "NETWORK_ERROR", "redirect rejection code");
+    assert.match(redirect.message, /redirect/i, "redirect rejection message");
+    assert.ok(
+        redirect.elapsedMs < 15000,
+        `redirect probe must settle before the hook bound, took ${redirect.elapsedMs.toString()}ms`
+    );
+
+    const stall = byName.get("stalled-body");
+    assert.ok(stall !== undefined, "stalled-body hook must run");
+    assert.equal(stall.outcome, "rejected", "stalled body must reject, not hang");
+    assert.equal(stall.code, "TIMEOUT", "stalled-body rejection code");
+    assert.match(stall.message, /timed out/i, "stalled-body rejection message");
+    // Single attempt, 3 s per-attempt deadline (retry: 0), observed ~3002 ms
+    // on every engine. The lower bound proves the client waited out the full
+    // deadline instead of failing fast (500 ms grace for timer slop); the
+    // upper bound is 2x the deadline, excluding hangs while allowing
+    // loaded-CI timer lateness. The 15 s hook race bound stays the hang
+    // backstop above this (a hang reports outcome "hung" and fails there).
+    assert.ok(
+        stall.elapsedMs >= 2500 && stall.elapsedMs < 6000,
+        `stalled body must reject near the 3s deadline, took ${stall.elapsedMs.toString()}ms`
+    );
+
+    const opaque = byName.get("opaque-response");
+    assert.ok(opaque !== undefined, "opaque-response hook must run");
+}
+
 function assertCors(cors: CorsOutcome): void {
     assert.equal(cors.tsaDenied.rejected, true, "CORS-denied TSA must fail signing");
     assert.equal(cors.tsaDenied.code, "NETWORK_ERROR", "CORS-denied TSA error code");
@@ -1855,6 +1902,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
         assertRejections(driven.rejections);
         assertResourceLimit(resourceLimit);
         assertCors(driven.cors);
+        assertTransportHooks(driven.transportHooks);
         assertTrustTarget(driven.trustTarget);
         assert.ok(
             world.ocspHits.length > 0,

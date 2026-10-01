@@ -14,6 +14,45 @@ async function expectRejected<T>(promise: Promise<T>): Promise<unknown> {
     return captured;
 }
 
+function okResponse(bytes: Uint8Array): Response {
+    return new Response(bytes as BodyInit, { status: 200 });
+}
+
+function statusResponse(status: number, statusText: string): Response {
+    return new Response("error-body", { status, statusText });
+}
+
+function abortRejection(): Error {
+    const abortError = new Error("Aborted");
+    abortError.name = "AbortError";
+    return abortError;
+}
+
+interface AttemptInit {
+    signal?: AbortSignal;
+}
+
+/**
+ * Like real fetch: the pending request rejects only when the attempt
+ * signal aborts (the owned deadline firing), so "deadline" tests prove
+ * deadline state rather than an error name.
+ */
+function rejectOnAttemptAbort(): void {
+    mockFetch.mockImplementation(
+        (_url: string, init?: AttemptInit) =>
+            new Promise<never>((_resolve, reject) => {
+                const signal = init?.signal;
+                if (signal?.aborted === true) {
+                    reject(abortRejection());
+                    return;
+                }
+                signal?.addEventListener("abort", () => {
+                    reject(abortRejection());
+                });
+            })
+    );
+}
+
 describe("DefaultFetcher", () => {
     let fetcher: DefaultFetcher;
     let originalFetch: typeof global.fetch;
@@ -58,12 +97,7 @@ describe("DefaultFetcher", () => {
             const ocspResponse = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x00]);
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => ocspResponse.buffer,
-            });
+            mockFetch.mockResolvedValue(okResponse(ocspResponse));
 
             const result = await fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest);
 
@@ -84,18 +118,8 @@ describe("DefaultFetcher", () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
             mockFetch
-                .mockResolvedValueOnce({
-                    ok: false,
-                    status: 503,
-                    statusText: "Service Unavailable",
-                    arrayBuffer: async () => new ArrayBuffer(0),
-                })
-                .mockResolvedValueOnce({
-                    ok: true,
-                    status: 200,
-                    statusText: "OK",
-                    arrayBuffer: async () => ocspResponse.buffer,
-                });
+                .mockResolvedValueOnce(statusResponse(503, "Service Unavailable"))
+                .mockResolvedValueOnce(okResponse(ocspResponse));
 
             const promise = fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest);
             await vi.runAllTimersAsync();
@@ -112,12 +136,7 @@ describe("DefaultFetcher", () => {
             mockFetch
                 .mockRejectedValueOnce(new Error("Network error"))
                 .mockRejectedValueOnce(new Error("Network error"))
-                .mockResolvedValueOnce({
-                    ok: true,
-                    status: 200,
-                    statusText: "OK",
-                    arrayBuffer: async () => ocspResponse.buffer,
-                });
+                .mockResolvedValueOnce(okResponse(ocspResponse));
 
             const promise = fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest);
             await vi.runAllTimersAsync();
@@ -140,49 +159,51 @@ describe("DefaultFetcher", () => {
             expect(mockFetch).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
         });
 
-        it("should retry 4xx HTTP errors and throw after retries exhausted", async () => {
+        it("should fail fast on 4xx HTTP errors without retrying", async () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: false,
-                status: 400,
-                statusText: "Bad Request",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+            mockFetch.mockResolvedValue(statusResponse(400, "Bad Request"));
 
             const error = await expectRejected(
                 fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
             );
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
 
-            expect(mockFetch).toHaveBeenCalledTimes(4); // All errors are retried
+            expect(mockFetch).toHaveBeenCalledTimes(1); // Terminal: no retries
+        });
+
+        it("should treat 429 as terminal without retrying", async () => {
+            const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
+
+            mockFetch.mockResolvedValue(statusResponse(429, "Too Many Requests"));
+
+            const error = await expectRejected(
+                fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
+            );
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
+
+            expect(mockFetch).toHaveBeenCalledTimes(1); // Terminal: no retries
         });
 
         it("should throw TimestampError for empty response body", async () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+            mockFetch.mockResolvedValue(new Response(new ArrayBuffer(0), { status: 200 }));
 
             const error = await expectRejected(
                 fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
             );
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect(mockFetch).toHaveBeenCalledTimes(1);
         });
 
         it("should retry 5xx errors and throw after retries exhausted", async () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: false,
-                status: 503,
-                statusText: "Service Unavailable",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+            mockFetch.mockResolvedValue(statusResponse(503, "Service Unavailable"));
 
             const error = await expectRejected(
                 fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
@@ -192,17 +213,16 @@ describe("DefaultFetcher", () => {
             expect(mockFetch).toHaveBeenCalledTimes(4); // All errors are retried
         });
 
-        it("should handle fetch abort due to timeout", async () => {
+        it("should report TIMEOUT when attempts die on the deadline", async () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            const abortError = new Error("Aborted");
-            abortError.name = "AbortError";
-            mockFetch.mockRejectedValue(abortError);
+            rejectOnAttemptAbort();
 
             const error = await expectRejected(
                 fetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
             );
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.TIMEOUT);
         });
 
         it("should pass through existing TimestampError", async () => {
@@ -225,14 +245,13 @@ describe("DefaultFetcher", () => {
             const shortTimeoutFetcher = new DefaultFetcher({ timeout: 100 });
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            const abortError = new Error("Aborted");
-            abortError.name = "AbortError";
-            mockFetch.mockRejectedValue(abortError);
+            rejectOnAttemptAbort();
 
             const error = await expectRejected(
                 shortTimeoutFetcher.fetchOCSP("http://ocsp.example.com", ocspRequest)
             );
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.TIMEOUT);
         });
 
         it("should use custom maxRetries from constructor", async () => {
@@ -254,12 +273,7 @@ describe("DefaultFetcher", () => {
         it("should successfully fetch CRL on first attempt", async () => {
             const crlData = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x00]);
 
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => crlData.buffer,
-            });
+            mockFetch.mockResolvedValue(okResponse(crlData));
 
             const result = await fetcher.fetchCRL("http://crl.example.com");
 
@@ -277,18 +291,8 @@ describe("DefaultFetcher", () => {
             const crlData = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x00]);
 
             mockFetch
-                .mockResolvedValueOnce({
-                    ok: false,
-                    status: 500,
-                    statusText: "Internal Server Error",
-                    arrayBuffer: async () => new ArrayBuffer(0),
-                })
-                .mockResolvedValueOnce({
-                    ok: true,
-                    status: 200,
-                    statusText: "OK",
-                    arrayBuffer: async () => crlData.buffer,
-                });
+                .mockResolvedValueOnce(statusResponse(500, "Internal Server Error"))
+                .mockResolvedValueOnce(okResponse(crlData));
 
             const promise = fetcher.fetchCRL("http://crl.example.com");
             await vi.runAllTimersAsync();
@@ -304,12 +308,7 @@ describe("DefaultFetcher", () => {
             mockFetch
                 .mockRejectedValueOnce(new Error("Network error"))
                 .mockRejectedValueOnce(new Error("Network error"))
-                .mockResolvedValueOnce({
-                    ok: true,
-                    status: 200,
-                    statusText: "OK",
-                    arrayBuffer: async () => crlData.buffer,
-                });
+                .mockResolvedValueOnce(okResponse(crlData));
 
             const promise = fetcher.fetchCRL("http://crl.example.com");
             await vi.runAllTimersAsync();
@@ -328,39 +327,37 @@ describe("DefaultFetcher", () => {
             expect(mockFetch).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
         });
 
-        it("should retry 4xx HTTP errors and throw after retries exhausted", async () => {
-            mockFetch.mockResolvedValue({
-                ok: false,
-                status: 404,
-                statusText: "Not Found",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+        it("should fail fast on 4xx HTTP errors without retrying", async () => {
+            mockFetch.mockResolvedValue(statusResponse(404, "Not Found"));
 
             const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com"));
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
 
-            expect(mockFetch).toHaveBeenCalledTimes(4); // All errors are retried
+            expect(mockFetch).toHaveBeenCalledTimes(1); // Terminal: no retries
+        });
+
+        it("should treat 408 as terminal without retrying", async () => {
+            mockFetch.mockResolvedValue(statusResponse(408, "Request Timeout"));
+
+            const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com"));
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
+
+            expect(mockFetch).toHaveBeenCalledTimes(1); // Terminal: no retries
         });
 
         it("should throw TimestampError for empty response body", async () => {
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+            mockFetch.mockResolvedValue(new Response(new ArrayBuffer(0), { status: 200 }));
 
             const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com"));
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect(mockFetch).toHaveBeenCalledTimes(1);
         });
 
         it("should retry 5xx errors and throw after retries exhausted", async () => {
-            mockFetch.mockResolvedValue({
-                ok: false,
-                status: 500,
-                statusText: "Internal Server Error",
-                arrayBuffer: async () => new ArrayBuffer(0),
-            });
+            mockFetch.mockResolvedValue(statusResponse(500, "Internal Server Error"));
 
             const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com"));
             expect(error).toBeInstanceOf(TimestampError);
@@ -368,21 +365,18 @@ describe("DefaultFetcher", () => {
             expect(mockFetch).toHaveBeenCalledTimes(4); // All errors are retried
         });
 
-        it("should handle fetch abort due to timeout", async () => {
-            const abortError = new Error("Aborted");
-            abortError.name = "AbortError";
-            mockFetch.mockRejectedValue(abortError);
+        it("should report TIMEOUT when attempts die on the deadline", async () => {
+            rejectOnAttemptAbort();
 
             const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com"));
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.TIMEOUT);
         });
 
         it("should include URL in error message after retries exhausted", async () => {
             mockFetch.mockRejectedValue(new Error("Network error"));
 
-            const error = await expectRejected(
-                fetcher.fetchCRL("http://crl.example.com/test.crl")
-            );
+            const error = await expectRejected(fetcher.fetchCRL("http://crl.example.com/test.crl"));
             expect(error).toBeInstanceOf(TimestampError);
             const timestampError = error as TimestampError;
             expect(timestampError.message).toContain("http://crl.example.com/test.crl");
@@ -403,14 +397,13 @@ describe("DefaultFetcher", () => {
         it("should use custom timeout from constructor", async () => {
             const shortTimeoutFetcher = new DefaultFetcher({ timeout: 100 });
 
-            const abortError = new Error("Aborted");
-            abortError.name = "AbortError";
-            mockFetch.mockRejectedValue(abortError);
+            rejectOnAttemptAbort();
 
             const error = await expectRejected(
                 shortTimeoutFetcher.fetchCRL("http://crl.example.com")
             );
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.TIMEOUT);
         });
 
         it("should use custom maxRetries from constructor", async () => {
@@ -445,12 +438,7 @@ describe("DefaultFetcher", () => {
             const ocspResponse = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x00]);
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => ocspResponse.buffer,
-            });
+            mockFetch.mockResolvedValue(okResponse(ocspResponse));
 
             // Use real timers temporarily so Date.now() measurements actually
             // reflect wall clock for this assertion.
@@ -475,12 +463,7 @@ describe("DefaultFetcher", () => {
         it("fetchOCSP should accept url string and request Uint8Array", async () => {
             const ocspRequest = new Uint8Array([0x01, 0x02, 0x03]);
 
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => new Uint8Array([0x01, 0x02]).buffer,
-            });
+            mockFetch.mockResolvedValue(okResponse(new Uint8Array([0x01, 0x02])));
 
             const result = await fetcher.fetchOCSP("http://test.com", ocspRequest);
 
@@ -488,12 +471,7 @@ describe("DefaultFetcher", () => {
         });
 
         it("fetchCRL should accept url string and return Promise<Uint8Array>", async () => {
-            mockFetch.mockResolvedValue({
-                ok: true,
-                status: 200,
-                statusText: "OK",
-                arrayBuffer: async () => new Uint8Array([0x01, 0x02]).buffer,
-            });
+            mockFetch.mockResolvedValue(okResponse(new Uint8Array([0x01, 0x02])));
 
             const result = await fetcher.fetchCRL("http://test.com");
 

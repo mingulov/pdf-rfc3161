@@ -1,5 +1,8 @@
 import { TimestampError, TimestampErrorCode } from "../types.js";
 
+/** Matches an http(s) URL embedded in free text (error messages, stacks). */
+const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s"'`]{1,2048}/g;
+
 /**
  * Options for {@link validateUrl}.
  */
@@ -14,6 +17,76 @@ export interface ValidateUrlOptions {
 }
 
 const MAX_HOSTNAME_LENGTH = 253;
+
+/**
+ * Render a URL for error messages and diagnostics: origin plus path only.
+ * Credentials, query, and fragment are removed so secrets embedded in a
+ * configured URL never leak into thrown messages or logs. Returns a fixed
+ * placeholder for unparseable input rather than echoing raw text.
+ */
+export function formatDiagnosticUrl(urlString: string): string {
+    try {
+        const parsed = new URL(urlString);
+        parsed.username = "";
+        parsed.password = "";
+        parsed.search = "";
+        parsed.hash = "";
+        return parsed.toString();
+    } catch {
+        return "[unparseable URL]";
+    }
+}
+
+/**
+ * Strip credentials, query, and fragment from every http(s) URL embedded
+ * in free text, using the same stripping as {@link formatDiagnosticUrl}.
+ * Native fetch failures echo the request URL into the error message, so
+ * transport-attached causes are passed through here before being attached.
+ */
+export function sanitizeTransportMessage(message: string): string {
+    return message.replace(URL_IN_TEXT_PATTERN, (match) => formatDiagnosticUrl(match));
+}
+
+function sanitizeCauseInner(cause: unknown, seen: Set<object>): unknown {
+    if (typeof cause === "string") {
+        return sanitizeTransportMessage(cause);
+    }
+    if (!(cause instanceof Error)) {
+        return cause;
+    }
+    if (seen.has(cause)) {
+        return cause;
+    }
+    seen.add(cause);
+    const nested = cause.cause;
+    const cleanNested = nested === undefined ? undefined : sanitizeCauseInner(nested, seen);
+    const message = sanitizeTransportMessage(cause.message);
+    if (message === cause.message && cleanNested === nested) {
+        // No secrets: preserve the original by identity so subclass and
+        // identity checks downstream keep working.
+        return cause;
+    }
+    const clean = new Error(message);
+    clean.name = cause.name;
+    if (typeof cause.stack === "string") {
+        clean.stack = sanitizeTransportMessage(cause.stack);
+    }
+    if (cleanNested !== undefined) {
+        clean.cause = cleanNested;
+    }
+    return clean;
+}
+
+/**
+ * Sanitize a transport-attached cause (fetch/stream rejection) so attached
+ * messages and stacks cannot leak URL credentials, query, or fragment.
+ * Non-Error causes pass through; causes without embedded secrets keep
+ * their identity. Validator-supplied causes are explicitly out of scope
+ * and are never passed through here.
+ */
+export function sanitizeTransportCause(cause: unknown): unknown {
+    return sanitizeCauseInner(cause, new Set());
+}
 
 // Hostnames that route to the local machine no matter the deployment.
 const RESTRICTED_LITERAL_HOSTNAMES = new Set([
