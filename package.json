@@ -15,7 +15,7 @@
         "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-tests run test:package && pnpm --filter pdf-rfc3161-demo run test:e2e"
     },
     "devDependencies": {
-        "@changesets/cli": "^3.0.2",
+        "@changesets/cli": "^3.0.3",
         "@eslint/js": "^10.0.1",
         "@typescript/native": "npm:typescript@7.0.2",
         "eslint": "^10.10.0",
