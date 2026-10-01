@@ -2,19 +2,84 @@ import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import {
     CertificateToValidate,
+    RevocationEvidenceResult,
+    RevocationStatus,
     ValidationResult,
     ValidationSessionOptions,
 } from "./validation-types.js";
 import { DefaultFetcher } from "./fetchers/default-fetcher.js";
 import { InMemoryValidationCache } from "./fetchers/memory-cache.js";
-import { CertificateStatus } from "./ocsp-utils.js";
-import { getOCSPURI } from "./ocsp-utils.js";
+import {
+    CertificateStatus,
+    createOCSPRequest,
+    getOCSPURI,
+    parseOCSPResponse,
+} from "./ocsp-utils.js";
 import { getCRLDistributionPoints } from "./crl-utils.js";
-import { createOCSPRequest } from "./ocsp-utils.js";
-import { parseOCSPResponse, CertificateStatus as ParsedCertificateStatus } from "./ocsp-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
+
+/**
+ * Combines already-evaluated per-source evidence into one status. Revoked
+ * dominates good; unknown contributes nothing, so an empty evaluation also
+ * yields unknown. Only authenticated evaluators may produce good/revoked;
+ * until they exist every evaluation is unknown and so is the result.
+ */
+function combineRevocationEvidence(evidence: RevocationEvidenceResult[]): RevocationStatus {
+    let sawGood = false;
+    for (const item of evidence) {
+        if (item.status === "revoked") {
+            return "revoked";
+        }
+        if (item.status === "good") {
+            sawGood = true;
+        }
+    }
+    return sawGood ? "good" : "unknown";
+}
+
+/**
+ * Serial number in canonical hex: DER INTEGERs may carry a leading zero
+ * pad byte, which must not defeat the comparison.
+ */
+function normalizeSerialNumber(serial: asn1js.Integer): string {
+    const bytes = serial.valueBlock.valueHexView;
+    let start = 0;
+    while (start < bytes.length - 1 && bytes[start] === 0) {
+        start += 1;
+    }
+    return bytesToHex(bytes.subarray(start));
+}
+
+/**
+ * Structural check for whether a CRL lists a certificate serial in its
+ * revokedCertificates.
+ *
+ * @internal Unauthenticated structural scan for diagnostics and for the
+ * future authenticated CRL evaluator. A match never yields a revoked
+ * verdict and a miss never yields a good verdict; malformed input yields
+ * false. Delta CRLs are not filtered here; callers must consult
+ * parseCRLInfo and never treat a delta CRL as complete.
+ */
+export function crlContainsSerial(crlBytes: Uint8Array, cert: pkijs.Certificate): boolean {
+    try {
+        const asn1 = asn1js.fromBER(toArrayBuffer(crlBytes));
+        if (asn1.offset === -1) return false;
+
+        const crl = new pkijs.CertificateRevocationList({ schema: asn1.result });
+
+        const revokedEntries = crl.revokedCertificates;
+        if (!revokedEntries) return false;
+
+        const wanted = normalizeSerialNumber(cert.serialNumber);
+        return revokedEntries.some(
+            (entry) => normalizeSerialNumber(entry.userCertificate) === wanted
+        );
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Session for managing certificate validation with OCSP/CRL.
@@ -37,7 +102,7 @@ import { toArrayBuffer, bytesToHex } from "../utils.js";
  *
  * // Get results
  * for (const result of session.getResults()) {
- *     console.log(`Serial ${result.cert.serialNumber}: ${result.isValid ? "OK" : "REVOKED"}`);
+ *     console.log(`Serial ${result.cert.serialNumber}: ${result.revocationStatus}`);
  * }
  *
  * // Export LTV data for PDF embedding
@@ -110,7 +175,10 @@ export class ValidationSession {
 
     /**
      * Execute validation for all queued certificates. Each certificate is
-     * validated against the configured trust store and revocation policy.
+     * evaluated against collected OCSP/CRL revocation evidence; the result
+     * carries a revocation status relative to a verified issuing key, not
+     * complete path trust. Until authenticated evaluators exist, structural
+     * evidence alone yields "unknown" for every certificate.
      *
      * @returns One `ValidationResult` per queued certificate, in the order
      *   they were queued.
@@ -138,65 +206,129 @@ export class ValidationSession {
     }
 
     /**
-     * Validate a single certificate
+     * Validate a single certificate.
+     *
+     * Attempt order follows `preferOCSP` (false tries CRL then OCSP).
+     * Unknown permits fallback to the other source; only an authenticated
+     * decisive result stops the walk. No authenticated evaluator exists
+     * yet, so every evaluation below stays unknown by construction and the
+     * combined status is always unknown.
      */
     private async validateCertificate(req: CertificateToValidate): Promise<ValidationResult> {
         const result: ValidationResult = {
             cert: req.cert,
-            isValid: true,
+            revocationStatus: "unknown",
+            isValid: false,
             sources: [],
             errors: [],
         };
 
-        const ocspUrl = getOCSPURI(req.cert);
-
-        if (ocspUrl && this.options.preferOCSP) {
-            try {
-                const ocspResponse = await this.fetchOCSPWithCache(ocspUrl, req.cert, req.issuer);
-                const parsed = this.parseOCSPResponse(ocspResponse);
-
-                if (parsed.certStatus === ParsedCertificateStatus.REVOKED) {
-                    result.isValid = false;
-                    result.errors.push("OCSP: Certificate revoked");
-                } else if (parsed.certStatus === ParsedCertificateStatus.UNKNOWN) {
-                    result.isValid = false;
-                    result.errors.push("OCSP: Certificate status unknown");
-                }
-                result.sources.push("OCSP");
-                // M2: capture the OCSP bytes for downstream exportLTVData
-                (result.ocspResponses ??= []).push(ocspResponse);
-            } catch (e) {
-                result.errors.push(`OCSP failed: ${e instanceof Error ? e.message : String(e)}`);
-            }
-        }
-
-        // Priority model (M3): OCSP is authoritative when it succeeded.
-        // CRL is consulted only as a fallback when OCSP did not run or did not
-        // produce a valid (non-revoked) answer. CRL never resets isValid back
-        // to true after OCSP says revoked -- this is intentional. If you need
-        // CRL to override OCSP, build a separate flow that calls only CRL.
-        if (!result.sources.includes("OCSP") || !result.isValid) {
-            const crlUrls = getCRLDistributionPoints(req.cert);
-            for (const url of crlUrls) {
-                try {
-                    const crl = await this.fetchCRLWithCache(url);
-                    // M2: capture the CRL bytes for downstream exportLTVData
-                    (result.crls ??= []).push(crl);
-                    if (this.checkCRLForCert(crl, req.cert)) {
-                        result.isValid = false;
-                        result.sources.push("CRL");
-                        break;
-                    }
-                    result.sources.push("CRL");
-                } catch (e) {
-                    result.errors.push(
-                        `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`
-                    );
+        const order: ("OCSP" | "CRL")[] = this.options.preferOCSP
+            ? ["OCSP", "CRL"]
+            : ["CRL", "OCSP"];
+        const evidence: RevocationEvidenceResult[] = [];
+        for (const source of order) {
+            const evaluated =
+                source === "OCSP"
+                    ? await this.evaluateOCSPEvidence(req, result)
+                    : await this.evaluateCRLEvidence(req, result);
+            if (evaluated !== null) {
+                evidence.push(evaluated);
+                if (evaluated.status !== "unknown") {
+                    break;
                 }
             }
         }
+
+        result.revocationStatus = combineRevocationEvidence(evidence);
+        // Deprecated compatibility alias: true only for authenticated good.
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- the session itself maintains the alias.
+        result.isValid = result.revocationStatus === "good";
 
         return result;
+    }
+
+    /**
+     * Attempts OCSP evidence collection for one certificate.
+     *
+     * Returns null when the certificate carries no OCSP responder URL
+     * (source not attempted). Otherwise collects the response bytes (when
+     * fetchable) into `result`, records diagnostics, and returns an unknown
+     * evidence record: structural OCSP status is unauthenticated.
+     */
+    private async evaluateOCSPEvidence(
+        req: CertificateToValidate,
+        result: ValidationResult
+    ): Promise<RevocationEvidenceResult | null> {
+        const ocspUrl = getOCSPURI(req.cert);
+        if (!ocspUrl) {
+            return null;
+        }
+        const evidence: RevocationEvidenceResult = {
+            status: "unknown",
+            source: "OCSP",
+            errors: [],
+        };
+        let response: Uint8Array;
+        try {
+            response = await this.fetchOCSPWithCache(ocspUrl, req.cert, req.issuer);
+        } catch (e) {
+            const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
+            evidence.errors.push(message);
+            result.errors.push(message);
+            return evidence;
+        }
+        // M2: capture the OCSP bytes for downstream exportLTVData
+        (result.ocspResponses ??= []).push(response);
+        result.sources.push("OCSP");
+        const structural = this.describeOCSPStructure(response);
+        const message =
+            structural === "malformed"
+                ? "OCSP: malformed response; revocation status unknown"
+                : `OCSP: structural status "${structural}" is unauthenticated; revocation status unknown`;
+        evidence.errors.push(message);
+        result.errors.push(message);
+        return evidence;
+    }
+
+    /**
+     * Attempts CRL evidence collection for one certificate.
+     *
+     * Returns null when the certificate carries no distribution points
+     * (source not attempted). Otherwise collects each fetchable CRL into
+     * `result`, records per-URL diagnostics, and returns an unknown
+     * evidence record: structural CRL contents are unauthenticated.
+     */
+    private async evaluateCRLEvidence(
+        req: CertificateToValidate,
+        result: ValidationResult
+    ): Promise<RevocationEvidenceResult | null> {
+        const crlUrls = getCRLDistributionPoints(req.cert);
+        if (crlUrls.length === 0) {
+            return null;
+        }
+        const evidence: RevocationEvidenceResult = {
+            status: "unknown",
+            source: "CRL",
+            errors: [],
+        };
+        for (const url of crlUrls) {
+            let message: string;
+            try {
+                const crl = await this.fetchCRLWithCache(url);
+                // M2: capture the CRL bytes for downstream exportLTVData
+                (result.crls ??= []).push(crl);
+                result.sources.push("CRL");
+                message =
+                    `CRL from ${url}: ` +
+                    `${this.describeCRLStructure(crl, req.cert)}; revocation status unknown`;
+            } catch (e) {
+                message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+            }
+            evidence.errors.push(message);
+            result.errors.push(message);
+        }
+        return evidence;
     }
 
     private async fetchOCSPWithCache(
@@ -237,43 +369,46 @@ export class ValidationSession {
             ?.cert;
     }
 
-    private parseOCSPResponse(response: Uint8Array): {
-        certStatus: CertificateStatus;
-    } {
+    /**
+     * Structural OCSP status label for diagnostics only. Never a verdict:
+     * the response signature, responder authorization, nonce, CertID match
+     * and freshness are not verified here.
+     */
+    private describeOCSPStructure(
+        response: Uint8Array
+    ): "good" | "revoked" | "unknown" | "malformed" {
         try {
             const parsed = parseOCSPResponse(response);
-            return { certStatus: parsed.certStatus };
+            if (parsed.certStatus === CertificateStatus.GOOD) {
+                return "good";
+            }
+            if (parsed.certStatus === CertificateStatus.REVOKED) {
+                return "revoked";
+            }
+            return "unknown";
         } catch {
-            return { certStatus: CertificateStatus.UNKNOWN };
+            return "malformed";
         }
     }
 
-    private checkCRLForCert(crlBytes: Uint8Array, cert: pkijs.Certificate): boolean {
-        try {
-            const crlInfo = parseCRLInfo(crlBytes);
-
-            const asn1 = asn1js.fromBER(toArrayBuffer(crlInfo.crl));
-            if (asn1.offset === -1) return false;
-
-            const crl = new pkijs.CertificateRevocationList({ schema: asn1.result });
-
-            const revokedEntries = (
-                crl as { revokedCertificateEntries?: pkijs.RevokedCertificate[] }
-            ).revokedCertificateEntries;
-            if (!revokedEntries) return false;
-
-            for (const entry of revokedEntries) {
-                if (
-                    entry.userCertificate.valueBlock.toString() ===
-                    cert.serialNumber.valueBlock.toString()
-                ) {
-                    return true;
-                }
-            }
-        } catch {
-            return false;
+    /**
+     * Structural CRL description for diagnostics only. Never a verdict:
+     * target issuance, CRL issuer/key/signature, key usage, critical
+     * extensions, scope and freshness are not verified here. A delta CRL is
+     * detected via parseCRLInfo and is never treated as complete.
+     */
+    private describeCRLStructure(crlBytes: Uint8Array, cert: pkijs.Certificate): string {
+        const info = parseCRLInfo(crlBytes);
+        if (!info.parsed) {
+            return "malformed response";
         }
-        return false;
+        if (info.isDelta) {
+            return "delta CRL is not a complete revocation source";
+        }
+        if (crlContainsSerial(crlBytes, cert)) {
+            return "certificate serial is structurally listed but the CRL is unauthenticated";
+        }
+        return "certificate serial is not structurally listed and the CRL is unauthenticated";
     }
 
     /**
@@ -305,7 +440,10 @@ export class ValidationSession {
     }
 
     /**
-     * Export LTV data for PDF embedding
+     * Export LTV data for PDF embedding.
+     *
+     * Structural collection of fetched byte artifacts only; its output
+     * never becomes a revocation verdict merely because it is embedded.
      */
     exportLTVData(): {
         certificates: Uint8Array[];

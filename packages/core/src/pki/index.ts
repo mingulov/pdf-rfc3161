@@ -2,6 +2,7 @@ export { ValidationSession } from "./validation-session.js";
 
 export type {
     CertificateToValidate,
+    RevocationStatus,
     ValidationResult,
     RevocationDataFetcher,
     ValidationCache,

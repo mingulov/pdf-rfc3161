@@ -11,12 +11,53 @@ export interface CertificateToValidate {
 }
 
 /**
+ * Revocation status of a certificate relative to a verified issuing key.
+ *
+ * This API establishes revocation status only. It is not complete path
+ * trust and does not cover every certificate-validity property (expiry,
+ * name constraints, policy processing, and so on). Only authenticated
+ * evaluators may produce "good" or "revoked": missing endpoints/issuers,
+ * malformed, stale or unsupported evidence, and outages all yield
+ * "unknown". Until the authenticated OCSP/CRL evaluators exist, structural
+ * evidence alone always yields "unknown".
+ */
+export type RevocationStatus = "good" | "revoked" | "unknown";
+
+/**
+ * Internal per-source revocation evidence evaluation.
+ *
+ * Not part of the public API. Produced while combining OCSP/CRL evidence
+ * inside ValidationSession; see RevocationStatus for the verdict rules.
+ */
+export interface RevocationEvidenceResult {
+    /** Evaluated status for this evidence source */
+    status: RevocationStatus;
+    /** Evidence source that was evaluated */
+    source: "OCSP" | "CRL";
+    /** Diagnostics recorded while evaluating this source */
+    errors: string[];
+}
+
+/**
  * Result of validating a single certificate
  */
 export interface ValidationResult {
     /** Certificate that was validated */
     cert: pkijs.Certificate;
-    /** Whether certificate is valid */
+    /**
+     * Revocation status relative to a verified issuing key (see
+     * RevocationStatus). Until authenticated evaluators exist, structural
+     * evidence alone yields "unknown".
+     */
+    revocationStatus: RevocationStatus;
+    /**
+     * Whether the certificate revocation status is authenticated good.
+     *
+     * @deprecated Compatibility alias for `revocationStatus === "good"`.
+     * Its meaning changed: it used to default to true ("not known
+     * revoked", even with no evidence at all) and is now true only for
+     * authenticated good. Prefer `revocationStatus` directly.
+     */
     isValid: boolean;
     /** Sources used for validation */
     sources: ("OCSP" | "CRL")[];
