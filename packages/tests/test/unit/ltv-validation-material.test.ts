@@ -9,6 +9,7 @@ import {
     createCrlCandidate,
     createOcspResponseCandidate,
 } from "../fixtures/revocation-material.js";
+import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
 
 vi.mock(
     "../../../core/src/pki/ocsp-utils.js",
@@ -524,5 +525,197 @@ describe("network LTV validation material", () => {
 
         expect(result.data.ocspResponses).toEqual([ocsp]);
         expect(result.data.crls).toEqual([]);
+    });
+});
+
+interface ChainKeys {
+    publicKey: CryptoKey;
+    privateKey: CryptoKey;
+}
+
+async function chainCertificateBytes(options: {
+    subject: string;
+    issuerName?: string;
+    serial: number;
+    keys: ChainKeys;
+    signerKeys?: ChainKeys;
+    caIssuersUrl?: string;
+}): Promise<Uint8Array> {
+    const cert = new pkijs.Certificate();
+    cert.version = 2;
+    cert.serialNumber = new asn1js.Integer({ value: options.serial });
+    const subject = new pkijs.RelativeDistinguishedNames();
+    subject.typesAndValues.push(
+        new pkijs.AttributeTypeAndValue({
+            type: "2.5.4.3",
+            value: new asn1js.PrintableString({ value: options.subject }),
+        })
+    );
+    cert.subject = subject;
+    const issuer = new pkijs.RelativeDistinguishedNames();
+    issuer.typesAndValues.push(
+        new pkijs.AttributeTypeAndValue({
+            type: "2.5.4.3",
+            value: new asn1js.PrintableString({ value: options.issuerName ?? options.subject }),
+        })
+    );
+    cert.issuer = issuer;
+    cert.subjectPublicKeyInfo = await importKeyForCertificate(options.keys.publicKey);
+    if (options.caIssuersUrl) {
+        const accessDescription = new pkijs.AccessDescription({
+            accessMethod: "1.3.6.1.5.5.7.48.2",
+            accessLocation: new pkijs.GeneralName({ type: 6, value: options.caIssuersUrl }),
+        });
+        const syntax = new asn1js.Sequence({ value: [accessDescription.toSchema()] });
+        cert.extensions = [
+            new pkijs.Extension({
+                extnID: "1.3.6.1.5.5.7.1.1",
+                critical: false,
+                extnValue: syntax.toBER(false),
+            }),
+        ];
+    }
+    await cert.sign((options.signerKeys ?? options.keys).privateKey, "SHA-256");
+    return new Uint8Array(cert.toSchema().toBER(false));
+}
+
+describe("issuer-gated AIA chain building and serial-twin handling (T05)", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("fetches OCSP for an issuer that shares the leaf serial", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Serial Twin Leaf",
+            issuerName: "Serial Twin CA",
+            serial: 4242,
+            keys: leafKeys,
+            signerKeys: caKeys,
+        });
+        const ca = await chainCertificateBytes({
+            subject: "Serial Twin CA",
+            serial: 4242,
+            keys: caKeys,
+        });
+        const ocspFetcher = vi.fn(async () => createOcspResponseCandidate("good"));
+
+        const result = await completeLTVData(
+            { certificates: [leaf, ca], crls: [], ocspResponses: [] },
+            { fetchers: { ocspFetcher } }
+        );
+
+        expect(ocspFetcher).toHaveBeenCalledTimes(1);
+        expect(result.data.ocspResponses).toHaveLength(1);
+    });
+
+    it("retains same-serial issuers fetched for different targets", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafAKeys = await generateRSAKeyPair();
+        const caAKeys = await generateRSAKeyPair();
+        const leafBKeys = await generateRSAKeyPair();
+        const caBKeys = await generateRSAKeyPair();
+        const leafA = await chainCertificateBytes({
+            subject: "Chain Leaf A",
+            issuerName: "Chain CA A",
+            serial: 501,
+            keys: leafAKeys,
+            signerKeys: caAKeys,
+            caIssuersUrl: "https://aia.example.test/ca-a",
+        });
+        const leafB = await chainCertificateBytes({
+            subject: "Chain Leaf B",
+            issuerName: "Chain CA B",
+            serial: 502,
+            keys: leafBKeys,
+            signerKeys: caBKeys,
+            caIssuersUrl: "https://aia.example.test/ca-b",
+        });
+        const caA = await chainCertificateBytes({
+            subject: "Chain CA A",
+            serial: 9,
+            keys: caAKeys,
+        });
+        const caB = await chainCertificateBytes({
+            subject: "Chain CA B",
+            serial: 9,
+            keys: caBKeys,
+        });
+        const certFetcher = vi.fn(async (url: string) => (url.endsWith("ca-a") ? caA : caB));
+
+        const result = await completeLTVData(
+            { certificates: [leafA, leafB], crls: [], ocspResponses: [] },
+            { fetchers: { certFetcher } }
+        );
+
+        expect(result.data.certificates).toHaveLength(4);
+        expect(result.errors).toEqual([]);
+        expect(certFetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects an AIA certificate whose key did not issue the target", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const evilKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Gated Leaf",
+            issuerName: "Gated CA",
+            serial: 601,
+            keys: leafKeys,
+            signerKeys: caKeys,
+            caIssuersUrl: "https://aia.example.test/gated",
+        });
+        const evil = await chainCertificateBytes({
+            subject: "Gated CA",
+            serial: 602,
+            keys: evilKeys,
+        });
+        const certFetcher = vi.fn(async () => evil);
+
+        const result = await completeLTVData(
+            { certificates: [leaf], crls: [], ocspResponses: [] },
+            { fetchers: { certFetcher } }
+        );
+
+        expect(result.data.certificates).toHaveLength(1);
+        expect(result.errors.join("\n")).toMatch(/did not issue/i);
+        expect(certFetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects an AIA certificate with a non-matching subject name", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const strangerKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Gated Leaf",
+            issuerName: "Gated CA",
+            serial: 601,
+            keys: leafKeys,
+            signerKeys: caKeys,
+            caIssuersUrl: "https://aia.example.test/gated",
+        });
+        const stranger = await chainCertificateBytes({
+            subject: "Unrelated CA",
+            serial: 603,
+            keys: strangerKeys,
+        });
+        const certFetcher = vi.fn(async () => stranger);
+
+        const result = await completeLTVData(
+            { certificates: [leaf], crls: [], ocspResponses: [] },
+            { fetchers: { certFetcher } }
+        );
+
+        expect(result.data.certificates).toHaveLength(1);
+        expect(result.errors.join("\n")).toMatch(/did not issue/i);
+        expect(certFetcher).toHaveBeenCalledTimes(1);
     });
 });

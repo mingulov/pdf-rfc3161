@@ -72,6 +72,34 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   never trying OCSP. The one-call signing path is unaffected: it never
   consumed these verdicts and still signs with partial LTV plus
   diagnostics when optional collection fails. See MIGRATION.md.
+- **Behavior (verified issuers and byte identity, C01/C03/C05):** advanced
+  `ValidationSession` OCSP requests are now built only with a verified
+  issuer: an explicitly supplied issuer must have issued the target (name
+  match plus target signature verification), and `queueChain` stores
+  candidate issuers that are narrowed (names/AKI/SKI) and
+  signature-verified at use instead of trusting the first name match.
+  Unverifiable issuers yield "unknown" with an issuer diagnostic and no
+  OCSP fetch; the target itself is never its own issuer.
+  `getResultForCert` and `exportLTVData` now use exact certificate and
+  artifact bytes instead of serial strings and length-plus-64-byte-prefix
+  fingerprints, so serial twins under different issuers resolve to their
+  own results and same-length same-prefix evidence with different tails
+  is all retained. `InMemoryValidationCache` now keys OCSP entries by the
+  full request bytes scoped by exact URL, copies bytes on insertion and
+  retrieval, and honors retention (300,000 ms), entry (256), and byte
+  (20 MiB) limits with oldest-first eviction, tunable via the new
+  `InMemoryValidationCacheOptions`; oversized single entries are not
+  cached. Cached bytes are revalidated on use and refetched once after
+  rejection. See MIGRATION.md.
+- **Behavior (AIA issuer gating, C01/C03):** `completeLTVData` chain
+  building now only accepts a fetched certificate that actually issued
+  its target -- fetched bytes with a non-matching subject name or a
+  non-verifying key are skipped with a diagnostic error instead of
+  joining the chain -- and tracks collected certificates by exact bytes
+  rather than serials, so same-serial distinct issuers are now both
+  retained and same-serial legitimate issuers are no longer skipped for
+  OCSP collection. The embedded ContentInfo bytes remain exactly the
+  accepted token bytes plus reservation zero padding; see MIGRATION.md.
 
 ### Fixed
 

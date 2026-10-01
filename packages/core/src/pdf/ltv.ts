@@ -17,7 +17,7 @@ import {
 import { fetchOCSPResponse } from "../pki/ocsp-client.js";
 import { getCRLDistributionPoints } from "../pki/crl-utils.js";
 import { fetchCRL } from "../pki/crl-client.js";
-import { getCaIssuers, findIssuer } from "../pki/cert-utils.js";
+import { getCaIssuers, findIssuer, verifyIssuance } from "../pki/cert-utils.js";
 import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "../pki/der-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
@@ -318,22 +318,26 @@ export async function completeLTVData(
     try {
         // Parse all certificates to work with them
         const certs: pkijs.Certificate[] = [];
+        // Exact byte identity per parsed certificate; serials collide.
+        const certIds = new Map<pkijs.Certificate, string>();
         for (const certBytes of enrichedData.certificates) {
             const asn1 = asn1js.fromBER(toArrayBuffer(certBytes));
             if (asn1.offset !== -1) {
-                certs.push(new pkijs.Certificate({ schema: asn1.result }));
+                const parsed = new pkijs.Certificate({ schema: asn1.result });
+                certs.push(parsed);
+                certIds.set(parsed, bytesToHex(certBytes));
             }
         }
 
         // We need at least 2 certs to have an issuer-subject pair (unless self-signed, which don't have OCSP)
         if (certs.length < 2) {
             // Attempt to build chain via AIA if we only have the leaf
-            await buildChainViaAIA(certs, enrichedData, errors, settings);
+            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds);
         } else {
             // Even if we have > 1, we might be missing the root or an intermediate
             // A smarter approach: check if the chain is complete.
             // For now, let's run the AIA builder anyway, it checks for missing issuers.
-            await buildChainViaAIA(certs, enrichedData, errors, settings);
+            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds);
         }
 
         // Pre-index certificates by subject to speed up issuer lookups
@@ -358,8 +362,9 @@ export async function completeLTVData(
                 continue;
             }
 
-            // Avoid using cert as its own issuer for OCSP (unless strictly self-signed root, but OCSP typicaly for end-entity)
-            if (issuer.serialNumber.isEqual(cert.serialNumber)) {
+            // Never use a certificate as its own OCSP issuer. Identity is
+            // exact bytes: serial twins under different issuers are distinct.
+            if (certIds.get(issuer) === certIds.get(cert)) {
                 continue;
             }
 
@@ -384,7 +389,7 @@ export async function completeLTVData(
                         const parsed = parseOCSPResponse(response);
                         if (parsed.certStatus !== CertificateStatus.GOOD) {
                             errors.push(
-                                `Fetched OCSP candidate is structurally valid but certificate status is not good (${CertificateStatus[parsed.certStatus]}); attempting CRL fallback for cert serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}`
+                                `Fetched OCSP candidate is structurally valid but certificate status is not good (${CertificateStatus[parsed.certStatus]}); attempting CRL fallback for cert serial: ${bytesToHex(cert.serialNumber.valueBlock.valueHexView)}`
                             );
                         } else {
                             const ocspHash = bytesToHex(response);
@@ -402,7 +407,7 @@ export async function completeLTVData(
                 } catch (e) {
                     // OCSP fetch failed - log error and continue to CRL
                     errors.push(
-                        `Failed to fetch OCSP for certificate (Serial: ${bytesToHex((cert.serialNumber as unknown as asn1js.Integer).valueBlock.valueHexView)}): ${e instanceof Error ? e.message : String(e)}`
+                        `Failed to fetch OCSP for certificate (Serial: ${bytesToHex(cert.serialNumber.valueBlock.valueHexView)}): ${e instanceof Error ? e.message : String(e)}`
                     );
                 }
             }
@@ -494,15 +499,16 @@ async function buildChainViaAIA(
     certs: pkijs.Certificate[],
     enrichedData: LTVData,
     errors: string[],
-    settings?: LTVSettings
+    settings: LTVSettings | undefined,
+    certIds: Map<pkijs.Certificate, string>
 ): Promise<void> {
     const logger = getLogger();
     let madeProgress = true;
     let depth = 0;
     const MAX_DEPTH = 5;
 
-    // Serial numbers we already have to avoid duplicates
-    const seenSerials = new Set<string>(certs.map((c) => c.serialNumber.valueBlock.toString()));
+    // Exact certificate bytes we already have to avoid duplicates.
+    const seenCerts = new Set<string>(enrichedData.certificates.map((c) => bytesToHex(c)));
 
     // Pre-calculate subject map to avoid O(N^2) searches inside the loop
     const subjectMap = new Map<string, pkijs.Certificate>();
@@ -549,26 +555,41 @@ async function buildChainViaAIA(
                         ? await settings.fetchers.certFetcher(url)
                         : await fetchCertificate(url);
 
+                    const fetchedId = bytesToHex(certBytes);
+                    if (seenCerts.has(fetchedId)) {
+                        continue;
+                    }
+
                     // Parse to verify it's a cert and get details
                     const asn1 = asn1js.fromBER(toArrayBuffer(certBytes));
                     if (asn1.offset === -1) {
                         continue;
                     }
                     const newCert = new pkijs.Certificate({ schema: asn1.result });
-                    const newSerial = newCert.serialNumber.valueBlock.toString();
 
-                    if (!seenSerials.has(newSerial)) {
-                        // Found a new cert!
-                        logger.info(
-                            `Found new intermediate certificate: ${newCert.subject.toString()}`
-                        );
-                        certs.push(newCert);
-                        subjectMap.set(newCert.subject.toString(), newCert);
-                        enrichedData.certificates.push(certBytes);
-                        seenSerials.add(newSerial);
-                        madeProgress = true;
-                        break; // Found one valid issuer, move to next cert
+                    // Gate issuer fetching on actual issuance: only a cert
+                    // that really issued this target joins the chain. T08
+                    // budgets the fetching itself.
+                    if (!(await verifyIssuance(cert, newCert))) {
+                        const msg =
+                            `AIA issuer from ${url} did not issue the target ` +
+                            "certificate; trying next URL";
+                        logger.warn(msg);
+                        errors.push(msg);
+                        continue;
                     }
+
+                    // Found a new cert!
+                    logger.info(
+                        `Found new intermediate certificate: ${newCert.subject.toString()}`
+                    );
+                    certs.push(newCert);
+                    certIds.set(newCert, fetchedId);
+                    subjectMap.set(newCert.subject.toString(), newCert);
+                    enrichedData.certificates.push(certBytes);
+                    seenCerts.add(fetchedId);
+                    madeProgress = true;
+                    break; // Found one valid issuer, move to next cert
                 } catch (e) {
                     const msg = `Failed to fetch CA Issuer from ${url}: ${e instanceof Error ? e.message : String(e)}`;
                     logger.warn(msg);

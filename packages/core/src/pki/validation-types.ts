@@ -6,8 +6,18 @@ import * as pkijs from "pkijs";
 export interface CertificateToValidate {
     /** The certificate to check */
     cert: pkijs.Certificate;
-    /** Expected issuer (if known) */
+    /**
+     * Explicitly supplied issuer. Verified at use: it must have issued
+     * `cert` (name match plus target signature verification), otherwise
+     * issuer-dependent evidence is not attempted.
+     */
     issuer?: pkijs.Certificate;
+    /**
+     * Candidate issuers stored by `queueChain` (name matches excluding the
+     * target itself by exact bytes). Narrowed and signature-verified at
+     * use; never treated as authoritative without verification.
+     */
+    issuerCandidates?: pkijs.Certificate[];
 }
 
 /**

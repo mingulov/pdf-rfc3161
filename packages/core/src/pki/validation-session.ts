@@ -17,8 +17,10 @@ import {
 } from "./ocsp-utils.js";
 import { getCRLDistributionPoints } from "./crl-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
+import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./cert-utils.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
+import { getLogger } from "../utils/logger.js";
 
 /**
  * Combines already-evaluated per-source evidence into one status. Revoked
@@ -82,6 +84,46 @@ export function crlContainsSerial(crlBytes: Uint8Array, cert: pkijs.Certificate)
 }
 
 /**
+ * Compares two byte strings for exact equality.
+ */
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++) {
+        if (left[index] !== right[index]) return false;
+    }
+    return true;
+}
+
+/**
+ * Deduplicates byte artifacts by exact content using length buckets and
+ * binary comparison. Never constructs hex strings, so large artifacts
+ * cannot exhaust memory via string amplification. Order-preserving:
+ * the first occurrence of each distinct artifact is retained.
+ */
+export function deduplicateByteArtifacts(artifacts: Uint8Array[]): Uint8Array[] {
+    const buckets = new Map<number, Uint8Array[]>();
+    const unique: Uint8Array[] = [];
+    for (const bytes of artifacts) {
+        const bucket = buckets.get(bytes.length);
+        if (bucket !== undefined) {
+            let duplicate = false;
+            for (const seen of bucket) {
+                if (bytesEqual(seen, bytes)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            bucket.push(bytes);
+        } else {
+            buckets.set(bytes.length, [bytes]);
+        }
+        unique.push(bytes);
+    }
+    return unique;
+}
+
+/**
  * Session for managing certificate validation with OCSP/CRL.
  *
  * Pattern inspired by TimestampSession:
@@ -128,8 +170,10 @@ export class ValidationSession {
      * throws once validation has started.
      *
      * @param cert - The certificate to validate.
-     * @param options.issuer - Optional issuer to use instead of resolving by
-     *   subject; useful when the issuer is already in hand.
+     * @param options.issuer - Optional explicitly supplied issuer; verified
+     *   at use (it must have issued `cert`), never trusted unchecked.
+     * @param options.issuerCandidates - Optional candidate issuers, as
+     *   stored by `queueChain`; narrowed and signature-verified at use.
      * @throws TimestampError with code `STATE_ERROR` if called after
      *   `validateAll()` has started.
      */
@@ -137,6 +181,7 @@ export class ValidationSession {
         cert: pkijs.Certificate,
         options?: {
             issuer?: pkijs.Certificate;
+            issuerCandidates?: pkijs.Certificate[];
         }
     ): void {
         if (this.state !== "initialized") {
@@ -149,14 +194,16 @@ export class ValidationSession {
         this.certificates.push({
             cert,
             issuer: options?.issuer,
+            issuerCandidates: options?.issuerCandidates,
         });
     }
 
     /**
-     * Queue every certificate in a chain. Each cert is validated against the
-     * other members of the chain as candidate issuers (subject-issuer match,
-     * not strict signature verification -- the real signature check happens in
-     * `validateAll()`).
+     * Queue every certificate in a chain. Each cert stores the other chain
+     * members with a matching subject as candidate issuers (excluding
+     * itself by exact bytes, not by serial); no first name match becomes
+     * an unchecked authoritative issuer. Candidates are narrowed and
+     * signature-verified when issuer-dependent evidence is built.
      *
      * @param chain - The chain to queue (any order; root included).
      * @throws TimestampError with code `STATE_ERROR` if called after
@@ -164,12 +211,12 @@ export class ValidationSession {
      */
     queueChain(chain: pkijs.Certificate[]): void {
         for (const cert of chain) {
-            const issuer = chain.find(
-                (c) =>
-                    c.subject.toString() === cert.issuer.toString() &&
-                    c.serialNumber.toString() !== cert.serialNumber.toString()
+            const issuerCandidates = chain.filter(
+                (candidate) =>
+                    !certificatesByteEqual(candidate, cert) &&
+                    candidate.subject.toString() === cert.issuer.toString()
             );
-            this.queueCertificate(cert, { issuer });
+            this.queueCertificate(cert, { issuerCandidates });
         }
     }
 
@@ -271,7 +318,7 @@ export class ValidationSession {
         };
         let response: Uint8Array;
         try {
-            response = await this.fetchOCSPWithCache(ocspUrl, req.cert, req.issuer);
+            response = await this.fetchOCSPWithCache(ocspUrl, req);
         } catch (e) {
             const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
             evidence.errors.push(message);
@@ -331,22 +378,79 @@ export class ValidationSession {
         return evidence;
     }
 
-    private async fetchOCSPWithCache(
-        url: string,
-        cert: pkijs.Certificate,
-        issuer?: pkijs.Certificate
-    ): Promise<Uint8Array> {
-        const issuerCert = issuer ?? this.findIssuer(cert);
-        if (!issuerCert) {
+    /**
+     * Resolves the verified issuer for OCSP request building. An explicitly
+     * supplied issuer must have issued the target; otherwise stored chain
+     * candidates plus the other queued certificates are narrowed and
+     * signature-verified. The target itself is never its own issuer.
+     */
+    private async resolveIssuerForOCSP(req: CertificateToValidate): Promise<pkijs.Certificate> {
+        if (req.issuer) {
+            if (
+                !certificatesByteEqual(req.issuer, req.cert) &&
+                (await verifyIssuance(req.cert, req.issuer))
+            )
+                return req.issuer;
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "Cannot create OCSP request: supplied issuer certificate did not issue " +
+                    "the target certificate"
+            );
+        }
+        const queued = this.certificates
+            .map((queued) => queued.cert)
+            .filter((candidate) => !certificatesByteEqual(candidate, req.cert));
+        const verified = await resolveVerifiedIssuer(req.cert, [
+            ...(req.issuerCandidates ?? []),
+            ...queued,
+        ]);
+        if (!verified) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
                 "Cannot create OCSP request: issuer certificate not found"
             );
         }
+        return verified;
+    }
 
-        const request = await createOCSPRequest(cert, issuerCert);
+    /**
+     * Structural usability check for cached OCSP bytes. Rejects poisoned
+     * entries; passing it authenticates nothing (T06 owns authentication).
+     */
+    private isUsableCachedOCSP(response: Uint8Array): boolean {
+        try {
+            parseOCSPResponse(response);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Structural usability check for cached CRL bytes. Rejects poisoned
+     * entries; passing it authenticates nothing (T07 owns authentication).
+     */
+    private isUsableCachedCRL(crl: Uint8Array): boolean {
+        try {
+            return parseCRLInfo(crl).parsed;
+        } catch {
+            return false;
+        }
+    }
+
+    private async fetchOCSPWithCache(url: string, req: CertificateToValidate): Promise<Uint8Array> {
+        const issuerCert = await this.resolveIssuerForOCSP(req);
+
+        const request = await createOCSPRequest(req.cert, issuerCert);
         const cached = this.options.cache.getOCSP(url, request);
-        if (cached) return cached;
+        if (cached) {
+            if (this.isUsableCachedOCSP(cached)) return cached;
+            // Rejected cached evidence is refetched once; the fresh bytes
+            // overwrite the poisoned entry below. T08 budgets this refetch.
+            getLogger().debug(
+                "ValidationSession: rejecting unusable cached OCSP evidence; refetching once"
+            );
+        }
 
         const response = await this.options.fetcher.fetchOCSP(url, request);
         this.options.cache.setOCSP(url, request, response);
@@ -356,17 +460,19 @@ export class ValidationSession {
 
     private async fetchCRLWithCache(url: string): Promise<Uint8Array> {
         const cached = this.options.cache.getCRL(url);
-        if (cached) return cached;
+        if (cached) {
+            if (this.isUsableCachedCRL(cached)) return cached;
+            // Rejected cached evidence is refetched once; the fresh bytes
+            // overwrite the poisoned entry below. T08 budgets this refetch.
+            getLogger().debug(
+                "ValidationSession: rejecting unusable cached CRL evidence; refetching once"
+            );
+        }
 
         const response = await this.options.fetcher.fetchCRL(url);
         this.options.cache.setCRL(url, response);
 
         return response;
-    }
-
-    private findIssuer(cert: pkijs.Certificate): pkijs.Certificate | undefined {
-        return this.certificates.find((c) => c.cert.subject.toString() === cert.issuer.toString())
-            ?.cert;
     }
 
     /**
@@ -425,7 +531,9 @@ export class ValidationSession {
     }
 
     /**
-     * Get validation results for a specific certificate
+     * Get validation results for a specific certificate, matched by exact
+     * certificate bytes. Serial twins under different issuers resolve to
+     * their own results.
      */
     getResultForCert(cert: pkijs.Certificate): ValidationResult | undefined {
         if (this.state !== "completed") {
@@ -434,9 +542,7 @@ export class ValidationSession {
                 "Validation not completed - call validateAll() first"
             );
         }
-        return this.results.find(
-            (r) => r.cert.serialNumber.toString() === cert.serialNumber.toString()
-        );
+        return this.results.find((r) => certificatesByteEqual(r.cert, cert));
     }
 
     /**
@@ -451,17 +557,8 @@ export class ValidationSession {
         ocspResponses: Uint8Array[];
     } {
         const certs: Uint8Array[] = [];
-        const crls: Uint8Array[] = [];
-        const ocsps: Uint8Array[] = [];
-
-        // Dedupe by byte-identical content so the same CRL fetched for
-        // multiple certs in the chain isn't embedded twice.
-        const seenCrls = new Set<string>();
-        const seenOcsps = new Set<string>();
-        const fingerprint = (bytes: Uint8Array): string => {
-            const sample = bytes.subarray(0, Math.min(bytes.length, 64));
-            return `${bytes.length.toString()}:${bytesToHex(sample)}`;
-        };
+        const allCrls: Uint8Array[] = [];
+        const allOcsps: Uint8Array[] = [];
 
         for (const result of this.results) {
             try {
@@ -471,22 +568,23 @@ export class ValidationSession {
                 // Skip certificates that can't be serialized
             }
             for (const crl of result.crls ?? []) {
-                const fp = fingerprint(crl);
-                if (!seenCrls.has(fp)) {
-                    seenCrls.add(fp);
-                    crls.push(crl);
-                }
+                allCrls.push(crl);
             }
             for (const ocsp of result.ocspResponses ?? []) {
-                const fp = fingerprint(ocsp);
-                if (!seenOcsps.has(fp)) {
-                    seenOcsps.add(fp);
-                    ocsps.push(ocsp);
-                }
+                allOcsps.push(ocsp);
             }
         }
 
-        return { certificates: certs, crls, ocspResponses: ocsps };
+        // Dedupe by full byte-identical content so the same artifact
+        // fetched for multiple certs in the chain isn't embedded twice,
+        // while same-length same-prefix artifacts with different tails
+        // are all retained. Binary comparison avoids hex-string memory
+        // amplification over large artifacts.
+        return {
+            certificates: certs,
+            crls: deduplicateByteArtifacts(allCrls),
+            ocspResponses: deduplicateByteArtifacts(allOcsps),
+        };
     }
 
     /**

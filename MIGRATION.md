@@ -170,6 +170,54 @@ verifies. Signers whose `notBefore` or `notAfter` exactly equals the
 byte-for-byte: the PDF `/Contents` value is the token plus reservation
 zero padding, unchanged.
 
+### Issuers are verified and caches use exact byte identity
+
+`ValidationSession` (the `pdf-rfc3161/advanced` entry) now verifies
+issuers before building OCSP requests. An explicitly supplied issuer
+must have issued the target certificate -- same-subject names are not
+enough; the target signature must verify with the issuer key -- and
+`queueChain` stores every name-matching chain member as a candidate
+instead of picking the first match. When no candidate verifies, the
+result is "unknown" with an issuer diagnostic and no OCSP request is
+built or fetched. If you queue certificates with explicit issuers, pass
+the certificate that actually signed each target; a wrong-key or
+unrelated issuer that previously produced requests now yields "unknown".
+The target itself is never used as its own issuer.
+
+`getResultForCert` now matches by exact certificate bytes rather than
+serial strings: serial twins under different issuers resolve to their
+own results. `exportLTVData` dedupes CRL/OCSP artifacts by full bytes
+rather than length plus a 64-byte prefix, so same-length same-prefix
+evidence with different tails is all embedded; previously all but one
+were dropped from the DSS.
+
+`InMemoryValidationCache` entries are now keyed by the full OCSP request
+bytes scoped by the exact URL (previously the first 32 request bytes),
+so requests that share a prefix but differ in the tail no longer
+collide; fresh random-nonce requests normally miss (once T06
+serializes the request nonce; until R22 is fixed, consecutive
+requests are byte-identical and hit). Bytes are copied on
+insertion and retrieval, so mutating caller arrays can no longer poison
+the cache. Entries expire after 300,000 ms, the cache holds at most 256
+entries and 20 MiB with oldest-first eviction, and single entries larger
+than the byte budget are not cached; pass
+`new InMemoryValidationCache({ maxEntries, maxTotalBytes, retentionMs })`
+to tune these. The `ValidationCache` interface itself is unchanged, so
+existing custom caches keep typechecking, but the session now
+revalidates cached bytes on use and refetches once after rejecting
+poisoned entries -- a custom cache that serves structurally invalid
+bytes will see one refetch per use instead of silent reuse.
+
+`completeLTVData` (used by the one-call `timestampPdf` LTV path) now
+only accepts an AIA-fetched certificate that actually issued its target
+-- fetched bytes with a non-matching subject name or a non-verifying key
+are skipped with a diagnostic error instead of joining the chain -- and
+tracks collected certificates by exact bytes rather than serials, so
+same-serial distinct issuers are now both retained. If your chain
+relies on AIA responses that do not verify against their targets, those
+issuers will no longer be collected; embed the correct intermediates
+directly or via `revocationData` instead.
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before

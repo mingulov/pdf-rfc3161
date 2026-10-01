@@ -79,9 +79,10 @@ describe("InMemoryValidationCache", () => {
         expect(cache.getOCSP(url2, request)).toBeNull();
     });
 
-    it("should key OCSP cache by only the first 32 bytes of the request", () => {
-        // Two requests differing only past index 31 should collide; this is by
-        // design in memory-cache.ts (`request.subarray(0, 32)`).
+    it("should miss when OCSP requests differ past the request prefix", () => {
+        // T05: the cache compares all request bytes scoped by exact URL. The
+        // old first-32-bytes key collided distinct requests (R1 cache
+        // collision); same-prefix/different-tail requests must miss now.
         const url = "http://ocsp.example.com";
         const request1 = new Uint8Array(40).fill(1);
         const request2 = new Uint8Array(40).fill(1);
@@ -89,7 +90,8 @@ describe("InMemoryValidationCache", () => {
         const response = new Uint8Array([4, 5, 6]);
 
         cache.setOCSP(url, request1, response);
-        expect(cache.getOCSP(url, request2)).toEqual(response);
+        expect(cache.getOCSP(url, request2)).toBeNull();
+        expect(cache.getOCSP(url, request1)).toEqual(response);
     });
 
     it("should overwrite an existing OCSP entry on repeated set", () => {

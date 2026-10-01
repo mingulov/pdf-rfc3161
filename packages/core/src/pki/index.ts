@@ -12,6 +12,7 @@ export type {
 export { DefaultFetcher } from "./fetchers/default-fetcher.js";
 export { MockFetcher } from "./fetchers/mock-fetcher.js";
 export { InMemoryValidationCache } from "./fetchers/memory-cache.js";
+export type { InMemoryValidationCacheOptions } from "./fetchers/memory-cache.js";
 
 export type { TrustStore, SimpleTrustStore } from "./trust-store.js";
 export { CertificateStatus } from "./ocsp-utils.js";
