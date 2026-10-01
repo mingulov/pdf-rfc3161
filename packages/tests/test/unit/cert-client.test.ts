@@ -5,7 +5,7 @@ import {
     resetCertCircuits,
 } from "../../../core/src/pki/cert-client.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
-import { CircuitState, CircuitBreakerError } from "../../../core/src/utils/circuit-breaker.js";
+import { CircuitState } from "../../../core/src/utils/circuit-breaker.js";
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock as unknown as typeof fetch;
@@ -23,12 +23,20 @@ vi.mock("../../../core/src/utils/logger.js", () => {
 });
 
 // fetchCertificate retries up to MAX_RETRIES=2 (3 attempts total) on any
-// error with exponential backoff (500ms, 1000ms). Tests that exercise the
-// failure path must advance fake timers via vi.runAllTimersAsync().
+// retryable error with exponential backoff (500ms, 1000ms). Tests that
+// exercise the failure path must advance fake timers via vi.runAllTimersAsync().
 async function expectRejected(promise: Promise<unknown>): Promise<unknown> {
     const captured = promise.catch((e: unknown) => e);
     await vi.runAllTimersAsync();
     return captured;
+}
+
+function okResponse(bytes: Uint8Array): Response {
+    return new Response(bytes as BodyInit, { status: 200 });
+}
+
+function statusResponse(status: number, statusText: string): Response {
+    return new Response("error-body", { status, statusText });
 }
 
 describe("Cert Client", () => {
@@ -45,10 +53,7 @@ describe("Cert Client", () => {
     describe("fetchCertificate", () => {
         it("returns bytes on success", async () => {
             const mockCert = new Uint8Array([1, 2, 3]);
-            fetchMock.mockResolvedValueOnce({
-                ok: true,
-                arrayBuffer: () => Promise.resolve(mockCert.buffer),
-            });
+            fetchMock.mockResolvedValueOnce(okResponse(mockCert));
 
             const result = await fetchCertificate("http://example.com/cert.cer");
             expect(result).toEqual(mockCert);
@@ -58,63 +63,62 @@ describe("Cert Client", () => {
             );
         });
 
-        it("throws TimestampError on 404 after retries", async () => {
-            fetchMock.mockResolvedValue({
-                ok: false,
-                status: 404,
-                statusText: "Not Found",
-            });
+        it("fails fast with TimestampError on 404 without retrying", async () => {
+            fetchMock.mockResolvedValue(statusResponse(404, "Not Found"));
 
             const error = await expectRejected(fetchCertificate("http://example.com/404"));
             expect(error).toBeInstanceOf(TimestampError);
             expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
-            expect(fetchMock).toHaveBeenCalledTimes(3);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
-        it("throws TimestampError on empty response after retries", async () => {
-            fetchMock.mockResolvedValue({
-                ok: true,
-                arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-            });
+        it("fails fast with TimestampError on empty response without retrying", async () => {
+            fetchMock.mockResolvedValue(new Response(new ArrayBuffer(0), { status: 200 }));
 
             const error = await expectRejected(fetchCertificate("http://example.com/empty"));
             expect(error).toBeInstanceOf(TimestampError);
             expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
-            expect(fetchMock).toHaveBeenCalledTimes(3);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
         });
 
         it("retries on HTTP 500 then surfaces the error", async () => {
-            fetchMock.mockResolvedValue({
-                ok: false,
-                status: 500,
-                statusText: "Internal Server Error",
-            });
+            fetchMock.mockResolvedValue(statusResponse(500, "Internal Server Error"));
 
             const error = await expectRejected(fetchCertificate("http://example.com/500"));
             expect(error).toBeInstanceOf(TimestampError);
             expect(fetchMock).toHaveBeenCalledTimes(3);
         });
 
-        it("retries on aborted requests", async () => {
+        it("retries on aborted requests and reports TIMEOUT", async () => {
+            // Like real fetch: the pending request rejects when the attempt
+            // signal aborts (the owned deadline firing), so this proves
+            // deadline state rather than an error name.
             fetchMock.mockImplementation(
-                () =>
-                    new Promise((_resolve, reject) => {
-                        const err = new Error("The operation was aborted");
-                        err.name = "AbortError";
-                        reject(err);
+                (_url: string, init?: { signal?: AbortSignal }) =>
+                    new Promise<never>((_resolve, reject) => {
+                        const signal = init?.signal;
+                        if (signal?.aborted === true) {
+                            const early = new Error("The operation was aborted");
+                            early.name = "AbortError";
+                            reject(early);
+                            return;
+                        }
+                        signal?.addEventListener("abort", () => {
+                            const err = new Error("The operation was aborted");
+                            err.name = "AbortError";
+                            reject(err);
+                        });
                     })
             );
 
             const error = await expectRejected(fetchCertificate("http://example.com/timeout"));
             expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.TIMEOUT);
             expect(fetchMock).toHaveBeenCalledTimes(3);
         });
 
         it("uses exponential backoff between attempts", async () => {
-            fetchMock.mockResolvedValue({
-                ok: false,
-                status: 500,
-            });
+            fetchMock.mockResolvedValue(statusResponse(500, "Internal Server Error"));
 
             const promise = fetchCertificate("http://example.com/backoff").catch((e: unknown) => e);
 
@@ -137,10 +141,7 @@ describe("Cert Client", () => {
     describe("Circuit Breaker", () => {
         it("opens after failure threshold and short-circuits subsequent calls", async () => {
             const url = "http://example.com/failure";
-            fetchMock.mockResolvedValue({
-                ok: false,
-                status: 500,
-            });
+            fetchMock.mockResolvedValue(statusResponse(500, "Internal Server Error"));
 
             // Threshold is 3 failures. Each fetchCertificate call does 3 attempts
             // and records ONE failure (only on final attempt).
@@ -152,18 +153,17 @@ describe("Cert Client", () => {
             expect(getCertCircuitState(url)).toBe(CircuitState.OPEN);
             expect(fetchMock).toHaveBeenCalledTimes(9); // 3 calls x 3 attempts
 
-            // Once open, no further fetch is attempted -- short-circuits to CircuitBreakerError.
+            // Once open, no further fetch is attempted -- short-circuits to
+            // TimestampError(CIRCUIT_OPEN).
             const error = await expectRejected(fetchCertificate(url));
-            expect(error).toBeInstanceOf(CircuitBreakerError);
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.CIRCUIT_OPEN);
             expect(fetchMock).toHaveBeenCalledTimes(9);
         });
 
         it("resetCertCircuits clears state and allows fetch to succeed again", async () => {
             const url = "http://example.com/failure";
-            fetchMock.mockResolvedValue({
-                ok: false,
-                status: 500,
-            });
+            fetchMock.mockResolvedValue(statusResponse(500, "Internal Server Error"));
 
             for (let i = 0; i < 3; i++) {
                 await expectRejected(fetchCertificate(url));
@@ -173,10 +173,7 @@ describe("Cert Client", () => {
             resetCertCircuits();
             expect(getCertCircuitState(url)).toBeUndefined();
 
-            fetchMock.mockResolvedValueOnce({
-                ok: true,
-                arrayBuffer: () => Promise.resolve(new Uint8Array([1]).buffer),
-            });
+            fetchMock.mockResolvedValueOnce(okResponse(new Uint8Array([1])));
             const res = await fetchCertificate(url);
             expect(res).toEqual(new Uint8Array([1]));
             expect(getCertCircuitState(url)).toBe(CircuitState.CLOSED);

@@ -4,6 +4,61 @@ This document covers breaking changes between major releases of `pdf-rfc3161`.
 
 ## Unreleased
 
+### HTTP transport rejects redirects, fails fast on 4xx, and bounds bodies
+
+TSA, OCSP, CRL, and AIA fetches now use `redirect: "manual"`: a 3xx (or
+opaque/opaqueredirect) response is a terminal `NETWORK_ERROR` and the
+`Location` is never fetched. If your TSA or responder sits behind a
+redirect, reconfigure the client with the final URL; there is no
+automatic manual-hop support in this iteration. Likewise every 4xx,
+including 408 and 429, now fails in one attempt without retrying, so
+callers that relied on 429 retries must implement their own backoff
+(this iteration does not honor `Retry-After`; adopting that policy is a
+separate decision). A response body that stalls past the per-attempt
+`timeout` now rejects with `TIMEOUT` after the configured retries
+instead of hanging; raise `timeout` if you serve slow responders.
+
+An open circuit breaker now surfaces as `TimestampError` with code
+`"CIRCUIT_OPEN"` rather than `CircuitBreakerError`, and deadline
+exhaustion reports `TIMEOUT` rather than `NETWORK_ERROR`. The
+`CircuitBreakerError` class remains exported for direct
+`CircuitBreaker.execute()` users. Invalid numeric `retry`, `retryDelay`,
+`timeout`, or `maxResponseBytes` options now reject with
+`INVALID_ARGUMENT` before any fetch. Optional AIA/OCSP/CRL failures
+still yield a signed PDF with partial LTV material plus diagnostics;
+only the mandatory TSA path fails signing.
+
+Transport error messages now carry the origin plus path only: embedded
+credentials, query strings, and fragments are redacted. `timeout` and
+`retryDelay` above the 2^31 - 1 ms platform timer ceiling now reject
+with `INVALID_ARGUMENT`, and exponential backoff is capped at that
+ceiling instead of misfiring. A bare `AbortError` with a live attempt
+signal and unexpired deadline now reports `NETWORK_ERROR`; `TIMEOUT`
+requires owned-deadline state (timer fired or elapsed).
+
+### Direct-TSA browser calls need TSA CORS; `no-cors` cannot help
+
+A page calling a TSA directly issues a cross-origin TSQ `POST` whose
+`Content-Type: application/timestamp-query` triggers a CORS preflight,
+so the TSA must answer `Access-Control-Allow-Origin` for the page
+origin (and allow the content type); otherwise the browser blocks the
+response and signing fails with `NETWORK_ERROR`. Retrying that request
+with `mode: "no-cors"` cannot recover the token: the response becomes
+opaque, hiding its status and bytes from the page, so there is nothing
+usable to embed. The library therefore never uses `no-cors` itself.
+
+When the TSA does not serve CORS, use the existing manual
+request/response workflow instead of the one-call path: build the
+request with `TimestampSession.createTimestampRequest()`, carry the
+TSQ bytes to the TSA over a channel of your choice (for example a
+server-side fetch), and hand the TSR bytes back to
+`TimestampSession.embedTimestampToken()`, which runs the same
+request-bound pre-embed validation before writing the PDF. See the
+"Session Pattern for Complex Workflows" section in
+[README.md](./README.md). These requirements were exercised in
+the controlled local-TSA browser gate only; live-TSA CORS behavior
+varies by operator and still needs per-TSA confirmation.
+
 ### `verifyChain` verifies `chain[0]` (trust-target binding)
 
 `TrustStore.verifyChain(chain)` now defines first-certificate target

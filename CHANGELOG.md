@@ -9,7 +9,49 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior (HTTP transport bounds, C06):** the shared TSA / OCSP / CRL /
+  AIA fetch path now sends `redirect: "manual"` and terminally rejects
+  3xx and opaque/opaqueredirect responses instead of following them;
+  every 4xx (including 408 and 429) fails fast in one attempt instead of
+  being retried; the per-attempt deadline covers response bodies, so a
+  stalled body rejects with `TIMEOUT` after the configured retries
+  instead of hanging; invalid numeric retry/timeout/size options reject
+  with `INVALID_ARGUMENT` before any fetch. Previously followed
+  redirects, retried 4xx responses, and never-settling bodies now fail
+  loudly; see MIGRATION.md.
+- **Behavior (transport error taxonomy):** an open per-URL circuit breaker
+  now short-circuits with `TimestampError(CIRCUIT_OPEN)` (zero fetches,
+  no backoff) instead of `CircuitBreakerError`, and attempts exhausted
+  on the built-in deadline now report `TIMEOUT` instead of
+  `NETWORK_ERROR`. Terminal rejections (redirect, 4xx, empty or
+  over-cap body, validator failure) make one attempt and no longer
+  record a remote-outage circuit failure. Callers may pass an
+  `AbortSignal` to cancel without retrying; cancellation stays distinct
+  from retryable timeouts.
+- **Behavior (transport diagnostics):** `NETWORK_ERROR`, `TIMEOUT`, and
+  `CIRCUIT_OPEN` messages now carry the origin plus path only; embedded
+  credentials, query strings, and fragments are redacted. `timeout` and
+  `retryDelay` above the 2^31 - 1 ms platform timer ceiling now reject
+  with `INVALID_ARGUMENT`, and exponential backoff is capped at that
+  ceiling. A bare `AbortError` with a live attempt signal and unexpired
+  deadline now reports `NETWORK_ERROR` instead of `TIMEOUT`; see
+  MIGRATION.md.
+
 ### Fixed
+
+- **Reliability (transport cleanup and deadlines):** rejected-body
+  cleanup is now fire-and-observe, so a never-settling or rejecting
+  `cancel()` can neither hang the caller past abort/deadline nor
+  corrupt the verdict, and declared-oversized bodies are released too.
+  Caller cancellation now preempts terminal discards, validation (both
+  return and throw paths), and the backoff-to-dispatch boundary, so no
+  new fetch starts after abort and no cancelled call records success.
+  An absolute per-attempt deadline is now checked around body progress
+  and synchronous validation, so responses completing after the
+  deadline report `TIMEOUT` through the normal retry/accounting policy
+  even when timer callbacks cannot run in time.
 
 - **Security (trust-target binding):** `TrustStore.verifyChain(chain)` now
   verifies `chain[0]` as the trust target; every other entry is an
