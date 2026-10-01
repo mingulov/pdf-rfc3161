@@ -7,6 +7,7 @@ import {
 } from "../../../core/src/pki/crl-client.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { CircuitState } from "../../../core/src/utils/circuit-breaker.js";
+import { createCrlFixture } from "../fixtures/revocation-material.js";
 
 // Global fetch mock
 const fetchMock = vi.fn();
@@ -70,6 +71,45 @@ describe("CRL Client", () => {
             const info = parseCRLInfo(invalidAsn1);
             expect(info.crl).toEqual(invalidAsn1);
             expect(info.isDelta).toBe(false);
+        });
+    });
+
+    describe("parseCRLInfo with serialized CRLs (T04)", () => {
+        it("should parse a complete CRL with number and revoked entries", () => {
+            const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [4242] });
+            const info = parseCRLInfo(crl);
+            expect(info.crl).toEqual(crl);
+            expect(info.parsed).toBe(true);
+            expect(info.isDelta).toBe(false);
+            expect(info.crlNumber).toBe(7);
+            expect(info.deltaCrlNumber).toBeUndefined();
+        });
+
+        it("should detect a delta CRL via the DeltaCRLIndicator extension", () => {
+            const crl = createCrlFixture({ crlNumber: 7, deltaBaseNumber: 6 });
+            const info = parseCRLInfo(crl);
+            expect(info.parsed).toBe(true);
+            expect(info.isDelta).toBe(true);
+            expect(info.crlNumber).toBe(7);
+            expect(info.deltaCrlNumber).toBe(6);
+        });
+
+        it("should separate malformed input from a parsed complete non-delta CRL", () => {
+            const malformed = parseCRLInfo(new Uint8Array([0xff, 0xff, 0xff]));
+            expect(malformed.parsed).toBe(false);
+            expect(malformed.isDelta).toBe(false);
+
+            const complete = parseCRLInfo(createCrlFixture({ crlNumber: 1 }));
+            expect(complete.parsed).toBe(true);
+            expect(complete.isDelta).toBe(false);
+        });
+
+        it("should parse a CRL without extensions as non-delta with no numbers", () => {
+            const info = parseCRLInfo(createCrlFixture());
+            expect(info.parsed).toBe(true);
+            expect(info.isDelta).toBe(false);
+            expect(info.crlNumber).toBeUndefined();
+            expect(info.deltaCrlNumber).toBeUndefined();
         });
     });
 

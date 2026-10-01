@@ -18,7 +18,16 @@ const DELTA_CRL_INDICATOR = "2.5.29.27"; // Delta CRL Indicator
 export interface CRLInfo {
     /** DER-encoded CRL bytes */
     crl: Uint8Array;
-    /** Whether this is a delta-CRL */
+    /**
+     * Whether the bytes parsed as a CRL at all. False means malformed
+     * input, which must not be confused with a parsed complete non-delta
+     * CRL (`parsed: true, isDelta: false`).
+     */
+    parsed: boolean;
+    /**
+     * Whether this is a delta-CRL. A delta CRL is never a complete
+     * revocation source: absence of a serial there proves nothing.
+     */
     isDelta: boolean;
     /** CRL number if present */
     crlNumber?: number;
@@ -36,7 +45,7 @@ export function parseCRLInfo(crlBytes: Uint8Array): CRLInfo {
     try {
         const asn1 = asn1js.fromBER(toArrayBuffer(crlBytes));
         if (asn1.offset === -1) {
-            return { crl: crlBytes, isDelta: false };
+            return { crl: crlBytes, parsed: false, isDelta: false };
         }
 
         const crl = new pkijs.CertificateRevocationList({ schema: asn1.result });
@@ -45,8 +54,9 @@ export function parseCRLInfo(crlBytes: Uint8Array): CRLInfo {
         let crlNumber: number | undefined;
         let deltaCrlNumber: number | undefined;
 
-        // Check for extensions using crlExtensions
-        const extensions = (crl as { crlExtensions?: pkijs.Extension[] }).crlExtensions;
+        // pkijs v3 holds CRL extensions in an Extensions object, not an
+        // array; reading it as an array threw and masked every delta CRL.
+        const extensions = crl.crlExtensions?.extensions;
         if (extensions) {
             for (const ext of extensions) {
                 try {
@@ -73,12 +83,13 @@ export function parseCRLInfo(crlBytes: Uint8Array): CRLInfo {
 
         return {
             crl: crlBytes,
+            parsed: true,
             isDelta,
             crlNumber,
             deltaCrlNumber,
         };
     } catch {
-        return { crl: crlBytes, isDelta: false };
+        return { crl: crlBytes, parsed: false, isDelta: false };
     }
 }
 

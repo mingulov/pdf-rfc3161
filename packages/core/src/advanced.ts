@@ -10,6 +10,7 @@
 export {
     ValidationSession,
     type CertificateToValidate,
+    type RevocationStatus,
     type ValidationResult,
     type RevocationDataFetcher,
     type ValidationCache,

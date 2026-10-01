@@ -80,6 +80,68 @@ export function createOcspResponseCandidate(
     return new Uint8Array(response.toSchema().toBER(false));
 }
 
+export interface TestCrlOptions {
+    /** CRL number extension value (2.5.29.20); omitted when undefined */
+    crlNumber?: number;
+    /** Delta CRL indicator base number (2.5.29.27); presence marks a delta CRL */
+    deltaBaseNumber?: number;
+    /** Serial numbers to list as revoked entries */
+    revokedSerials?: number[];
+}
+
+export function createCrlFixture(options: TestCrlOptions = {}): Uint8Array {
+    const algorithm = new pkijs.AlgorithmIdentifier({ algorithmId: "1.2.840.113549.1.1.11" });
+    const issuer = new pkijs.RelativeDistinguishedNames({
+        typesAndValues: [
+            new pkijs.AttributeTypeAndValue({
+                type: "2.5.4.3",
+                value: new asn1js.PrintableString({ value: "Fixture issuer" }),
+            }),
+        ],
+    });
+    const extensions: pkijs.Extension[] = [];
+    if (options.crlNumber !== undefined) {
+        extensions.push(
+            new pkijs.Extension({
+                extnID: "2.5.29.20",
+                critical: false,
+                extnValue: new asn1js.Integer({ value: options.crlNumber }).toBER(false),
+            })
+        );
+    }
+    if (options.deltaBaseNumber !== undefined) {
+        extensions.push(
+            new pkijs.Extension({
+                extnID: "2.5.29.27",
+                critical: false,
+                extnValue: new asn1js.Integer({ value: options.deltaBaseNumber }).toBER(false),
+            })
+        );
+    }
+    const revokedCertificates = (options.revokedSerials ?? []).map(
+        (serial) =>
+            new pkijs.RevokedCertificate({
+                userCertificate: new asn1js.Integer({ value: serial }),
+                revocationDate: new pkijs.Time({
+                    value: new Date("2024-01-02T00:00:00Z"),
+                }),
+            })
+    );
+    const crl = new pkijs.CertificateRevocationList({
+        version: 1,
+        signature: algorithm,
+        issuer,
+        thisUpdate: new pkijs.Time({ value: new Date("2024-01-01T00:00:00Z") }),
+        nextUpdate: new pkijs.Time({ value: new Date("2024-02-01T00:00:00Z") }),
+        ...(revokedCertificates.length > 0 ? { revokedCertificates } : {}),
+        ...(extensions.length > 0 ? { crlExtensions: new pkijs.Extensions({ extensions }) } : {}),
+        signatureAlgorithm: algorithm,
+        signatureValue: new asn1js.BitString({ valueHex: Uint8Array.of(1).buffer }),
+    });
+    const crlSchema = crl.toSchema(true) as asn1js.Sequence;
+    return new Uint8Array(crlSchema.toBER(false));
+}
+
 export function createCrlCandidate(): Uint8Array {
     const algorithm = new pkijs.AlgorithmIdentifier({ algorithmId: "1.2.840.113549.1.1.11" });
     const issuer = new pkijs.RelativeDistinguishedNames({

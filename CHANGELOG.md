@@ -57,6 +57,21 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   another TSA request. Automatic growth is capped at 65,536 bytes: the
   loop never repeats an identical too-small reservation and never issues
   another TSA request once the cap is reached.
+- **Behavior (revocation verdict containment, C01/C06):** advanced
+  `ValidationSession` results now carry `revocationStatus: "good" |
+  "revoked" | "unknown"` (also exported as the `RevocationStatus` type),
+  and `isValid` is a deprecated alias for `revocationStatus === "good"`.
+  Missing endpoints/issuers, outages, malformed responses, and
+  unauthenticated (including forged) OCSP/CRL evidence all yield
+  "unknown" with `isValid` false; most of these cases previously
+  returned `isValid` true. Until the authenticated OCSP/CRL evaluators
+  land, structural evidence alone always yields "unknown", so advanced
+  revocation checks temporarily report unknown for every certificate;
+  there is no compatibility switch to restore the old `true`. The
+  `preferOCSP: false` order now falls back to OCSP after CRL instead of
+  never trying OCSP. The one-call signing path is unaffected: it never
+  consumed these verdicts and still signs with partial LTV plus
+  diagnostics when optional collection fails. See MIGRATION.md.
 
 ### Fixed
 
@@ -90,6 +105,16 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   reservation length, ByteRange-hole consistency, and in-bounds offsets
   before writing, so a malformed `PreparedPDF` fails with `PDF_ERROR`
   instead of silently truncating the token.
+- **Security (CRL evidence reads):** `parseCRLInfo` now reads
+  `crlExtensions.extensions` (the pkijs v3 `Extensions` object) instead
+  of iterating `crlExtensions` as an array, so delta CRLs are detected
+  via the DeltaCRLIndicator extension instead of always reporting
+  non-delta; it also reports a new additive `parsed` flag separating
+  malformed input from a parsed complete non-delta CRL. The session CRL
+  scan now reads `revokedCertificates` (previously the nonexistent
+  `revokedCertificateEntries`, so listed serials were never found) with
+  leading-zero-tolerant serial comparison. Neither repair produces a
+  verdict on its own: unauthenticated evidence still yields "unknown".
 
 ## [0.2.2] - 2026-09-07
 

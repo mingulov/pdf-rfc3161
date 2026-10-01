@@ -115,6 +115,41 @@ reservation cap is reached.
 
 DER decoding keeps its contracted 1,000,000-node preflight budget, but the effective node ceiling is the binding asn1js 10,000-node default (the 1M preflight binds only above it).
 
+### Advanced revocation results now default to unknown
+
+`ValidationSession` results (the `pdf-rfc3161/advanced` entry) now carry
+`revocationStatus: "good" | "revoked" | "unknown"`, and `isValid` is a
+deprecated alias for `revocationStatus === "good"`. Only authenticated
+evaluators may produce "good" or "revoked": a certificate with no
+revocation endpoints, a missing issuer, a total outage, a malformed
+response, or unauthenticated (including forged) OCSP/CRL evidence all
+yield "unknown" with `isValid` false. Previously most of these cases
+returned `isValid` true, so a forged GOOD response -- or no evidence at
+all -- read as valid.
+
+Until the authenticated OCSP/CRL evaluators land, structural evidence
+alone always yields "unknown", so advanced revocation checks temporarily
+report unknown for every certificate. Treat "unknown" as unknown: do not
+map it to valid, and do not gate signing on it. There is no
+compatibility switch to restore the old `true`, by design. The one-call
+signing path is unaffected: it never consumed these verdicts, and
+optional AIA/OCSP/CRL failures still yield a signed PDF with partial LTV
+material plus diagnostics.
+
+Two related repairs ship with this change. `parseCRLInfo` (the
+`pdf-rfc3161/internals` entry) now detects delta CRLs via the
+DeltaCRLIndicator extension -- previously every CRL reported non-delta --
+and reports a new additive `parsed` flag separating malformed input from
+a parsed complete non-delta CRL. The session CRL scan now reads the real
+pkijs `revokedCertificates` list (previously a nonexistent property, so
+listed serials were never found). Neither repair produces a verdict on
+its own. Finally, `preferOCSP: false` now falls back to OCSP after CRL
+instead of never trying OCSP, and the default `preferOCSP` mode now also
+fetches CRL after an OCSP success instead of suppressing it: same
+collection APIs (`sources`, `ocspResponses`, `crls`, `exportLTVData`),
+but collection is now strictly more complete. Success-path `errors`
+entries also carry new structural diagnostic strings.
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before
