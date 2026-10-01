@@ -28,13 +28,14 @@ function roundTripCertificate(cert: pkijs.Certificate): pkijs.Certificate {
     return new pkijs.Certificate({ schema: asn1.result });
 }
 
-function createLeafCertificate(options: {
+async function createLeafCertificate(options: {
     serial?: number;
     ocspUrl?: string;
     crlUrl?: string;
     issuer?: pkijs.Certificate;
     issuerName?: string;
-}): pkijs.Certificate {
+    signedBy?: { issuer: pkijs.Certificate; privateKey: CryptoKey };
+}): Promise<pkijs.Certificate> {
     const cert = new pkijs.Certificate();
     cert.version = 2;
     cert.serialNumber = new asn1js.Integer({ value: options.serial ?? LEAF_SERIAL });
@@ -95,12 +96,18 @@ function createLeafCertificate(options: {
     if (extensions.length > 0) {
         cert.extensions = extensions;
     }
+    if (options.signedBy) {
+        // T05: the session verifies that the issuer actually issued the
+        // target, so evidence leaves paired with an explicit issuer are
+        // really signed by it.
+        cert.issuer = options.signedBy.issuer.subject;
+        await cert.sign(options.signedBy.privateKey, "SHA-256");
+    }
     // Round-trip so AIA/CDP extensions go through real DER parsing.
     return roundTripCertificate(cert);
 }
 
-async function createIssuerCertificate(): Promise<pkijs.Certificate> {
-    const keys = await generateRSAKeyPair();
+async function createIssuerCertificate(publicKey: CryptoKey): Promise<pkijs.Certificate> {
     const issuer = new pkijs.Certificate();
     issuer.version = 2;
     issuer.serialNumber = new asn1js.Integer({ value: 9001 });
@@ -111,7 +118,7 @@ async function createIssuerCertificate(): Promise<pkijs.Certificate> {
         })
     );
     issuer.issuer = issuer.subject;
-    issuer.subjectPublicKeyInfo = await importKeyForCertificate(keys.publicKey);
+    issuer.subjectPublicKeyInfo = await importKeyForCertificate(publicKey);
     return issuer;
 }
 
@@ -144,13 +151,19 @@ function recordingFetcher(responses: {
 
 describe("ValidationSession revocation evidence containment (T04)", () => {
     let issuer: pkijs.Certificate;
+    let issuerKeys: { publicKey: CryptoKey; privateKey: CryptoKey };
+
+    function signedByIssuer(): { issuer: pkijs.Certificate; privateKey: CryptoKey } {
+        return { issuer, privateKey: issuerKeys.privateKey };
+    }
 
     beforeAll(async () => {
-        issuer = await createIssuerCertificate();
+        issuerKeys = await generateRSAKeyPair();
+        issuer = await createIssuerCertificate(issuerKeys.publicKey);
     });
 
     it("yields unknown when the certificate carries no revocation endpoints", async () => {
-        const leaf = createLeafCertificate({});
+        const leaf = await createLeafCertificate({ signedBy: signedByIssuer() });
         const fetcher = recordingFetcher({});
         const session = new ValidationSession({ fetcher });
         session.queueCertificate(leaf, { issuer });
@@ -164,7 +177,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
 
     it("yields unknown when the issuer is missing", async () => {
         // Issuer name matches no queued certificate: no OCSP request can be built.
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL, issuerName: "Absent CA" });
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, issuerName: "Absent CA" });
         const session = new ValidationSession({ fetcher: new MockFetcher() });
         session.queueCertificate(leaf);
 
@@ -175,7 +188,11 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown on total outage", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL, crlUrl: CRL_URL });
+        const leaf = await createLeafCertificate({
+            ocspUrl: OCSP_URL,
+            crlUrl: CRL_URL,
+            signedBy: signedByIssuer(),
+        });
         const session = new ValidationSession({ fetcher: throwingFetcher() });
         session.queueCertificate(leaf, { issuer });
 
@@ -187,7 +204,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown for a malformed OCSP response", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL });
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
         const fetcher = new MockFetcher();
         fetcher.setOCSPResponse(OCSP_URL, new Uint8Array([0xff, 0xff, 0xff]));
         const session = new ValidationSession({ fetcher });
@@ -199,7 +216,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown for a malformed CRL", async () => {
-        const leaf = createLeafCertificate({ crlUrl: CRL_URL });
+        const leaf = await createLeafCertificate({ crlUrl: CRL_URL, signedBy: signedByIssuer() });
         const fetcher = new MockFetcher();
         fetcher.setCRLResponse(CRL_URL, new Uint8Array([0xff, 0xff, 0xff]));
         const session = new ValidationSession({ fetcher });
@@ -211,7 +228,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown for a forged GOOD OCSP response", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL });
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
         const forged = createOcspResponseCandidate("good");
         const fetcher = new MockFetcher();
         fetcher.setOCSPResponse(OCSP_URL, forged);
@@ -227,7 +244,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown, never revoked, for a forged REVOKED OCSP response", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL });
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
         const forged = createOcspResponseCandidate("revoked");
         const fetcher = new MockFetcher();
         fetcher.setOCSPResponse(OCSP_URL, forged);
@@ -240,7 +257,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("yields unknown, never revoked, for a forged CRL listing the serial", async () => {
-        const leaf = createLeafCertificate({ crlUrl: CRL_URL });
+        const leaf = await createLeafCertificate({ crlUrl: CRL_URL, signedBy: signedByIssuer() });
         const forged = createCrlFixture({ crlNumber: 7, revokedSerials: [LEAF_SERIAL] });
         const fetcher = new MockFetcher();
         fetcher.setCRLResponse(CRL_URL, forged);
@@ -257,7 +274,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("does not treat a delta CRL as a complete revocation source", async () => {
-        const leaf = createLeafCertificate({ crlUrl: CRL_URL });
+        const leaf = await createLeafCertificate({ crlUrl: CRL_URL, signedBy: signedByIssuer() });
         const delta = createCrlFixture({ crlNumber: 7, deltaBaseNumber: 6 });
         const fetcher = new MockFetcher();
         fetcher.setCRLResponse(CRL_URL, delta);
@@ -274,10 +291,11 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
         const ocsp = createOcspResponseCandidate("good");
         const crl = createCrlFixture({ crlNumber: 3 });
 
-        const leafDefault = createLeafCertificate({
+        const leafDefault = await createLeafCertificate({
             ocspUrl: OCSP_URL,
             crlUrl: CRL_URL,
             issuer,
+            signedBy: signedByIssuer(),
         });
         const fetcherDefault = recordingFetcher({ ocsp, crl });
         const sessionDefault = new ValidationSession({ fetcher: fetcherDefault });
@@ -286,10 +304,11 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
         expect(resultDefault?.revocationStatus).toBe("unknown");
         expect(fetcherDefault.calls).toEqual([`OCSP:${OCSP_URL}`, `CRL:${CRL_URL}`]);
 
-        const leafCrlFirst = createLeafCertificate({
+        const leafCrlFirst = await createLeafCertificate({
             ocspUrl: OCSP_URL,
             crlUrl: CRL_URL,
             issuer,
+            signedBy: signedByIssuer(),
         });
         const fetcherCrlFirst = recordingFetcher({ ocsp, crl });
         const sessionCrlFirst = new ValidationSession({
@@ -303,7 +322,7 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("keeps isValid as an alias of revocationStatus === good", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL });
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
         const fetcher = new MockFetcher();
         fetcher.setOCSPResponse(OCSP_URL, createOcspResponseCandidate("good"));
         const session = new ValidationSession({ fetcher });
@@ -314,7 +333,11 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
     });
 
     it("still collects raw evidence bytes for exportLTVData", async () => {
-        const leaf = createLeafCertificate({ ocspUrl: OCSP_URL, crlUrl: CRL_URL });
+        const leaf = await createLeafCertificate({
+            ocspUrl: OCSP_URL,
+            crlUrl: CRL_URL,
+            signedBy: signedByIssuer(),
+        });
         const ocsp = createOcspResponseCandidate("good");
         const crl = createCrlFixture({ crlNumber: 3 });
         const fetcher = new MockFetcher();
@@ -333,37 +356,37 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
 });
 
 describe("crlContainsSerial structural scan (T04)", () => {
-    it("finds a serial listed in revokedCertificates", () => {
+    it("finds a serial listed in revokedCertificates", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
-        const leaf = createLeafCertificate({ serial: LEAF_SERIAL });
+        const leaf = await createLeafCertificate({ serial: LEAF_SERIAL });
         const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [LEAF_SERIAL] });
         expect(validationSessionModule.crlContainsSerial(crl, leaf)).toBe(true);
     });
 
-    it("tolerates DER leading-zero padding on high-bit serials", () => {
+    it("tolerates DER leading-zero padding on high-bit serials", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
         // Serial 128 has the high bit set, so its DER encoding is 02 02 00 80
         // and the parsed CRL entry carries the 00 pad. The leaf side uses the
         // unpadded byte form so the comparison must tolerate the asymmetry.
-        const leaf = createLeafCertificate({ serial: 128 });
+        const leaf = await createLeafCertificate({ serial: 128 });
         leaf.serialNumber = new asn1js.Integer({ valueHex: Uint8Array.of(0x80).buffer });
         const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [128] });
         expect(validationSessionModule.crlContainsSerial(crl, leaf)).toBe(true);
         // No confusion with serial 0 after stripping the pad byte.
-        const zeroLeaf = createLeafCertificate({ serial: 0 });
+        const zeroLeaf = await createLeafCertificate({ serial: 0 });
         expect(validationSessionModule.crlContainsSerial(crl, zeroLeaf)).toBe(false);
     });
 
-    it("returns false when the serial is absent", () => {
+    it("returns false when the serial is absent", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
-        const leaf = createLeafCertificate({ serial: LEAF_SERIAL });
+        const leaf = await createLeafCertificate({ serial: LEAF_SERIAL });
         const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [9999] });
         expect(validationSessionModule.crlContainsSerial(crl, leaf)).toBe(false);
     });
 
-    it("returns false for malformed input", () => {
+    it("returns false for malformed input", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
-        const leaf = createLeafCertificate({ serial: LEAF_SERIAL });
+        const leaf = await createLeafCertificate({ serial: LEAF_SERIAL });
         expect(
             validationSessionModule.crlContainsSerial(new Uint8Array([0xff, 0xff]), leaf)
         ).toBe(false);

@@ -53,12 +53,18 @@ jobs:
       # already bundled, zero new module code), and even a gate-alone
       # minimal change exceeds the old headroom. Per-breach ruling with
       # independent reviewer verification; T19 still owns bundle efficiency.
-      - name: Enforce ESM bundle size budget (<= 236 KiB)
+      # R17 (T05): 237 KiB. The T05 exact byte-identity skip/seen-set
+      # (CB3/R27) and AIA issuance gate (CB4) grew the main entry past
+      # 236 KiB by +560 bytes; realistic compaction without gutting
+      # mandated behavior is ~25-55 bytes (diagnostic string trimming
+      # only). Per-breach ruling with independent reviewer verification;
+      # T19 still owns bundle efficiency.
+      - name: Enforce ESM bundle size budget (<= 237 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=241664
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 236 KiB)"
+          MAX=242688
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 237 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 236 KiB (241664 bytes) budget"
+            echo "::error::ESM bundle exceeds 237 KiB (242688 bytes) budget"
             exit 1
           fi

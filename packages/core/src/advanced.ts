@@ -18,6 +18,7 @@ export {
     DefaultFetcher,
     MockFetcher,
     InMemoryValidationCache,
+    type InMemoryValidationCacheOptions,
 } from "./pki/index.js";
 
 export {
