@@ -91,13 +91,26 @@ async function signedPdfForRange(
     byteRange?: ByteRange
 ): Promise<{ pdf: Uint8Array; token: Uint8Array; timestamp: ExtractedTimestamp }> {
     const original = await preparePdfForTimestamp(minimalPdf(), { signatureSize: 4096 });
-    const prepared = byteRange === undefined ? original : withByteRange(original, byteRange);
-    const { request } = await createTimestampRequest(bytesCoveredByRange(prepared.bytes, prepared.byteRange), {
-        hashAlgorithm: "SHA-256",
-        requestCertificate: true,
-    });
+    // The token commits to the malformed covered bytes, but the embed
+    // primitive only accepts a self-consistent PreparedPDF: embed into the
+    // genuine preparation first, then rewrite the /ByteRange text. The two
+    // regions are disjoint, so the adversarial bytes are identical to a
+    // rewrite-then-embed construction.
+    const signingBytes =
+        byteRange === undefined ? original.bytes : withByteRange(original, byteRange).bytes;
+    const { request } = await createTimestampRequest(
+        bytesCoveredByRange(signingBytes, byteRange ?? original.byteRange),
+        {
+            hashAlgorithm: "SHA-256",
+            requestCertificate: true,
+        }
+    );
     const fixture = await createRFC3161TokenFixtureFromRequest(request, { form: "raw" });
-    const pdf = embedTimestampToken(prepared, fixture.rawToken);
+    const embedded = embedTimestampToken(original, fixture.rawToken);
+    const pdf =
+        byteRange === undefined
+            ? embedded
+            : withByteRange({ ...original, bytes: embedded }, byteRange).bytes;
     const [timestamp] = await extractTimestamps(
         byteRange === undefined ? pdf : embedTimestampToken(original, fixture.rawToken)
     );

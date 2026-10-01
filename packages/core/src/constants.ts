@@ -1,3 +1,5 @@
+import { TimestampError, TimestampErrorCode } from "./types.js";
+
 /**
  * OID constants for hash algorithms and other cryptographic identifiers
  */
@@ -139,3 +141,74 @@ export const LTV_SIGNATURE_SIZE = DEFAULT_SIGNATURE_SIZE * 2;
 export const SIGNATURE_SIZE_OPTIMIZE_ADD = 32;
 export const SIGNATURE_SIZE_OPTIMIZE_ALIGN = 32;
 export const MAX_SIGNATURE_SIZE = 65536;
+
+/**
+ * Maximum ASN.1 nesting depth accepted by the canonical DER preflight in
+ * `pki/der-utils.ts`. The outermost SEQUENCE counts as level 1. Ordinary
+ * CMS tokens nest about 19 levels, so 64 leaves wide headroom while keeping
+ * every downstream recursive decoder far from the call stack limit.
+ */
+export const MAX_DER_DEPTH = 64;
+
+/**
+ * Maximum ASN.1 TLV nodes accepted by one canonical DER preflight budget.
+ * The budget is consumed iteratively before any recursive decoder runs, so
+ * hostile wide values fail with `INVALID_RESPONSE` instead of exhausting
+ * memory or the call stack. Nested decodings may share one budget.
+ */
+export const MAX_DER_NODES = 1000000;
+
+/**
+ * Validates a caller-supplied `maxSize` override and returns the effective
+ * input PDF ceiling. Rejects before any PDF parsing or network use.
+ */
+export function resolveMaxPdfSize(maxSize: number | undefined): number {
+    if (maxSize === undefined) return MAX_PDF_SIZE;
+    if (!Number.isSafeInteger(maxSize) || maxSize <= 0 || maxSize > MAX_PDF_SIZE) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            `maxSize must be a positive safe integer of at most ${MAX_PDF_SIZE.toString()} bytes (got ${String(
+                maxSize
+            )})`
+        );
+    }
+    return maxSize;
+}
+
+/**
+ * Resolves the effective input PDF ceiling from a caller `maxSize` override
+ * and rejects over-ceiling inputs with `PDF_ERROR` before any PDF parsing.
+ * Single home of the ceiling throw so the message bytes stay identical at
+ * every entry point.
+ */
+export function assertPdfWithinSize(pdfBytes: Uint8Array, maxSize: number | undefined): void {
+    const maxPdfSize = resolveMaxPdfSize(maxSize);
+    if (pdfBytes.length > maxPdfSize) {
+        throw new TimestampError(
+            TimestampErrorCode.PDF_ERROR,
+            `PDF exceeds maximum supported size of ${maxPdfSize.toString()} bytes`
+        );
+    }
+}
+
+/**
+ * Validates a caller-supplied `signatureSize` reservation override. Omitted
+ * and 0 keep their historical auto-sizing meaning; any other value must be
+ * a positive safe integer within the reservation cap. Rejects before any
+ * placeholder allocation or PDF parsing.
+ */
+export function assertValidSignatureSize(signatureSize: number | undefined): void {
+    if (signatureSize === undefined || signatureSize === 0) return;
+    if (
+        !Number.isSafeInteger(signatureSize) ||
+        signatureSize <= 0 ||
+        signatureSize > MAX_SIGNATURE_SIZE
+    ) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            `signatureSize must be omitted, 0 (auto), or a positive safe integer of at most ${MAX_SIGNATURE_SIZE.toString()} bytes (got ${String(
+                signatureSize
+            )})`
+        );
+    }
+}

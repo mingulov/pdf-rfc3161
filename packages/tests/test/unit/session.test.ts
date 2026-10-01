@@ -17,6 +17,46 @@ vi.mock("../../../core/src/pdf/embed.js", async (importOriginal: <T = unknown>()
 
 const { TimestampSession } = await import("../../../core/src/session.js");
 
+// Minimal valid single-page PDF, exactly 345 bytes. The xref offsets match
+// the input-resource-limits minimalPdf fixture byte for byte.
+function minimalPdf345(): Uint8Array {
+    const lines = [
+        "%PDF-1.4",
+        "1 0 obj",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "endobj",
+        "2 0 obj",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "endobj",
+        "3 0 obj",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
+        "endobj",
+        "xref",
+        "0 4",
+        "0000000000 65535 f ",
+        "0000000009 00000 n ",
+        "0000000058 00000 n ",
+        "0000000115 00000 n ",
+        "trailer",
+        "<< /Size 4 /Root 1 0 R >>",
+        "startxref",
+        "203",
+        "%%EOF",
+    ];
+    return new TextEncoder().encode(lines.join("\n"));
+}
+
+type ResizableArrayBuffer = ArrayBuffer & { resize(byteLength: number): void };
+
+function newResizableBuffer(byteLength: number, maxByteLength: number): ResizableArrayBuffer {
+    // ES2022 lib types predate resizable ArrayBuffers; cast the constructor.
+    const ctor = ArrayBuffer as unknown as new (
+        byteLength: number,
+        options: { maxByteLength: number }
+    ) => ResizableArrayBuffer;
+    return new ctor(byteLength, { maxByteLength });
+}
+
 describe("TimestampSession", () => {
     let pdfBytes: Uint8Array;
 
@@ -206,6 +246,61 @@ describe("TimestampSession", () => {
             expect(tsq[0]).toBe(0x30);
         });
 
+        it.each([
+            ["over-cap", 70000],
+            ["NaN", Number.NaN],
+            ["Infinity", Number.POSITIVE_INFINITY],
+            ["negative", -100],
+            ["fractional", 100.5],
+        ])(
+            "rejects %s prepareOptions.signatureSize with INVALID_ARGUMENT",
+            async (_label: string, signatureSize: number) => {
+                await expect(
+                    (async () => {
+                        const session = new TimestampSession(pdfBytes, {
+                            enableLTV: false,
+                            prepareOptions: { signatureSize },
+                        });
+                        return session.createTimestampRequest();
+                    })()
+                ).rejects.toMatchObject({
+                    code: TimestampErrorCode.INVALID_ARGUMENT,
+                });
+            }
+        );
+
+        it.each([
+            ["negative", -1],
+            ["NaN", Number.NaN],
+        ])(
+            "rejects setSignatureSize(%s) at request creation with INVALID_ARGUMENT",
+            async (_label: string, signatureSize: number) => {
+                const session = new TimestampSession(pdfBytes, {
+                    enableLTV: false,
+                });
+                session.setSignatureSize(signatureSize);
+                await expect(session.createTimestampRequest()).rejects.toMatchObject({
+                    code: TimestampErrorCode.INVALID_ARGUMENT,
+                });
+            }
+        );
+
+        it("rechecks the effective PDF ceiling at request creation for grown borrowed bytes", async () => {
+            const pdf345 = minimalPdf345();
+            expect(pdf345.length).toBe(345);
+            const buffer = newResizableBuffer(pdf345.length, 355);
+            const view = new Uint8Array(buffer);
+            view.set(pdf345);
+            const session = new TimestampSession(view, { enableLTV: false, maxSize: 345 });
+            buffer.resize(355);
+            view.fill(0x20, 345);
+            expect(view.length).toBe(355);
+            await expect(session.createTimestampRequest()).rejects.toMatchObject({
+                code: TimestampErrorCode.PDF_ERROR,
+                message: expect.stringContaining("maximum supported size"),
+            });
+        });
+
         it("uses the constructor hash as a fallback and a per-request hash as the precedence override", async () => {
             const session = new TimestampSession(pdfBytes, {
                 enableLTV: false,
@@ -233,6 +328,18 @@ describe("TimestampSession", () => {
     });
 
     describe("calculateOptimalSize", () => {
+        it("caps the optimized size at MAX_SIGNATURE_SIZE", () => {
+            const hugeToken = new Uint8Array(100000);
+
+            expect(TimestampSession.calculateOptimalSize(hugeToken)).toBe(65536);
+        });
+
+        it("keeps an exactly-at-cap optimum unchanged", () => {
+            const token = new Uint8Array(65504);
+
+            expect(TimestampSession.calculateOptimalSize(token)).toBe(65536);
+        });
+
         it("should return aligned size for small token", () => {
             const smallToken = new Uint8Array(100);
             const size = TimestampSession.calculateOptimalSize(smallToken);

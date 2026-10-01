@@ -1,9 +1,12 @@
 import {
     DEFAULT_TSA_CONFIG,
     MAX_PDF_SIZE,
+    MAX_SIGNATURE_SIZE,
     DEFAULT_SIGNATURE_SIZE,
     LTV_SIGNATURE_SIZE,
+    assertPdfWithinSize,
 } from "./constants.js";
+import { PlaceholderTooSmallError } from "./pdf/embed.js";
 
 import {
     createTimestampRequest,
@@ -17,6 +20,7 @@ import {
     verifyTimestamp,
     verifyPdfTimestamps,
     type ExtractedTimestamp,
+    type ExtractInputOptions,
 } from "./pdf/extract.js";
 
 import {
@@ -110,7 +114,13 @@ export {
 // eslint-disable-next-line @typescript-eslint/no-deprecated -- public alias kept on purpose
 export { archiveTimestamp, timestampPdfLTA, SimpleTrustStore };
 export { CertificateStatus } from "./pki/ocsp-utils.js";
-export { extractTimestamps, verifyTimestamp, verifyPdfTimestamps, type ExtractedTimestamp };
+export {
+    extractTimestamps,
+    verifyTimestamp,
+    verifyPdfTimestamps,
+    type ExtractedTimestamp,
+    type ExtractInputOptions,
+};
 export { getDefaultTrustStore } from "./pki/default-trust-store.js";
 
 export type { LTVData, ArchiveTimestampOptions, TrustStore, LTVSettings, ExtractOptions };
@@ -173,6 +183,16 @@ export type { VerificationOptions, ParsedTimestampResponse };
  * // result.ltvData contains the embedded certs/CRLs/OCSP responses.
  * ```
  */
+// Terminal reservation-cap exhaustion shared by the optimization probe and
+// the retry loop. The token can never fit the cap, so surfacing this error
+// must not cost another TSA request or an identical-repeat reservation.
+function capError(size: number): PlaceholderTooSmallError {
+    return new PlaceholderTooSmallError(
+        size,
+        `Timestamp token requires at least ${size.toString()} bytes but the signature reservation cap of ${MAX_SIGNATURE_SIZE.toString()} bytes was reached.`
+    );
+}
+
 export async function timestampPdf(options: TimestampOptions): Promise<TimestampResult> {
     const {
         pdf,
@@ -183,19 +203,12 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
         maxSize,
         revocationData,
     } = options;
-    const maxPdfSize = maxSize ?? MAX_PDF_SIZE;
+    assertPdfWithinSize(pdf, maxSize);
 
     if (tsa.requestCertificate === false) {
         throw new TimestampError(
             TimestampErrorCode.INVALID_ARGUMENT,
             "timestampPdf requires tsa.requestCertificate=true; use TimestampSession.embedTimestampToken(..., { signerCertificates }) for certReq=false responses"
-        );
-    }
-
-    if (pdf.length > maxPdfSize) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
-            `PDF exceeds maximum supported size of ${maxPdfSize.toString()} bytes`
         );
     }
 
@@ -221,12 +234,12 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
 
             // We need to fetch a real token to know its size
             const responseBytes = await sendTimestampRequest(request, tsa);
-            const tsResponse = parseTimestampResponse(responseBytes);
-
-            const optimalSize = TimestampSession.calculateOptimalSize(tsResponse.token);
-            session.setSignatureSize(optimalSize);
-            currentSignatureSize = optimalSize;
-        } catch {
+            const token = parseTimestampResponse(responseBytes).token;
+            currentSignatureSize = TimestampSession.calculateOptimalSize(token);
+            if (token.length > MAX_SIGNATURE_SIZE) throw capError(token.length);
+        } catch (e) {
+            // Terminal cap exhaustion escapes the optimization fallback.
+            if (e instanceof PlaceholderTooSmallError) throw e;
             // If optimization probe fails, proceed with standard logic
         }
     }
@@ -290,21 +303,28 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 ltvData,
             };
         } catch (error) {
-            // Check if error is due to placeholder size
-            if (error instanceof Error && error.message.includes("Increase signatureSize")) {
-                if (attempt < MAX_RETRIES) {
-                    // Use the optimal size for the token we just received if available
-                    if (tsResponse?.token) {
-                        currentSignatureSize = TimestampSession.calculateOptimalSize(
-                            tsResponse.token
-                        );
-                    } else {
-                        // Fallback to doubling if we don't have a token (shouldn't happen with this error)
-                        const currentVal = currentSignatureSize || DEFAULT_SIGNATURE_SIZE;
-                        currentSignatureSize = currentVal * 2;
+            // Retry placeholder exhaustion by type, never by message text: an
+            // unrelated error that merely mentions the placeholder must not
+            // trigger another TSA request.
+            if (error instanceof PlaceholderTooSmallError && attempt < MAX_RETRIES) {
+                // Use the optimal size for the token we just received if available
+                const nextSize = tsResponse?.token
+                    ? TimestampSession.calculateOptimalSize(tsResponse.token)
+                    : (currentSignatureSize || DEFAULT_SIGNATURE_SIZE) * 2;
+                // Cap automatic growth and never repeat an identical too-small
+                // reservation or issue an extra TSA request past the cap.
+                const cappedSize = Math.min(nextSize, MAX_SIGNATURE_SIZE);
+                if (cappedSize <= currentSignatureSize) {
+                    if (
+                        nextSize > MAX_SIGNATURE_SIZE ||
+                        currentSignatureSize >= MAX_SIGNATURE_SIZE
+                    ) {
+                        throw capError(error.requiredSignatureSize);
                     }
-                    continue;
+                    throw error;
                 }
+                currentSignatureSize = cappedSize;
+                continue;
             }
             throw error;
         }

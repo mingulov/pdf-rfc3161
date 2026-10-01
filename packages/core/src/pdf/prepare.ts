@@ -11,7 +11,11 @@ import {
     PDFObject,
     type PDFContext,
 } from "pdf-lib-incremental-save";
-import { DEFAULT_SIGNATURE_SIZE } from "../constants.js";
+import {
+    DEFAULT_SIGNATURE_SIZE,
+    assertPdfWithinSize,
+    assertValidSignatureSize,
+} from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import {
     MAX_FIELD_HIERARCHY_DEPTH,
@@ -73,7 +77,12 @@ export interface PreparedPDF {
  * Options for preparing a PDF for timestamping
  */
 export interface PrepareOptions {
-    /** Size to reserve for the timestamp token (default: 8192 bytes = 16384 hex chars) */
+    /**
+     * Size to reserve for the timestamp token (default: 8192 bytes = 16384 hex chars).
+     * Omit or pass 0 for auto sizing; any other value must be a positive safe
+     * integer of at most `MAX_SIGNATURE_SIZE` (65,536) bytes, else preparation
+     * rejects with `INVALID_ARGUMENT` before allocating or parsing.
+     */
     signatureSize?: number;
     /** Optional reason for the timestamp */
     reason?: string;
@@ -373,10 +382,12 @@ export async function preparePdfForTimestamp(
     pdfBytes: Uint8Array,
     options: PrepareOptions = {}
 ): Promise<PreparedPDF> {
+    assertPdfWithinSize(pdfBytes, undefined);
+    assertValidSignatureSize(options.signatureSize);
     const signatureSize =
-        options.signatureSize && options.signatureSize > 0
-            ? options.signatureSize
-            : DEFAULT_SIGNATURE_SIZE;
+        options.signatureSize === undefined || options.signatureSize === 0
+            ? DEFAULT_SIGNATURE_SIZE
+            : options.signatureSize;
     const placeholderHexLength = signatureSize * 2; // Each byte = 2 hex chars
     const requestedSignatureFieldName = options.signatureFieldName ?? "Timestamp";
 

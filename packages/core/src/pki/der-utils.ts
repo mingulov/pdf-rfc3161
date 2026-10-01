@@ -1,9 +1,40 @@
 import * as asn1js from "asn1js";
+import { MAX_DER_DEPTH, MAX_DER_NODES } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer } from "../utils.js";
 
 function invalidResponse(message: string): TimestampError {
     return new TimestampError(TimestampErrorCode.INVALID_RESPONSE, message);
+}
+
+/**
+ * Mutable node budget shared across nested DER decodings. Each parsed TLV
+ * consumes one node; exhaustion rejects with `INVALID_RESPONSE` before any
+ * recursive decoder runs. Pass one budget through an outer value and its
+ * nested OCTET STRING payloads to bound the aggregate instead of each layer.
+ */
+export interface DerDecodeBudget {
+    remainingNodes: number;
+}
+
+/** Creates a fresh node budget (default: one full `MAX_DER_NODES` allowance). */
+export function createDerDecodeBudget(maxNodes: number = MAX_DER_NODES): DerDecodeBudget {
+    if (!Number.isSafeInteger(maxNodes) || maxNodes <= 0) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            `DER node budget must be a positive safe integer (got ${String(maxNodes)})`
+        );
+    }
+    return { remainingNodes: maxNodes };
+}
+
+function consumeDerNode(budget: DerDecodeBudget, description: string): void {
+    if (!Number.isSafeInteger(budget.remainingNodes) || budget.remainingNodes <= 0) {
+        throw invalidResponse(
+            `${description}: ASN.1 node count exceeds the supported limit of ${MAX_DER_NODES.toString()} nodes`
+        );
+    }
+    budget.remainingNodes -= 1;
 }
 
 interface ParsedTag {
@@ -131,64 +162,136 @@ function parseCanonicalDerLength(
     return { contentOffset: contentOffset + lengthOctets, contentLength };
 }
 
-function validateCanonicalDerTlv(
-    bytes: Uint8Array,
-    offset: number,
-    limit: number,
-    description: string
-): number {
-    const tag = parseCanonicalDerTag(bytes, offset, description);
-    const length = parseCanonicalDerLength(bytes, tag.contentOffset, limit, description);
-    const contentEnd = length.contentOffset + length.contentLength;
-    if (!Number.isSafeInteger(contentEnd) || contentEnd > limit) {
-        throw invalidResponse(`${description}: ASN.1 content is truncated`);
-    }
-
-    validateCanonicalIntegerEncoding(tag, bytes, length.contentOffset, contentEnd, description);
-
-    if (tag.constructed) {
-        let childOffset = length.contentOffset;
-        while (childOffset < contentEnd) {
-            const nextChildOffset = validateCanonicalDerTlv(
-                bytes,
-                childOffset,
-                contentEnd,
-                description
-            );
-            if (nextChildOffset <= childOffset) {
-                throw invalidResponse(`${description}: ASN.1 child does not advance`);
-            }
-            childOffset = nextChildOffset;
-        }
-        if (childOffset !== contentEnd) {
-            throw invalidResponse(`${description}: ASN.1 child bytes are truncated`);
-        }
-    }
-    return contentEnd;
+interface DerPreflightFrame {
+    contentEnd: number;
+    nextChildOffset: number;
+    childDepth: number;
 }
 
 /**
- * Parses one complete DER SEQUENCE after recursively validating canonical
+ * Iteratively validates canonical TLV framing for a whole DER tree. The old
+ * recursive walk threw an uncategorized `RangeError` on deeply nested input;
+ * this explicit stack instead enforces `MAX_DER_DEPTH` levels of nesting
+ * (the outermost TLV counts as level 1) and consumes the shared node budget,
+ * so hostile input fails with `INVALID_RESPONSE` before any recursive
+ * decoder runs. All offsets stay relative to the input view, so sliced
+ * `Uint8Array` windows validate exactly the bytes they span.
+ */
+function validateCanonicalDerTree(
+    bytes: Uint8Array,
+    offset: number,
+    limit: number,
+    description: string,
+    budget: DerDecodeBudget
+): number {
+    const rootTag = parseCanonicalDerTag(bytes, offset, description);
+    const rootLength = parseCanonicalDerLength(bytes, rootTag.contentOffset, limit, description);
+    const rootContentEnd = rootLength.contentOffset + rootLength.contentLength;
+    if (!Number.isSafeInteger(rootContentEnd) || rootContentEnd > limit) {
+        throw invalidResponse(`${description}: ASN.1 content is truncated`);
+    }
+    validateCanonicalIntegerEncoding(
+        rootTag,
+        bytes,
+        rootLength.contentOffset,
+        rootContentEnd,
+        description
+    );
+    consumeDerNode(budget, description);
+    if (!rootTag.constructed) {
+        return rootContentEnd;
+    }
+
+    const stack: DerPreflightFrame[] = [
+        {
+            contentEnd: rootContentEnd,
+            nextChildOffset: rootLength.contentOffset,
+            childDepth: 2,
+        },
+    ];
+    while (stack.length > 0) {
+        const frame = stack[stack.length - 1];
+        if (frame === undefined) {
+            throw invalidResponse(`${description}: ASN.1 preflight reached an invalid state`);
+        }
+        if (frame.nextChildOffset === frame.contentEnd) {
+            stack.pop();
+            continue;
+        }
+        if (frame.nextChildOffset > frame.contentEnd) {
+            throw invalidResponse(`${description}: ASN.1 child bytes are truncated`);
+        }
+        if (frame.childDepth > MAX_DER_DEPTH) {
+            throw invalidResponse(
+                `${description}: ASN.1 nesting depth exceeds the supported limit of ${MAX_DER_DEPTH.toString()} levels`
+            );
+        }
+        const tag = parseCanonicalDerTag(bytes, frame.nextChildOffset, description);
+        const length = parseCanonicalDerLength(
+            bytes,
+            tag.contentOffset,
+            frame.contentEnd,
+            description
+        );
+        const contentEnd = length.contentOffset + length.contentLength;
+        if (!Number.isSafeInteger(contentEnd) || contentEnd > frame.contentEnd) {
+            throw invalidResponse(`${description}: ASN.1 content is truncated`);
+        }
+        validateCanonicalIntegerEncoding(tag, bytes, length.contentOffset, contentEnd, description);
+        consumeDerNode(budget, description);
+        if (contentEnd <= frame.nextChildOffset) {
+            throw invalidResponse(`${description}: ASN.1 child does not advance`);
+        }
+        frame.nextChildOffset = contentEnd;
+        if (tag.constructed) {
+            stack.push({
+                contentEnd,
+                nextChildOffset: length.contentOffset,
+                childDepth: frame.childDepth + 1,
+            });
+        }
+    }
+    return rootContentEnd;
+}
+
+/** Surfaces a short decoder diagnostic (for example a nested node-limit hit). */
+function decoderDetail(parsed: { result?: { error?: unknown } }): string {
+    const error: unknown = parsed.result?.error;
+    if (typeof error !== "string" || error.length === 0) return "";
+    return ` (${error.slice(0, 200)})`;
+}
+
+/**
+ * Parses one complete DER SEQUENCE after iteratively validating canonical
  * TLV framing for every constructed child.
  *
  * This checks tag and length minimality, definite lengths, and child boundaries.
  * It deliberately does not claim full value canonicalization such as SET sorting;
  * callers remain responsible for ASN.1 schema and semantic checks.
+ *
+ * Nesting beyond `MAX_DER_DEPTH` levels and node counts beyond the budget
+ * reject with `INVALID_RESPONSE` during the iterative preflight, before the
+ * recursive ASN.1 decoder runs. Pass `options.budget` to bound an outer
+ * value and its nested payloads against one shared allowance.
  */
 export function parseCanonicalDERSequenceTree(
     bytes: Uint8Array,
-    description: string
+    description: string,
+    options: { budget?: DerDecodeBudget } = {}
 ): asn1js.BaseBlock {
     if (bytes[0] !== 0x30) {
         throw invalidResponse(`${description}: expected canonical DER SEQUENCE tag`);
     }
-    const end = validateCanonicalDerTlv(bytes, 0, bytes.length, description);
+    const budget = options.budget ?? createDerDecodeBudget();
+    const end = validateCanonicalDerTree(bytes, 0, bytes.length, description, budget);
     if (end !== bytes.length) {
         throw invalidResponse(`${description}: trailing bytes are not permitted`);
     }
 
     const parsed = asn1js.fromBER(toArrayBuffer(bytes));
-    if (parsed.offset === -1) throw invalidResponse(`${description}: ASN.1 parse failed`);
+    if (parsed.offset === -1) {
+        throw invalidResponse(`${description}: ASN.1 parse failed${decoderDetail(parsed)}`);
+    }
     if (parsed.offset !== bytes.length) {
         throw invalidResponse(`${description}: trailing bytes are not permitted`);
     }

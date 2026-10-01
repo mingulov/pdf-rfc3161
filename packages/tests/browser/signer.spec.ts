@@ -19,6 +19,7 @@ import {
     SimpleTrustStore,
     TimestampError,
     TimestampSession,
+    extractTimestamps,
     sendTimestampRequest,
     timestampPdf,
     verifyPdfTimestamps,
@@ -624,6 +625,75 @@ export async function probeResourceLimit(
 }
 
 /**
+ * T03 placeholder/input bound negatives: invalid reservations and ceilings
+ * must reject with INVALID_ARGUMENT/PDF_ERROR before any TSA request. The
+ * harness asserts zero server-side TSA requests across this probe, so the
+ * bounds are proven without allocating hostile PDFs or reservations.
+ */
+export async function probePlaceholderBounds(
+    input: number[],
+    tsaUrl: string
+): Promise<RejectionOutcome[]> {
+    const original = new Uint8Array(input);
+    check(original.length > 64, "placeholder-bounds probe needs a nontrivial input");
+    const outcomes: RejectionOutcome[] = [];
+    const attempt = async (
+        name: string,
+        api: RejectionOutcome["api"],
+        fn: () => Promise<unknown>
+    ): Promise<void> => {
+        try {
+            await fn();
+            throw new Error(`${name}: unexpectedly succeeded`);
+        } catch (error) {
+            if (error instanceof Error && error.message.endsWith("unexpectedly succeeded")) {
+                throw error;
+            }
+            outcomes.push({
+                name,
+                api,
+                rejected: true,
+                code: error instanceof TimestampError ? error.code : null,
+                message: error instanceof Error ? error.message : String(error),
+            });
+        }
+    };
+
+    await attempt("oversize-reservation", "one-call", () =>
+        timestampPdf({
+            pdf: original,
+            tsa: { url: tsaUrl, retry: 0 },
+            signatureSize: 70000,
+        })
+    );
+    await attempt("infinite-reservation", "one-call", () =>
+        timestampPdf({
+            pdf: original,
+            tsa: { url: tsaUrl, retry: 0 },
+            signatureSize: Number.POSITIVE_INFINITY,
+        })
+    );
+    await attempt("nan-reservation", "session", async () => {
+        const session = new TimestampSession(original, {
+            prepareOptions: { signatureSize: Number.NaN },
+        });
+        await session.createTimestampRequest();
+    });
+    await attempt("setter-nan-reservation", "session", async () => {
+        const session = new TimestampSession(original);
+        session.setSignatureSize(Number.NaN);
+        await session.createTimestampRequest();
+    });
+    await attempt("invalid-ceiling", "one-call", () =>
+        timestampPdf({ pdf: original, tsa: { url: tsaUrl, retry: 0 }, maxSize: 0 })
+    );
+    await attempt("extract-over-ceiling", "one-call", () =>
+        extractTimestamps(original, { maxSize: 64 })
+    );
+    return outcomes;
+}
+
+/**
  * CORS matrix executed in the page with real browser enforcement: a
  * CORS-denied TSA must fail signing clearly, while CORS-denied optional
  * revocation collection must still return signed bytes. Post-embed
@@ -976,6 +1046,7 @@ export async function runWorkerJourney(
     runRejectionCases,
     runCraftedValidControl,
     probeResourceLimit,
+    probePlaceholderBounds,
     runCorsCases,
     runTrustTargetCase,
     probeSignerValidityAtGenTime,
