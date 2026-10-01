@@ -68,10 +68,24 @@ function parseRawResponseStatus(value: asn1js.BaseBlock): OCSPResponseStatus {
 
     const status = value.valueBlock.valueHexView[0];
     // RFC 6960 defines nonnegative responseStatus values 0 through 6.
-    if (status === undefined || status > 6) {
-        throw invalidOcspSchema("responseStatus must be an RFC 6960 value from 0 through 6");
+    switch (status) {
+        case 0:
+            return OCSPResponseStatus.SUCCESSFUL;
+        case 1:
+            return OCSPResponseStatus.MALFORMED_REQUEST;
+        case 2:
+            return OCSPResponseStatus.INTERNAL_ERROR;
+        case 3:
+            return OCSPResponseStatus.TRY_LATER;
+        case 4:
+            return OCSPResponseStatus.UNUSED;
+        case 5:
+            return OCSPResponseStatus.SIG_REQUIRED;
+        case 6:
+            return OCSPResponseStatus.UNAUTHORIZED;
+        default:
+            throw invalidOcspSchema("responseStatus must be an RFC 6960 value from 0 through 6");
     }
-    return status;
 }
 
 function validateOcspResponseSchema(value: asn1js.BaseBlock): OCSPResponseStatus {

@@ -24,19 +24,19 @@
         "pdf-lib-incremental-save": "1.17.4",
         "pdf-rfc3161": "workspace:*",
         "pdf-rfc3161-cli": "workspace:*",
-        "pkijs": "^3.4.0",
+        "pkijs": "^3.4.1",
         "pvutils": "^1.2.0"
     },
     "devDependencies": {
-        "@types/node": "^26.5.0",
+        "@types/node": "^26.6.3",
         "@typescript/native": "npm:typescript@7.0.2",
-        "@vitest/coverage-v8": "^5.0.0",
-        "eslint": "^10.10.0",
+        "@vitest/coverage-v8": "^5.0.2",
+        "eslint": "^10.11.0",
         "pdf-lib": "^1.17.1",
-        "tsx": "^4.23.13",
+        "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
         "verifiedby": "0.1.0",
-        "vitest": "^5.0.0"
+        "vitest": "^5.0.2"
     },
     "engines": {
         "node": ">=22.12.0"

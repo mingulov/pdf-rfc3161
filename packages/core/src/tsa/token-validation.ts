@@ -283,7 +283,7 @@ function classifyToken(bytes: Uint8Array): {
     return {
         token,
         contentInfo,
-        responseStatus: status,
+        responseStatus: status === 0 ? TSAStatus.GRANTED : TSAStatus.GRANTED_WITH_MODS,
         responseStatusString: responseStatus.statusString,
     };
 }

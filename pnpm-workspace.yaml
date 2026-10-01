@@ -10,7 +10,7 @@ minimumReleaseAgeExclude:
 
 overrides:
   esbuild: 0.28.2
-  '@typescript-eslint/tsconfig-utils': 8.69.0
-  '@typescript-eslint/types': 8.69.0
-  eslint: 10.10.0
-  typescript-eslint: 8.69.0
+  '@typescript-eslint/tsconfig-utils': 8.71.0
+  '@typescript-eslint/types': 8.71.0
+  eslint: 10.11.0
+  typescript-eslint: 8.71.0
