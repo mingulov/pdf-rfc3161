@@ -1167,6 +1167,7 @@ interface EngineReceipt {
     requests: CapturedRequest[];
     rejections: RejectionOutcome[];
     resourceLimit: RejectionOutcome;
+    placeholderBounds: RejectionOutcome[];
     cors: {
         tsaDenied: RejectionOutcome;
         revocationDeniedLtv: CorsOutcome["revocationDeniedLtv"];
@@ -1469,6 +1470,65 @@ function assertResourceLimit(outcome: RejectionOutcome): void {
         outcome.message.includes("maximum supported size"),
         `resource-limit: message must cite the size bound (got: ${outcome.message})`
     );
+}
+
+/** T03 placeholder/input bound negatives (C02/C06): codes plus bound citation. */
+function assertPlaceholderBounds(outcomes: RejectionOutcome[]): void {
+    const expected: { name: string; api: string; code: string; messagePart: string }[] = [
+        {
+            name: "oversize-reservation",
+            api: "one-call",
+            code: "INVALID_ARGUMENT",
+            messagePart: "signatureSize",
+        },
+        {
+            name: "infinite-reservation",
+            api: "one-call",
+            code: "INVALID_ARGUMENT",
+            messagePart: "signatureSize",
+        },
+        {
+            name: "nan-reservation",
+            api: "session",
+            code: "INVALID_ARGUMENT",
+            messagePart: "signatureSize",
+        },
+        {
+            name: "setter-nan-reservation",
+            api: "session",
+            code: "INVALID_ARGUMENT",
+            messagePart: "signatureSize",
+        },
+        {
+            name: "invalid-ceiling",
+            api: "one-call",
+            code: "INVALID_ARGUMENT",
+            messagePart: "maxSize",
+        },
+        {
+            name: "extract-over-ceiling",
+            api: "one-call",
+            code: "PDF_ERROR",
+            messagePart: "maximum supported size",
+        },
+    ];
+    assert.deepEqual(
+        outcomes.map((outcome) => outcome.name),
+        expected.map((item) => item.name),
+        "placeholder-bounds case names"
+    );
+    for (const [index, outcome] of outcomes.entries()) {
+        const item = expected[index];
+        assert.ok(item !== undefined, `placeholder-bounds case ${index.toString()} must be known`);
+        const label = `placeholder-bounds:${item.name}`;
+        assert.equal(outcome.api, item.api, `${label}: api surface`);
+        assert.equal(outcome.rejected, true, `${label}: must reject pre-embed`);
+        assert.equal(outcome.code, item.code, `${label}: error code`);
+        assert.ok(
+            outcome.message.includes(item.messagePart),
+            `${label}: message must cite the bound (got: ${outcome.message})`
+        );
+    }
 }
 
 /**
@@ -1831,7 +1891,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
         const tsa = world.tsa;
         const tsaAia = world.tsaAia;
         progress(`[${engine}] browser launched`);
-        const { driven, resourceLimit } = await withDeadline(
+        const { driven, resourceLimit, placeholderBounds } = await withDeadline(
             (async () => {
                 const completed = await driveJourneys(page, {
                     inputs: shared.inputs,
@@ -1860,7 +1920,23 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
                     requestsBefore,
                     "the resource-limit probe must issue zero TSA requests"
                 );
-                return { driven: completed, resourceLimit: limit };
+                // T03 placeholder-bounds probe, isolated under the same
+                // zero-TSA-request assertion.
+                const boundsRequestsBefore = world.requests.length;
+                const bounds = await page.evaluate(
+                    (arg: { input: number[]; tsaUrl: string }) => {
+                        const api = (globalThis as unknown as { __T00__: PageApi }).__T00__;
+                        return api.probePlaceholderBounds(arg.input, arg.tsaUrl);
+                    },
+                    { input: Array.from(shared.modern), tsaUrl: urls.tsa }
+                );
+                progress(`[${engine}] placeholder-bounds probe ok`);
+                assert.equal(
+                    world.requests.length,
+                    boundsRequestsBefore,
+                    "the placeholder-bounds probe must issue zero TSA requests"
+                );
+                return { driven: completed, resourceLimit: limit, placeholderBounds: bounds };
             })(),
             RUNNER_DEADLINE_MS,
             `browser journeys (${engine})`
@@ -1901,6 +1977,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
         assertPreflights(world, pageOrigin);
         assertRejections(driven.rejections);
         assertResourceLimit(resourceLimit);
+        assertPlaceholderBounds(placeholderBounds);
         assertCors(driven.cors);
         assertTransportHooks(driven.transportHooks);
         assertTrustTarget(driven.trustTarget);
@@ -2051,6 +2128,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
                 craftedValidCases: 2,
                 rejectionCases: driven.rejections.length,
                 resourceLimitCases: 1,
+                placeholderBoundsCases: placeholderBounds.length,
                 corsCases: 2,
                 trustTargetCases: 1,
                 workerOutputs: 1,
@@ -2064,6 +2142,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
             requests: world.requests,
             rejections: driven.rejections,
             resourceLimit,
+            placeholderBounds,
             cors: {
                 tsaDenied: driven.cors.tsaDenied,
                 revocationDeniedLtv: driven.cors.revocationDeniedLtv,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PlaceholderTooSmallError } from "../../../core/src/pdf/embed.js";
 import { TSAStatus } from "../../../core/src/types.js";
 
 interface MockLTVData {
@@ -17,6 +18,16 @@ const state = vi.hoisted(() => {
         messageDigest: "00",
         hasCertificate: true,
     };
+    const baseEmbed = async (_response: Uint8Array): Promise<Uint8Array> => {
+        state.embedAttempts++;
+        if (state.embedAttempts === 1) {
+            throw new PlaceholderTooSmallError(
+                4096,
+                "Timestamp token is larger than placeholder. Increase signatureSize."
+            );
+        }
+        return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+    };
     return {
         sessionOptions: vi.fn(),
         createRequest: vi.fn(async (_options: unknown) => new Uint8Array([0x30, 0x00])),
@@ -27,11 +38,10 @@ const state = vi.hoisted(() => {
             info,
         })),
         embedAttempts: 0,
-        embed: vi.fn(async (_response: Uint8Array) => {
-            state.embedAttempts++;
-            if (state.embedAttempts === 1) throw new Error("Increase signatureSize");
-            return new Uint8Array([0x25, 0x50, 0x44, 0x46]);
-        }),
+        optimalCalls: 0,
+        forceCappedOptimal: false,
+        baseEmbed,
+        embed: vi.fn(baseEmbed),
         extractLtv: vi.fn(() => ({ certificates: [], crls: [], ocspResponses: [] })),
         completeLtv: vi.fn(async (data: MockLTVData) => ({ data, errors: [] })),
         addDss: vi.fn(async (pdf: Uint8Array) => pdf),
@@ -55,7 +65,12 @@ vi.mock("../../../core/src/session.js", () => {
         setSignatureSize(_size: number): void {}
 
         static calculateOptimalSize(_token: Uint8Array): number {
-            return 4096;
+            // First call per test optimizes the probe/initial reservation to
+            // 4096; later calls grow, since the retry loop never repeats an
+            // identical too-small reservation.
+            state.optimalCalls++;
+            if (state.forceCappedOptimal) return 65536;
+            return state.optimalCalls === 1 ? 4096 : 8192;
         }
     }
     return { TimestampSession: FakeSession };
@@ -94,6 +109,9 @@ describe("timestampPdf omitted options through optimization and retry", () => {
         state.completeLtv.mockClear();
         state.addDss.mockClear();
         state.embedAttempts = 0;
+        state.optimalCalls = 0;
+        state.forceCappedOptimal = false;
+        state.embed.mockImplementation(state.baseEmbed);
     });
 
     it("keeps default retry and LTV behavior when optional options are omitted", async () => {
@@ -114,6 +132,86 @@ describe("timestampPdf omitted options through optimization and retry", () => {
         expect(result.ltvData).toEqual({ certificates: [], crls: [], ocspResponses: [] });
     });
 
+    it("does not retry a plain Error that merely mentions the placeholder text", async () => {
+        state.embed.mockImplementationOnce(async () => {
+            throw new Error("Increase signatureSize");
+        });
+
+        await expect(timestampPdf(options)).rejects.toThrow("Increase signatureSize");
+        expect(state.send).toHaveBeenCalledTimes(1);
+        expect(state.embed).toHaveBeenCalledTimes(1);
+    });
+
+    it("never repeats an identical too-small reservation while growing", async () => {
+        state.embed.mockImplementation(async () => {
+            throw new PlaceholderTooSmallError(70000, "probe: Increase signatureSize");
+        });
+
+        await expect(timestampPdf(options)).rejects.toBeInstanceOf(PlaceholderTooSmallError);
+        const sizes = state.sessionOptions.mock.calls.map(
+            (call) =>
+                (call[0] as { prepareOptions: { signatureSize: number } }).prepareOptions
+                    .signatureSize
+        );
+        expect(sizes).toEqual([0, 4096, 8192]);
+        expect(state.send).toHaveBeenCalledTimes(3);
+        expect(state.embed).toHaveBeenCalledTimes(3);
+    });
+
+    it("issues no extra TSA request after the reservation cap is reached", async () => {
+        state.forceCappedOptimal = true;
+        state.embed.mockImplementation(async () => {
+            throw new PlaceholderTooSmallError(70000, "probe: Increase signatureSize");
+        });
+
+        const failure = await timestampPdf(options).then(
+            () => {
+                throw new Error("unexpected success past the reservation cap");
+            },
+            (error: unknown) => error
+        );
+        expect(failure).toBeInstanceOf(PlaceholderTooSmallError);
+        expect((failure as PlaceholderTooSmallError).requiredSignatureSize).toBe(70000);
+        expect((failure as Error).message).toContain("reservation cap");
+        const sizes = state.sessionOptions.mock.calls.map(
+            (call) =>
+                (call[0] as { prepareOptions: { signatureSize: number } }).prepareOptions
+                    .signatureSize
+        );
+        expect(sizes).toEqual([0, 65536]);
+        expect(state.send).toHaveBeenCalledTimes(2);
+        expect(state.embed).toHaveBeenCalledTimes(2);
+    });
+
+    it("surfaces reservation-cap exhaustion from the optimization probe without another TSA request", async () => {
+        state.forceCappedOptimal = true;
+        const granted = state.parse();
+        state.parse.mockClear();
+        state.parse.mockReturnValueOnce({ ...granted, token: new Uint8Array(65537) });
+
+        const failure = await timestampPdf({
+            ...options,
+            signatureSize: 65536,
+            optimizePlaceholder: true,
+        }).then(
+            () => {
+                throw new Error("unexpected success past the reservation cap");
+            },
+            (error: unknown) => error
+        );
+        expect(failure).toBeInstanceOf(PlaceholderTooSmallError);
+        expect((failure as PlaceholderTooSmallError).requiredSignatureSize).toBe(65537);
+        expect((failure as Error).message).toContain("reservation cap");
+        const sizes = state.sessionOptions.mock.calls.map(
+            (call) =>
+                (call[0] as { prepareOptions: { signatureSize: number } }).prepareOptions
+                    .signatureSize
+        );
+        expect(sizes).toEqual([65536]);
+        expect(state.send).toHaveBeenCalledTimes(1);
+        expect(state.embed).not.toHaveBeenCalled();
+    });
+
     it("keeps the omitted defaults through the optimization probe and retry", async () => {
         await timestampPdf({ ...options, optimizePlaceholder: true });
 
@@ -128,7 +226,7 @@ describe("timestampPdf omitted options through optimization and retry", () => {
         });
         expect(state.sessionOptions.mock.calls[2]?.[0]).toMatchObject({
             enableLTV: false,
-            prepareOptions: { signatureSize: 4096, optimizePlaceholder: true },
+            prepareOptions: { signatureSize: 8192, optimizePlaceholder: true },
         });
         expect(state.send).toHaveBeenCalledTimes(3);
         expect(state.embed).toHaveBeenCalledTimes(2);

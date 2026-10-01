@@ -16,7 +16,7 @@ import {
     type ExtractOptions,
 } from "../types.js";
 import { toArrayBuffer, bytesToHex, extractBytesFromByteRange } from "../utils.js";
-import { MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES } from "../constants.js";
+import { MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES, assertPdfWithinSize } from "../constants.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import { parsePdfDate } from "../utils/pdf-date.js";
 import {
@@ -92,6 +92,22 @@ export interface ExtractedTimestamp {
     contactInfo?: string;
     /** The Modification Time (M) entry from the PDF Signature Dictionary */
     m?: Date;
+}
+
+/**
+ * Input options for the timestamp extraction/verification entries.
+ * Extends `ExtractOptions` with the enforced input ceiling. DSS helpers accept
+ * plain `ExtractOptions` and do not enforce `maxSize`; pass it only where it
+ * is documented as enforced.
+ */
+export interface ExtractInputOptions extends ExtractOptions {
+    /**
+     * Maximum accepted input PDF size in bytes (default: 250 MiB). Must be a
+     * positive safe integer of at most `MAX_PDF_SIZE`; larger inputs reject
+     * with `PDF_ERROR` before any PDF parsing, invalid overrides with
+     * `INVALID_ARGUMENT`.
+     */
+    maxSize?: number;
 }
 
 /** @internal Detailed timestamp discovery used by archive renewal only. */
@@ -448,7 +464,7 @@ function cloneTimestampInfo(info: TimestampInfo): TimestampInfo {
  */
 export async function extractTimestamps(
     pdfBytes: Uint8Array,
-    options?: ExtractOptions
+    options?: ExtractInputOptions
 ): Promise<ExtractedTimestamp[]> {
     const discovery = await discoverTimestamps(pdfBytes, options, false);
     return discovery.timestamps;
@@ -465,16 +481,17 @@ export async function extractTimestamps(
  */
 export async function discoverArchiveTimestamps(
     pdfBytes: Uint8Array,
-    options?: ExtractOptions
+    options?: ExtractInputOptions
 ): Promise<ArchiveTimestampDiscovery> {
     return discoverTimestamps(pdfBytes, options, true);
 }
 
 async function discoverTimestamps(
     pdfBytes: Uint8Array,
-    options: ExtractOptions | undefined,
+    options: ExtractInputOptions | undefined,
     archiveDetailed: boolean
 ): Promise<ArchiveTimestampDiscovery> {
+    assertPdfWithinSize(pdfBytes, options?.maxSize);
     let pdfDoc;
     try {
         pdfDoc = await PDFDocument.load(pdfBytes, {
@@ -1002,7 +1019,7 @@ export async function verifyTimestampsWithSharedIndex(
  */
 export async function verifyPdfTimestamps(
     pdfBytes: Uint8Array,
-    options: ExtractOptions & Omit<VerificationOptions, "pdf"> = {}
+    options: ExtractInputOptions & Omit<VerificationOptions, "pdf"> = {}
 ): Promise<ExtractedTimestamp[]> {
     const discovery = await discoverTimestamps(pdfBytes, options, false);
     const timestamps = discovery.timestamps;

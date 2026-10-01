@@ -1,4 +1,5 @@
 import { timestampPdf } from "../index.js";
+import { assertPdfWithinSize, assertValidSignatureSize } from "../constants.js";
 import {
     discoverArchiveTimestamps,
     verifyTimestampsWithSharedIndex,
@@ -107,6 +108,9 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
         strictExistingVerification = false,
         existingTimestampVerifyOptions,
     } = options;
+
+    assertPdfWithinSize(pdf, options.maxSize);
+    assertValidSignatureSize(options.signatureSize);
 
     // 1. Extract all existing timestamps
     const discovery = await discoverArchiveTimestamps(pdf, {

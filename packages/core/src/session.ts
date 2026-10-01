@@ -14,8 +14,11 @@ import {
 import {
     LTV_SIGNATURE_SIZE,
     DEFAULT_SIGNATURE_SIZE,
+    MAX_SIGNATURE_SIZE,
     SIGNATURE_SIZE_OPTIMIZE_ADD,
     SIGNATURE_SIZE_OPTIMIZE_ALIGN,
+    assertValidSignatureSize,
+    assertPdfWithinSize,
 } from "./constants.js";
 
 /**
@@ -26,6 +29,12 @@ export interface TimestampSessionOptions {
     hashAlgorithm?: HashAlgorithm;
     /** Options for preparing the PDF (signature size, reason, etc.) */
     prepareOptions?: PrepareOptions;
+    /**
+     * Maximum accepted input PDF size in bytes (default: 250 MiB). Must be a
+     * positive safe integer of at most `MAX_PDF_SIZE`; larger inputs reject
+     * with `PDF_ERROR` in the constructor, before any preparation.
+     */
+    maxSize?: number;
     /** Whether to prepare for Long-Term Validation (default: true) */
     enableLTV?: boolean;
     /**
@@ -88,6 +97,8 @@ export class TimestampSession {
      * @param options Session configuration options
      */
     constructor(pdfBytes: Uint8Array, options: TimestampSessionOptions = {}) {
+        assertPdfWithinSize(pdfBytes, options.maxSize);
+        assertValidSignatureSize(options.prepareOptions?.signatureSize);
         this.pdfBytes = pdfBytes;
         this.options = options;
         this.currentPrepareOptions = {
@@ -113,7 +124,10 @@ export class TimestampSession {
 
     /**
      * Update the signature size for the next request generation.
-     * Useful for optimization loops or retries.
+     * Useful for optimization loops or retries. The value is validated when
+     * the next request is created: it must be 0 (auto) or a positive safe
+     * integer within the reservation cap, else request creation rejects with
+     * `INVALID_ARGUMENT` before allocating or parsing.
      * @param newSize New size in bytes
      */
     setSignatureSize(newSize: number): void {
@@ -155,14 +169,17 @@ export class TimestampSession {
      */
     /**
      * Calculates an optimized signature size for a given token length.
-     * Original precise formula with alignment.
+     * Original precise formula with alignment, capped at
+     * `MAX_SIGNATURE_SIZE` so automatic growth never issues an over-cap
+     * reservation. A token that genuinely needs more than the cap still
+     * fails clearly at embed time with `PlaceholderTooSmallError`.
      */
     static calculateOptimalSize(token: Uint8Array): number {
         const tokenLength = token.length;
-        return (
+        const optimal =
             Math.ceil((tokenLength + SIGNATURE_SIZE_OPTIMIZE_ADD) / SIGNATURE_SIZE_OPTIMIZE_ALIGN) *
-            SIGNATURE_SIZE_OPTIMIZE_ALIGN
-        );
+            SIGNATURE_SIZE_OPTIMIZE_ALIGN;
+        return Math.min(optimal, MAX_SIGNATURE_SIZE);
     }
 
     /**
@@ -181,6 +198,13 @@ export class TimestampSession {
                 "Session has been disposed. Create a new TimestampSession."
             );
         }
+        // Setter-provided reservations bypass the constructor check, and the
+        // sizing getter remaps negative/NaN to the default, so validate the
+        // raw value here before any preparation or allocation.
+        assertValidSignatureSize(this.currentPrepareOptions.signatureSize);
+        // Borrowed bytes may have grown past the effective ceiling since
+        // construction; recheck before any preparation or allocation.
+        assertPdfWithinSize(this.pdfBytes, this.options.maxSize);
 
         // 1. Prepare PDF with placeholder
         // Re-prepare if needed (e.g. if size changed) or if not yet done

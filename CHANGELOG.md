@@ -38,6 +38,25 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   ceiling. A bare `AbortError` with a live attempt signal and unexpired
   deadline now reports `NETWORK_ERROR` instead of `TIMEOUT`; see
   MIGRATION.md.
+- **Behavior (input resource bounds, C02/C06):** `signatureSize` must now
+  be omitted, 0 (auto), or a positive safe integer of at most
+  `MAX_SIGNATURE_SIZE` (65,536) bytes, and `maxSize` must be a positive
+  safe integer of at most `MAX_PDF_SIZE` (250 MiB); anything else rejects
+  with `INVALID_ARGUMENT` before any allocation, PDF parsing, or TSA
+  request. The PDF ceiling is now enforced at every entry
+  (`timestampPdf`, `TimestampSession`, `extractTimestamps`,
+  `verifyPdfTimestamps`, archive discovery, archive renewal) instead of
+  only the one-call path, and `TimestampSession`/`extractTimestamps`
+  accept a `maxSize` override. Formerly accepted larger overrides and
+  over-ceiling extract/archive inputs now fail loudly; see MIGRATION.md.
+- **Behavior (placeholder retry, C06):** placeholder exhaustion now throws
+  the typed `PlaceholderTooSmallError` (still `PDF_ERROR`-coded with the
+  historical message plus `requiredSignatureSize`), and the `timestampPdf`
+  retry loop matches on that type instead of the message text, so an
+  unrelated error that merely mentions the placeholder no longer triggers
+  another TSA request. Automatic growth is capped at 65,536 bytes: the
+  loop never repeats an identical too-small reservation and never issues
+  another TSA request once the cap is reached.
 
 ### Fixed
 
@@ -62,6 +81,15 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   reject such tokens with "Certificate chain not trusted". Callers that
   relied on the old order-dependent behavior must place the selected signer
   first; see MIGRATION.md.
+
+- **Security (DER/PDF resource bounds):** the canonical DER validator is
+  now iterative with a 64-level nesting limit and a 1,000,000-node budget
+  enforced before any recursive decoder runs, so hostile values fail with
+  `INVALID_RESPONSE` instead of an uncategorized `RangeError`. The PDF
+  embed primitive now validates `Contents` delimiters, even hex
+  reservation length, ByteRange-hole consistency, and in-bounds offsets
+  before writing, so a malformed `PreparedPDF` fails with `PDF_ERROR`
+  instead of silently truncating the token.
 
 ## [0.2.2] - 2026-09-07
 

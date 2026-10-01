@@ -79,6 +79,42 @@ checks must pass. In particular a pinned self-signed end-entity (non-CA)
 target still returns `false`, while a pinned intermediate still chains to
 its issuer anchor.
 
+### Signature reservations and PDF ceilings are validated at every entry
+
+`signatureSize` must now be omitted, 0 (auto), or a positive safe integer of
+at most 65,536 bytes; fractional, negative, `NaN`, infinite, and over-cap
+values reject with `INVALID_ARGUMENT` before any allocation, PDF parsing, or
+TSA request. Previously `Infinity` threw an uncategorized `RangeError` while
+negative, `NaN`, and over-cap values were silently accepted or remapped to
+the default. If you passed a reservation above 65,536 bytes, lower it to the
+cap: ordinary TSA tokens (including chained RSA fixtures at ~1.5 KB against
+the 8/16 KB defaults) fit with wide headroom, and the retry loop now grows
+automatically up to the cap instead of past it.
+
+`maxSize` must now be a positive safe integer of at most 250 MiB
+(`MAX_PDF_SIZE`); invalid overrides reject with `INVALID_ARGUMENT`, and
+inputs above the effective ceiling reject with `PDF_ERROR` before parsing.
+The ceiling is now enforced at every entry -- `timestampPdf`,
+`TimestampSession` (new `maxSize` option), `extractTimestamps`,
+`verifyPdfTimestamps`, archive discovery, and archive renewal -- instead of
+only the one-call path. `extractTimestamps` previously attempted a full parse
+(returning timestamps or `[]`) for over-ceiling inputs; it now throws `PDF_ERROR`.
+If you relied on scanning inputs above 250 MiB, split the document first: the ceiling
+itself cannot be raised.
+
+Placeholder exhaustion now throws the internal typed `PlaceholderTooSmallError`
+(still `PDF_ERROR`-coded with the historical "Increase signatureSize" message,
+plus a `requiredSignatureSize` lower bound), and the one-call retry loop
+matches on that type rather than the message text. An unrelated error that
+merely mentions the placeholder no longer triggers another TSA request. The
+class is internal to the signing path (not on a published subpath), so
+external callers keep matching `code === "PDF_ERROR"` as before. The loop
+also never repeats an identical too-small reservation and stops with a
+cap-citing error instead of issuing another TSA request once the 65,536-byte
+reservation cap is reached.
+
+DER decoding keeps its contracted 1,000,000-node preflight budget, but the effective node ceiling is the binding asn1js 10,000-node default (the 1M preflight binds only above it).
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before
