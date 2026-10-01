@@ -30,13 +30,13 @@
     "devDependencies": {
         "@types/node": "^26.5.0",
         "@typescript/native": "npm:typescript@7.0.2",
-        "@vitest/coverage-v8": "^5.0.0",
+        "@vitest/coverage-v8": "^5.0.2",
         "eslint": "^10.10.0",
         "pdf-lib": "^1.17.1",
         "tsx": "^4.23.13",
         "typescript": "npm:@typescript/typescript6@6.0.2",
         "verifiedby": "0.1.0",
-        "vitest": "^5.0.0"
+        "vitest": "^5.0.2"
     },
     "engines": {
         "node": ">=22.12.0"
