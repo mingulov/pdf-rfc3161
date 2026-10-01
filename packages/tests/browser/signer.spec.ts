@@ -38,11 +38,12 @@ export interface T00Urls {
     rejectSignature: string;
     rejectEss: string;
     rejectEku: string;
+    rejectValidity: string;
     /** Valid crafted token: control for the rejection family (same fixture). */
     craftedValid: string;
     /** Token whose CMS bag carries an unrelated trusted intermediate (T01). */
     trustTarget: string;
-    /** Expired signer certificate (T09 hook: observation only). */
+    /** Expired signer certificate (T09a: strict pre-embed rejection). */
     expiredSigner: string;
     /** Correctly signed responses WITHOUT CORS headers (must fail in page). */
     tsaNoCors: string;
@@ -451,6 +452,7 @@ const REJECTION_CASES: { name: string; url: (urls: T00Urls) => string }[] = [
     { name: "invalid-signature", url: (urls) => urls.rejectSignature },
     { name: "invalid-ess", url: (urls) => urls.rejectEss },
     { name: "invalid-eku", url: (urls) => urls.rejectEku },
+    { name: "invalid-validity", url: (urls) => urls.rejectValidity },
 ];
 
 function rejectionOutcome(
@@ -813,10 +815,10 @@ export async function runTrustTargetCase(
 }
 
 /**
- * T09 hook: signer validity at genTime is NOT enforced pre-embed on
- * current code. This probe embeds a token whose signer certificate is
- * expired and returns the observation; the strict rejection assertion
- * lands with T09, not here.
+ * T09a probe: attempts to embed a token whose signer certificate is
+ * expired at genTime and returns the observation. The pre-embed gate
+ * must reject it; the runner asserts the strict rejection, and the
+ * invalid-validity rejection case above covers both API surfaces.
  */
 export async function probeSignerValidityAtGenTime(
     input: number[],

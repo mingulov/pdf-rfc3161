@@ -22,6 +22,7 @@ import { parsePdfDate } from "../utils/pdf-date.js";
 import {
     parseTimestampToken as extractTimestampInfo,
     isCertValidAtTime,
+    validityOk,
 } from "../pki/pki-utils.js";
 import {
     getEmbeddedCertificates,
@@ -838,7 +839,10 @@ async function verifyTimestampWithIndex(
                     certificates,
                 };
             }
-            if (!isCertValidAtTime(signingCertificate, genTime)) {
+            if (
+                !validityOk(signingCertificate) ||
+                !isCertValidAtTime(signingCertificate, genTime)
+            ) {
                 return {
                     ...timestamp,
                     verified: false,

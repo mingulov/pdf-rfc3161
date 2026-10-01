@@ -11,6 +11,7 @@ import {
 } from "../types.js";
 import { bytesToHex, toArrayBuffer } from "../utils.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
+import { isCertValidAtTime, validityOk } from "../pki/pki-utils.js";
 
 const ID_SIGNED_DATA = "1.2.840.113549.1.7.2";
 const ID_DATA = "1.2.840.113549.1.7.1";
@@ -90,10 +91,6 @@ function verificationFailed(message: string, cause?: unknown): TimestampError {
     return timestampError(TimestampErrorCode.VERIFICATION_FAILED, message, cause);
 }
 
-function toExactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-    return toArrayBuffer(bytes);
-}
-
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
     if (left.length !== right.length) return false;
     let different = 0;
@@ -148,7 +145,7 @@ function parseCompleteDER(bytes: Uint8Array, message: string): asn1js.BaseBlock 
     if (length !== bytes.length) {
         throw invalidResponse(`${message}: trailing bytes are not permitted`);
     }
-    const parsed = asn1js.fromBER(toExactArrayBuffer(bytes));
+    const parsed = asn1js.fromBER(toArrayBuffer(bytes));
     if (parsed.offset === -1) throw invalidResponse(`${message}: ASN.1 parse failed`);
     if (parsed.offset !== bytes.length) {
         throw invalidResponse(`${message}: trailing bytes are not permitted`);
@@ -243,11 +240,16 @@ function classifyToken(bytes: Uint8Array): {
     responseStatus?: TSAStatus.GRANTED | TSAStatus.GRANTED_WITH_MODS;
     responseStatusString?: string;
 } {
-    const outer = parseCompleteDER(bytes, "Timestamp token");
+    // Own the input before parsing or awaiting: the raw-token path returns
+    // this snapshot for embedding, so a caller mutating their array mid-flight
+    // cannot swap the embedded bytes after validation. Unconditional copy:
+    // Buffer.slice() shares storage, unlike Uint8Array.slice().
+    const snapshot = new Uint8Array(bytes);
+    const outer = parseCompleteDER(snapshot, "Timestamp token");
     const children = sequenceChildren(outer, "Timestamp token must be a SEQUENCE");
     const first = children[0];
     if (first instanceof asn1js.ObjectIdentifier) {
-        return { token: bytes, contentInfo: contentInfoFromSchema(outer) };
+        return { token: snapshot, contentInfo: contentInfoFromSchema(outer) };
     }
     if (!(first instanceof asn1js.Sequence)) {
         throw invalidResponse("Timestamp token is neither ContentInfo nor TimeStampResp");
@@ -449,7 +451,7 @@ async function validateRequestBinding(
     }
     await ensureWebCrypto();
     const expectedDigest = new Uint8Array(
-        await crypto.subtle.digest(context.hashAlgorithm, toExactArrayBuffer(context.data))
+        await crypto.subtle.digest(context.hashAlgorithm, toArrayBuffer(context.data))
     );
     if (!bytesEqual(responseDigest, expectedDigest)) {
         throw verificationFailed("Timestamp message-imprint does not match the prepared PDF bytes");
@@ -475,24 +477,17 @@ function parseCertificate(bytes: Uint8Array, source: string): pkijs.Certificate 
 }
 
 export function getEmbeddedCertificates(signedData: pkijs.SignedData): pkijs.Certificate[] {
-    const certificateSet = signedData.certificates;
-    if (!certificateSet) return [];
-    const certificates: pkijs.Certificate[] = [];
-    for (const value of certificateSet) {
-        if (value instanceof pkijs.Certificate) {
-            certificates.push(value);
-            continue;
-        }
+    return (signedData.certificates ?? []).map((value) => {
+        if (value instanceof pkijs.Certificate) return value;
         try {
-            certificates.push(new pkijs.Certificate({ schema: value.toSchema() }));
+            return new pkijs.Certificate({ schema: value.toSchema() });
         } catch (error) {
             throw malformedResponse(
                 "Timestamp certificate set contains a malformed certificate",
                 error
             );
         }
-    }
-    return certificates;
+    });
 }
 
 function getSubjectKeyIdentifier(certificate: pkijs.Certificate): Uint8Array | undefined {
@@ -1032,6 +1027,15 @@ export async function validateTimestampToken(
         throw verificationFailed(
             "Timestamp signer certificate must have one critical exclusive id-kp-timeStamping EKU"
         );
+    }
+    // The signer must have covered the moment the token was minted. A
+    // signer that lapsed after genTime still embeds; only the genTime
+    // window matters here, never the current wall-clock time.
+    if (
+        !validityOk(signerCertificate) ||
+        !isCertValidAtTime(signerCertificate, parsed.tstInfo.genTime)
+    ) {
+        throw verificationFailed("Timestamp signer certificate was not valid at genTime");
     }
 
     return {

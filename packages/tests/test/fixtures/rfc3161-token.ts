@@ -59,6 +59,8 @@ type FixtureEContentEncoding =
     | "constructedEmptySegment"
     | "constructedNestedSegment";
 
+export const FIXTURE_GENTIME_ISO = "2026-08-24T00:00:00Z";
+
 export interface RFC3161TokenFixtureOptions {
     hashAlgorithm?: HashAlgorithm;
     data?: Uint8Array;
@@ -85,6 +87,19 @@ export interface RFC3161TokenFixtureOptions {
     essPolicies?: ESSPoliciesMode;
     eku?: EKUMode;
     certificateValidity?: CertificateValidity;
+    /** Explicit signer validity bounds (ISO 8601); overrides certificateValidity dates. */
+    signerValidityDates?: { notBefore: string; notAfter: string };
+    /** Replace signer validity time bytes with non-digit content (invalid-date vector). */
+    corruptSignerValidity?: boolean;
+    /**
+     * Raw signer-validity contents placed on the token wire (same-length ASCII
+     * per bound; tag and length preserved). Unlike corruptSignerValidity, the
+     * corrupted bytes reach the token; ESS/SID stay consistent via the
+     * normalized re-parse used at build time.
+     */
+    signerValidityWire?: { notBefore?: string; notAfter?: string };
+    /** Encode signer validity bounds as GeneralizedTime (0x18); default UTCTime. */
+    signerValidityGeneralizedTime?: boolean;
     imprint?: "valid" | "mismatch" | "wrongAlgorithm" | "wrongLength";
     signerCount?: 1 | 2;
     corruptSignature?: boolean;
@@ -402,7 +417,9 @@ async function createCertificate(
     serial: number,
     ski: Uint8Array,
     eku: EKUMode,
-    validity: CertificateValidity = "valid"
+    validity: CertificateValidity = "valid",
+    validityDates?: { notBefore: string; notAfter: string },
+    generalizedTime = false
 ): Promise<pkijs.Certificate> {
     const certificate = new pkijs.Certificate();
     certificate.version = 2;
@@ -424,6 +441,14 @@ async function createCertificate(
         certificate.notBefore.value = new Date("2025-01-01T00:00:00Z");
         certificate.notAfter.value = new Date("2030-01-01T00:00:00Z");
     }
+    if (validityDates !== undefined) {
+        certificate.notBefore.value = new Date(validityDates.notBefore);
+        certificate.notAfter.value = new Date(validityDates.notAfter);
+    }
+    if (generalizedTime) {
+        certificate.notBefore.type = pkijs.TimeType.GeneralizedTime;
+        certificate.notAfter.type = pkijs.TimeType.GeneralizedTime;
+    }
     certificate.subjectPublicKeyInfo = await importKeyForCertificate(keys.publicKey);
     certificate.extensions = [makeSkiExtension(ski), ...makeEkuExtension(eku)];
     await certificate.sign(keys.privateKey, "SHA-256", cryptoEngine);
@@ -432,6 +457,143 @@ async function createCertificate(
 
 function certificateBytes(certificate: pkijs.Certificate): Uint8Array {
     return new Uint8Array(certificate.toSchema().toBER(false));
+}
+
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array): number {
+    if (needle.length === 0 || needle.length > haystack.length) return -1;
+    for (let index = 0; index + needle.length <= haystack.length; index++) {
+        if (bytesEqual(haystack.subarray(index, index + needle.length), needle)) return index;
+    }
+    return -1;
+}
+
+function parseValidityTimes(der: Uint8Array): (asn1js.UTCTime | asn1js.GeneralizedTime)[] {
+    const parsed = asn1js.fromBER(toArrayBuffer(der));
+    if (parsed.offset !== der.length || !(parsed.result instanceof asn1js.Sequence)) {
+        throw new Error("Fixture signer certificate is not complete DER");
+    }
+    const tbs = parsed.result.valueBlock.value[0];
+    if (!(tbs instanceof asn1js.Sequence)) {
+        throw new Error("Fixture signer certificate has no TBSCertificate");
+    }
+    const validity = tbs.valueBlock.value.find(
+        (child): child is asn1js.Sequence =>
+            child instanceof asn1js.Sequence &&
+            child.valueBlock.value.length === 2 &&
+            child.valueBlock.value.every(
+                (field) =>
+                    field instanceof asn1js.UTCTime || field instanceof asn1js.GeneralizedTime
+            )
+    );
+    if (!validity) throw new Error("Fixture signer certificate has no parseable validity");
+    const times = validity.valueBlock.value.filter(
+        (field): field is asn1js.UTCTime | asn1js.GeneralizedTime =>
+            field instanceof asn1js.UTCTime || field instanceof asn1js.GeneralizedTime
+    );
+    if (times.length !== validity.valueBlock.value.length) {
+        throw new Error("Fixture signer certificate has no parseable validity");
+    }
+    return times;
+}
+
+function replaceValidityBytes(
+    haystack: Uint8Array,
+    tag: number,
+    content: Uint8Array,
+    replacement: Uint8Array
+): void {
+    const needle = concatenateBytes([new Uint8Array([tag, content.length]), content]);
+    const at = indexOfBytes(haystack, needle);
+    if (at < 0) throw new Error("Fixture signer certificate validity bytes not found");
+    if (indexOfBytes(haystack.subarray(at + 1), needle) >= 0) {
+        throw new Error("Fixture signer certificate validity bytes are ambiguous");
+    }
+    haystack.set(replacement, at + 2);
+}
+
+/**
+ * Replaces signer validity time contents (per bound; absent bounds are kept)
+ * inside a copy of `target`, locating each bound by its TLV from `needleDer`.
+ * Replacements must preserve the encoded content length so tag and length
+ * bytes stay valid.
+ */
+function patchValidityBytes(
+    target: Uint8Array,
+    needleDer: Uint8Array,
+    patch: { notBefore?: string; notAfter?: string }
+): Uint8Array {
+    const times = parseValidityTimes(needleDer);
+    const replacements = [patch.notBefore, patch.notAfter];
+    const encoder = new TextEncoder();
+    const patched = new Uint8Array(target);
+    times.forEach((field, index) => {
+        const replacement = replacements[index];
+        if (replacement === undefined) return;
+        const content = new Uint8Array(field.valueBlock.valueHexView);
+        const encoded = encoder.encode(replacement);
+        if (encoded.length !== content.length) {
+            throw new Error("Fixture validity replacement must preserve content length");
+        }
+        replaceValidityBytes(
+            patched,
+            field.idBlock.tagNumber === 24 ? 0x18 : 0x17,
+            content,
+            encoded
+        );
+    });
+    return patched;
+}
+
+function certificateFromDer(der: Uint8Array): pkijs.Certificate {
+    const reparsed = asn1js.fromBER(toArrayBuffer(der));
+    if (reparsed.offset !== der.length) {
+        throw new Error("Fixture corrupted signer certificate does not parse");
+    }
+    return new pkijs.Certificate({ schema: reparsed.result });
+}
+
+/**
+ * Rewrites the signer's validity time bytes with non-digit content and
+ * re-parses the certificate. asn1js records a conversion error and pkijs
+ * surfaces the zeroed fields as an 1899 date, so the window can never
+ * contain a real genTime; the token stays consistently signed over the
+ * corrupted bytes, isolating the pre-embed validity check.
+ */
+function corruptCertificateValidity(certificate: pkijs.Certificate): pkijs.Certificate {
+    const der = certificateBytes(certificate);
+    const fill = (length: number): string => "X".repeat(length);
+    const times = parseValidityTimes(der);
+    const first = times[0];
+    const second = times[1];
+    if (first === undefined || second === undefined || times.length !== 2) {
+        throw new Error("Fixture signer certificate has no parseable validity");
+    }
+    const patched = patchValidityBytes(der, der, {
+        notBefore: fill(first.valueBlock.valueHexView.length),
+        notAfter: fill(second.valueBlock.valueHexView.length),
+    });
+    return certificateFromDer(patched);
+}
+
+/**
+ * Patches the signer certificate for a wire vector and re-parses it, so ESS
+ * and SID stay consistent with the normalized values the library derives
+ * from the corrupted wire bytes. GeneralizedTime with non-digit content
+ * cannot be re-parsed (asn1js throws during fromBuffer); those vectors keep
+ * the valid certificate for build-time hashing and place the unparseable
+ * bytes on the wire only.
+ */
+function patchSignerForWire(
+    certificate: pkijs.Certificate,
+    patch: { notBefore?: string; notAfter?: string }
+): pkijs.Certificate {
+    const der = certificateBytes(certificate);
+    try {
+        return certificateFromDer(patchValidityBytes(der, der, patch));
+    } catch (error) {
+        if (error instanceof Error && error.message.includes("conversion")) return certificate;
+        throw error;
+    }
 }
 
 function issuerSerial(certificate: pkijs.Certificate, includeIssuerUid = false): asn1js.Sequence {
@@ -789,14 +951,22 @@ async function createToken(
     const eku = options.eku ?? "strict";
     const signerSki = new Uint8Array([0x42, 0x19, 0x75, 0x3c, 0x11, 0x2a, 0x8d, 0xfe]);
     const decoySki = new Uint8Array([0x73, 0x11, 0x04, 0xb2, 0x99, 0x7d, 0x22, 0x4f]);
-    const signerCertificate = await createCertificate(
+    let signerCertificate = await createCertificate(
         suite.signer,
         "RFC3161 Fixture Signer",
         101,
         signerSki,
         eku,
-        options.certificateValidity ?? "valid"
+        options.certificateValidity ?? "valid",
+        options.signerValidityDates,
+        options.signerValidityGeneralizedTime ?? false
     );
+    if (options.corruptSignerValidity === true) {
+        signerCertificate = corruptCertificateValidity(signerCertificate);
+    }
+    if (options.signerValidityWire !== undefined) {
+        signerCertificate = patchSignerForWire(signerCertificate, options.signerValidityWire);
+    }
     const decoyCertificate = await createCertificate(
         suite.decoy,
         "RFC3161 Fixture Decoy",
@@ -830,7 +1000,7 @@ async function createToken(
             hashedMessage: new asn1js.OctetString({ valueHex: toArrayBuffer(messageDigest) }),
         }),
         serialNumber: new asn1js.Integer({ value: 123456 }),
-        genTime: new Date("2026-08-24T00:00:00Z"),
+        genTime: new Date(FIXTURE_GENTIME_ISO),
         nonce: getResponseNonce(source.context.nonce, options.responseNonce),
     });
     const tstInfoBytes = new Uint8Array(tstInfo.toSchema().toBER(false));
@@ -928,7 +1098,7 @@ async function createToken(
         ...(includeToken && { timeStampToken: responseTokenContentInfo }),
     });
     const canonicalResponse = new Uint8Array(response.toSchema().toBER(false));
-    const rawToken =
+    let rawToken =
         options.outerTokenFraming === undefined
             ? canonicalRawToken
             : reframeOuterDer(canonicalRawToken, options.outerTokenFraming, "Fixture ContentInfo");
@@ -936,15 +1106,37 @@ async function createToken(
         options.outerTokenFraming === undefined
             ? canonicalResponse
             : replaceNestedToken(canonicalResponse, canonicalRawToken, rawToken);
-    const responseBytes =
+    let responseBytes =
         options.responseOuterFraming === undefined
             ? nestedResponse
             : reframeOuterDer(nestedResponse, options.responseOuterFraming, "Fixture TimeStampResp");
+    let signerCertificateDer = certificateBytes(signerCertificate);
+    if (options.signerValidityWire !== undefined) {
+        // Place the raw validity bytes on the wire after all fixture parsing,
+        // so vectors that the library itself cannot parse still build.
+        if (options.certificates !== "none") {
+            rawToken = patchValidityBytes(
+                rawToken,
+                signerCertificateDer,
+                options.signerValidityWire
+            );
+            responseBytes = patchValidityBytes(
+                responseBytes,
+                signerCertificateDer,
+                options.signerValidityWire
+            );
+        }
+        signerCertificateDer = patchValidityBytes(
+            signerCertificateDer,
+            signerCertificateDer,
+            options.signerValidityWire
+        );
+    }
     return {
         rawToken,
         response: responseBytes,
         input: options.form === "response" ? responseBytes : rawToken,
-        signerCertificate: certificateBytes(signerCertificate),
+        signerCertificate: signerCertificateDer,
         decoyCertificate: certificateBytes(decoyCertificate),
     };
 }

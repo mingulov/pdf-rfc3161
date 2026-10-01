@@ -115,6 +115,19 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   `revokedCertificateEntries`, so listed serials were never found) with
   leading-zero-tolerant serial comparison. Neither repair produces a
   verdict on its own: unauthenticated evidence still yields "unknown".
+- **Security (pre-embed signer validity at genTime, C05):**
+  `timestampPdf` and `TimestampSession.embedTimestampToken` now reject
+  tokens whose SID-selected signer certificate was expired, not yet
+  valid, or carried unparseable validity dates at the token `genTime`,
+  with `VERIFICATION_FAILED` ("... was not valid at genTime").
+  Previously only the post-embed `verifyTimestamp` default (opt-outable
+  via `requireCertValidAtGenTime: false`) enforced the window, so such
+  tokens embedded successfully. The pre-embed gate compares against
+  `genTime`, never the current wall-clock time: a token whose signer
+  has lapsed since issuance still embeds, and the embedded ContentInfo
+  bytes remain exactly the accepted token bytes plus reservation zero
+  padding. There is no opt-out for the pre-embed check; see
+  MIGRATION.md.
 
 ## [0.2.2] - 2026-09-07
 

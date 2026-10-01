@@ -7,14 +7,14 @@ const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(TEST_DIRECTORY, "../../../..");
 
 describe("core bundle size policy", () => {
-    it("keeps the documented 235 KiB ESM ceiling and its rationale", () => {
+    it("keeps the documented 236 KiB ESM ceiling and its rationale", () => {
         const workflow = readFileSync(
             resolve(REPOSITORY_ROOT, ".github/workflows/size.yml"),
             "utf8"
         );
 
-        expect(workflow).toContain("Enforce ESM bundle size budget (<= 235 KiB)");
-        expect(workflow).toMatch(/\bMAX=240640\b/);
-        expect(workflow).toContain("ESM bundle exceeds 235 KiB (240640 bytes) budget");
+        expect(workflow).toContain("Enforce ESM bundle size budget (<= 236 KiB)");
+        expect(workflow).toMatch(/\bMAX=241664\b/);
+        expect(workflow).toContain("ESM bundle exceeds 236 KiB (241664 bytes) budget");
     });
 });

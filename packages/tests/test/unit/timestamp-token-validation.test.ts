@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { TimestampErrorCode, TSAStatus } from "../../../core/src/types.js";
+import * as asn1js from "asn1js";
+import * as pkijs from "pkijs";
+import {
+    extractTimestamps,
+    verifyTimestamp,
+    type ExtractedTimestamp,
+} from "../../../core/src/pdf/extract.js";
+import { TimestampSession } from "../../../core/src/session.js";
+import {
+    TimestampError,
+    TimestampErrorCode,
+    TSAStatus,
+    type TimestampInfo,
+} from "../../../core/src/types.js";
 import {
     createRFC3161TokenFixture,
+    createRFC3161TokenFixtureFromRequest,
     encodedTstInfoEContentEncoding,
+    FIXTURE_GENTIME_ISO,
     type FixtureRequestContext,
     type RFC3161TokenFixture,
     type RFC3161TokenFixtureOptions,
@@ -31,6 +46,98 @@ async function validate(
 
 async function fixture(options: RFC3161TokenFixtureOptions = {}): Promise<RFC3161TokenFixture> {
     return createRFC3161TokenFixture(options);
+}
+
+function minimalPdf(): Uint8Array {
+    return new TextEncoder().encode(`%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> >>
+endobj
+xref
+0 4
+0000000000 65535 f${" "}
+0000000009 00000 n${" "}
+0000000058 00000 n${" "}
+0000000115 00000 n${" "}
+trailer
+<< /Size 4 /Root 1 0 R >>
+startxref
+203
+%%EOF`);
+}
+
+async function prepareSessionWithToken(
+    options: Omit<
+        RFC3161TokenFixtureOptions,
+        "data" | "hashAlgorithm" | "nonce" | "policy" | "requestCertificate"
+    >
+): Promise<{
+    session: TimestampSession;
+    token: Omit<RFC3161TokenFixture, "context">;
+}> {
+    const session = new TimestampSession(minimalPdf(), {
+        enableLTV: false,
+        prepareOptions: { signatureSize: 4096 },
+    });
+    const request = await session.createTimestampRequest({
+        hashAlgorithm: "SHA-256",
+        requestCertificate: true,
+    });
+    const token = await createRFC3161TokenFixtureFromRequest(request, {
+        form: "raw",
+        ...options,
+    });
+    return { session, token };
+}
+
+function makeExtractedTimestamp(token: Uint8Array): ExtractedTimestamp {
+    return {
+        token,
+        contentsValueBytes: token.slice(),
+        info: {} as TimestampInfo,
+        fieldName: "Test",
+        coversWholeDocument: true,
+        verified: false,
+        byteRange: [0, 0, 0, 0],
+    };
+}
+
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array): number {
+    if (needle.length === 0 || needle.length > haystack.length) return -1;
+    for (let index = 0; index + needle.length <= haystack.length; index++) {
+        let found = true;
+        for (let offset = 0; offset < needle.length; offset++) {
+            if (haystack[index + offset] !== needle[offset]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) return index;
+    }
+    return -1;
+}
+
+/** Rewrites the fixture validity window in place to an expired range (2020-2021). */
+function expireValidityInPlace(bytes: Uint8Array): void {
+    const encoder = new TextEncoder();
+    const swaps: [string, string][] = [
+        ["250101000000Z", "200101000000Z"],
+        ["300101000000Z", "210101000000Z"],
+    ];
+    for (const [from, to] of swaps) {
+        const content = encoder.encode(from);
+        const needle = new Uint8Array([0x17, content.length, ...content]);
+        const at = indexOfBytes(bytes, needle);
+        expect(at).toBeGreaterThanOrEqual(0);
+        expect(indexOfBytes(bytes.subarray(at + 1), needle)).toBe(-1);
+        bytes.set(encoder.encode(to), at + 2);
+    }
 }
 
 describe("mandatory RFC 3161 token validation", () => {
@@ -326,5 +433,375 @@ describe("mandatory RFC 3161 token validation", () => {
         await expect(validate(trailing, token.context)).rejects.toMatchObject({
             code: TimestampErrorCode.INVALID_RESPONSE,
         });
+    });
+
+    it("rejects signers that were expired or not yet valid at genTime, across raw, full, and external inputs", async () => {
+        const embedded: RFC3161TokenFixtureOptions[] = [
+            { certificateValidity: "expired" },
+            { certificateValidity: "expired", form: "response" },
+            { certificateValidity: "notYetValid" },
+            { certificateValidity: "notYetValid", form: "response" },
+        ];
+        for (const options of embedded) {
+            const token = await fixture(options);
+            await expect(validate(token.input, token.context)).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+
+        const external: RFC3161TokenFixtureOptions[] = [
+            {
+                certificateValidity: "expired",
+                requestCertificate: false,
+                certificates: "none",
+            },
+            {
+                certificateValidity: "notYetValid",
+                form: "response",
+                requestCertificate: false,
+                certificates: "none",
+            },
+        ];
+        for (const options of external) {
+            const token = await fixture(options);
+            await expect(
+                validate(token.input, token.context, {
+                    signerCertificates: [token.signerCertificate],
+                })
+            ).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+    });
+
+    it("rejects a signer certificate with unparseable validity dates, embedded or external", async () => {
+        for (const form of ["raw", "response"] as const) {
+            const token = await fixture({ form, corruptSignerValidity: true });
+            await expect(validate(token.input, token.context)).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+
+        const external = await fixture({
+            requestCertificate: false,
+            certificates: "none",
+            corruptSignerValidity: true,
+        });
+        await expect(
+            validate(external.input, external.context, {
+                signerCertificates: [external.signerCertificate],
+            })
+        ).rejects.toMatchObject({
+            code: TimestampErrorCode.VERIFICATION_FAILED,
+            message: expect.stringContaining("not valid at genTime"),
+        });
+    });
+
+    it("treats non-finite and non-Date validity bounds as not valid at genTime", async () => {
+        const { isCertValidAtTime } = await import("../../../core/src/pki/pki-utils.js");
+        const start = new Date("2025-01-01T00:00:00Z");
+        const end = new Date("2030-01-01T00:00:00Z");
+        const genTime = new Date(FIXTURE_GENTIME_ISO);
+        const certWith = (notBefore: unknown, notAfter: unknown): pkijs.Certificate =>
+            ({
+                notBefore: { value: notBefore },
+                notAfter: { value: notAfter },
+            }) as unknown as pkijs.Certificate;
+
+        expect(isCertValidAtTime(certWith(start, end), genTime)).toBe(true);
+        expect(isCertValidAtTime(certWith(new Date(NaN), end), genTime)).toBe(false);
+        expect(isCertValidAtTime(certWith(start, new Date(NaN)), genTime)).toBe(false);
+        expect(isCertValidAtTime(certWith(start, end), new Date(NaN))).toBe(false);
+        expect(isCertValidAtTime(certWith("2025-01-01T00:00:00Z", end), genTime)).toBe(false);
+        expect(
+            isCertValidAtTime(certWith(start, end), "2026-08-24T00:00:00Z" as unknown as Date)
+        ).toBe(false);
+    });
+
+    it("accepts signers whose validity bounds exactly equal the token genTime", async () => {
+        const vectors: RFC3161TokenFixtureOptions[] = [
+            {
+                signerValidityDates: {
+                    notBefore: FIXTURE_GENTIME_ISO,
+                    notAfter: "2030-01-01T00:00:00Z",
+                },
+            },
+            {
+                form: "response",
+                signerValidityDates: {
+                    notBefore: "2025-01-01T00:00:00Z",
+                    notAfter: FIXTURE_GENTIME_ISO,
+                },
+            },
+        ];
+        for (const options of vectors) {
+            const token = await fixture(options);
+            const result = await validate(token.input, token.context);
+            expect(result.token).toEqual(token.rawToken);
+        }
+    });
+
+    it("still embeds a token whose signer has since expired but was valid at genTime, byte-for-byte (C05)", async () => {
+        // The signer lapsed after issuance: notAfter falls between the fixed
+        // genTime and today, so the certificate is expired at every run date
+        // past 2026-09-01 yet covered the moment the token was minted.
+        const genTime = new Date(FIXTURE_GENTIME_ISO).getTime();
+        const notAfter = new Date("2026-09-01T00:00:00Z").getTime();
+        expect(notAfter).toBeGreaterThan(genTime);
+        expect(notAfter).toBeLessThan(Date.now());
+
+        const session = new TimestampSession(minimalPdf(), {
+            enableLTV: false,
+            prepareOptions: { signatureSize: 4096 },
+        });
+        const request = await session.createTimestampRequest({
+            hashAlgorithm: "SHA-256",
+            requestCertificate: true,
+        });
+        const token = await createRFC3161TokenFixtureFromRequest(request, {
+            form: "raw",
+            signerValidityDates: {
+                notBefore: "2025-01-01T00:00:00Z",
+                notAfter: "2026-09-01T00:00:00Z",
+            },
+        });
+
+        const pdf = await session.embedTimestampToken(token.rawToken);
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        const contents = extracted[0]?.contentsValueBytes;
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+        expect(contents?.slice(0, token.rawToken.length)).toEqual(token.rawToken);
+        const padding = contents?.slice(token.rawToken.length);
+        expect(padding?.length).toBeGreaterThan(0);
+        expect(padding).toEqual(new Uint8Array(padding?.length ?? 0));
+
+        // Post-embed verification must agree: the signer covered genTime.
+        const verified = await verifyTimestamp(extracted[0]!, {
+            pdf,
+            strictESSValidation: true,
+        });
+        expect(verified.verified).toBe(true);
+    });
+});
+
+describe("signer validity encodings (T09a fix round 1)", () => {
+    it("rejects notBefore-only corruption with a valid notAfter, in raw and response forms", async () => {
+        for (const form of ["raw", "response"] as const) {
+            const { session, token } = await prepareSessionWithToken({
+                form,
+                signerValidityWire: { notBefore: "X".repeat(13) },
+            });
+            await expect(session.embedTimestampToken(token.input)).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+    });
+
+    it("rejects notAfter-only corruption with a valid notBefore, in raw and response forms", async () => {
+        // Non-digit content always degrades to 1899, which predates any
+        // genTime, so this vector already rejected pre-fix via the window
+        // check; post-fix the encoding check rejects it first. The red-able
+        // notAfter vector is the day-32 rollover in the matrix below.
+        for (const form of ["raw", "response"] as const) {
+            const { session, token } = await prepareSessionWithToken({
+                form,
+                signerValidityWire: { notAfter: "X".repeat(13) },
+            });
+            await expect(session.embedTimestampToken(token.input)).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+    });
+
+    it("rejects UTCTime calendar rollovers that land inside the window", async () => {
+        const vectors: { name: string; wire: { notBefore?: string; notAfter?: string } }[] = [
+            { name: "month 13", wire: { notBefore: "251301000000Z" } },
+            { name: "day 32", wire: { notAfter: "260832000000Z" } },
+            { name: "Feb 30 non-leap", wire: { notBefore: "250230000000Z" } },
+            { name: "Feb 29 non-leap", wire: { notBefore: "250229000000Z" } },
+            // Self-consistent garbage: re-encodes byte-identically, so only
+            // the parser-error check rejects it.
+            { name: "1899 fixed point", wire: { notBefore: "-11130000000Z" } },
+        ];
+        for (const vector of vectors) {
+            const { session, token } = await prepareSessionWithToken({
+                signerValidityWire: vector.wire,
+            });
+            await expect(
+                session.embedTimestampToken(token.rawToken),
+                vector.name
+            ).rejects.toMatchObject({
+                code: TimestampErrorCode.VERIFICATION_FAILED,
+                message: expect.stringContaining("not valid at genTime"),
+            });
+        }
+    });
+
+    it("rejects a GeneralizedTime calendar rollover", async () => {
+        const { session, token } = await prepareSessionWithToken({
+            signerValidityGeneralizedTime: true,
+            signerValidityWire: { notBefore: "20251301000000Z" },
+        });
+        await expect(session.embedTimestampToken(token.rawToken)).rejects.toMatchObject({
+            code: TimestampErrorCode.VERIFICATION_FAILED,
+            message: expect.stringContaining("not valid at genTime"),
+        });
+    });
+
+    it("accepts Feb 29 of a leap year as a control", async () => {
+        const { session, token } = await prepareSessionWithToken({
+            signerValidityWire: { notBefore: "240229000000Z" },
+        });
+        const pdf = await session.embedTimestampToken(token.rawToken);
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+    });
+
+    it("accepts well-formed GeneralizedTime validity bounds", async () => {
+        const { session, token } = await prepareSessionWithToken({
+            signerValidityGeneralizedTime: true,
+        });
+        const pdf = await session.embedTimestampToken(token.rawToken);
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+    });
+
+    it("rejects corrupted GeneralizedTime validity with a parse error", async () => {
+        // GeneralizedTime corruption throws during ASN.1 parsing, before any
+        // validity gate runs: assert the throw itself, not a gate message.
+        const { session, token } = await prepareSessionWithToken({
+            signerValidityGeneralizedTime: true,
+            signerValidityWire: { notBefore: "X".repeat(15) },
+        });
+        const error = await session.embedTimestampToken(token.rawToken).then(
+            () => undefined,
+            (cause: unknown) => cause
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toMatch(/conversion/);
+        expect(error).not.toBeInstanceOf(TimestampError);
+    });
+
+    it("rejects externally supplied corrupted validity at the same gate", async () => {
+        const token = await fixture({
+            requestCertificate: false,
+            certificates: "none",
+            signerValidityWire: { notBefore: "X".repeat(13) },
+        });
+        await expect(
+            validate(token.input, token.context, {
+                signerCertificates: [token.signerCertificate],
+            })
+        ).rejects.toMatchObject({
+            code: TimestampErrorCode.VERIFICATION_FAILED,
+            message: expect.stringContaining("not valid at genTime"),
+        });
+    });
+
+    it("fails post-embed verification for corrupted signer validity", async () => {
+        const token = await fixture({ signerValidityWire: { notBefore: "X".repeat(13) } });
+        const result = await verifyTimestamp(makeExtractedTimestamp(token.rawToken), {
+            strictESSValidation: true,
+        });
+        expect(result.verified).toBe(false);
+        expect(result.verificationError ?? "").toContain("not valid at genTime");
+    });
+
+    it("reports original encoding health directly, failing closed without TBS bytes", async () => {
+        const module = await import("../../../core/src/pki/pki-utils.js");
+        expect(typeof module.validityOk).toBe("function");
+        const programmatic = new pkijs.Certificate();
+        programmatic.notBefore = new pkijs.Time({
+            type: pkijs.TimeType.GeneralizedTime,
+            value: new Date("2025-01-01T00:00:00Z"),
+        });
+        programmatic.notAfter = new pkijs.Time({
+            type: pkijs.TimeType.GeneralizedTime,
+            value: new Date("2030-01-01T00:00:00Z"),
+        });
+        expect(module.validityOk(programmatic)).toBe(false);
+
+        const good = await fixture({});
+        const goodSchema = asn1js.fromBER(good.signerCertificate);
+        expect(goodSchema.offset).toBe(good.signerCertificate.length);
+        expect(module.validityOk(new pkijs.Certificate({ schema: goodSchema.result }))).toBe(true);
+
+        const bad = await fixture({ signerValidityWire: { notBefore: "251301000000Z" } });
+        const badSchema = asn1js.fromBER(bad.signerCertificate);
+        expect(badSchema.offset).toBe(bad.signerCertificate.length);
+        expect(module.validityOk(new pkijs.Certificate({ schema: badSchema.result }))).toBe(false);
+    });
+
+    it("accepts mixed UTCTime-notBefore and GeneralizedTime-notAfter encodings", async () => {
+        // Long-lived shape (e.g. notBefore 2026, notAfter 2060): pins that
+        // validityOk accepts mixed tags. Signature validity is irrelevant
+        // here because CMS signature verification is a separate gate.
+        const module = await import("../../../core/src/pki/pki-utils.js");
+        const base = await fixture({});
+        const cert = new pkijs.Certificate({
+            schema: asn1js.fromBER(base.signerCertificate).result,
+        });
+        cert.notAfter.type = pkijs.TimeType.GeneralizedTime;
+        // encodeFlag=true: re-encode TBS from objects (default reuses cached tbsView).
+        const mixed = new Uint8Array(cert.toSchema(true).toBER(false));
+        const schema = asn1js.fromBER(mixed.slice().buffer);
+        expect(schema.offset).toBe(mixed.length);
+        const reparsed = new pkijs.Certificate({ schema: schema.result });
+        expect(reparsed.notBefore.type).toBe(0);
+        expect(reparsed.notAfter.type).toBe(1);
+        expect(module.validityOk(reparsed)).toBe(true);
+    });
+
+    it("embeds the validated bytes when the caller mutates the input mid-flight", async () => {
+        const { session, token } = await prepareSessionWithToken({});
+        const input = new Uint8Array(token.rawToken);
+        const pending = session.embedTimestampToken(input);
+        expireValidityInPlace(input);
+        const mutated = new Uint8Array(input);
+        const pdf = await pending;
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+        expect(extracted[0]?.token).not.toEqual(mutated);
+    });
+
+    it("embeds the validated bytes when a sliced-view input is mutated mid-flight", async () => {
+        const { session, token } = await prepareSessionWithToken({});
+        const padded = new Uint8Array(token.rawToken.length + 64);
+        padded.set(token.rawToken, 32);
+        const input = padded.subarray(32, 32 + token.rawToken.length);
+        const pending = session.embedTimestampToken(input);
+        expireValidityInPlace(padded);
+        const mutated = new Uint8Array(input);
+        const pdf = await pending;
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+        expect(extracted[0]?.token).not.toEqual(mutated);
+    });
+
+    it("embeds the validated bytes when a Buffer-view input is mutated mid-flight", async () => {
+        // Buffer.slice() shares storage (unlike Uint8Array.slice()), so the
+        // snapshot must be an unconditional copy to survive a Buffer input.
+        const { session, token } = await prepareSessionWithToken({});
+        const backing = Buffer.alloc(token.rawToken.length + 64);
+        const input = backing.subarray(32, 32 + token.rawToken.length);
+        input.set(token.rawToken);
+        const pending = session.embedTimestampToken(input);
+        expireValidityInPlace(backing);
+        const mutated = new Uint8Array(input);
+        const pdf = await pending;
+        const extracted = await extractTimestamps(pdf);
+        expect(extracted).toHaveLength(1);
+        expect(extracted[0]?.token).toEqual(token.rawToken);
+        expect(extracted[0]?.token).not.toEqual(mutated);
     });
 });
