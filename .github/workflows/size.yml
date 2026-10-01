@@ -47,12 +47,18 @@ jobs:
       # point past 225 KiB; compaction inside T02's files would gut
       # requirements. Revisit in program task T19; further breaches get
       # per-breach rulings.
-      - name: Enforce ESM bundle size budget (<= 235 KiB)
+      # R16 (T09a): 236 KiB. The T09a mandatory pre-embed signer-validity
+      # gate (R15) grew the main entry past 235 KiB; bundle-diff verified
+      # the +414 bytes are gate + hardening + message only (pki-utils was
+      # already bundled, zero new module code), and even a gate-alone
+      # minimal change exceeds the old headroom. Per-breach ruling with
+      # independent reviewer verification; T19 still owns bundle efficiency.
+      - name: Enforce ESM bundle size budget (<= 236 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=240640
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 235 KiB)"
+          MAX=241664
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 236 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 235 KiB (240640 bytes) budget"
+            echo "::error::ESM bundle exceeds 236 KiB (241664 bytes) budget"
             exit 1
           fi

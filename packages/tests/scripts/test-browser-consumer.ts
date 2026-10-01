@@ -530,6 +530,7 @@ async function handleTsaRequest(
         ["/reject/signature", () => ({ corruptSignature: true })],
         ["/reject/ess", () => ({ ess: "mismatched" })],
         ["/reject/eku", () => ({ eku: "extra" })],
+        ["/reject/validity", () => ({ certificateValidity: "expired" })],
         ["/hook/crafted-valid", () => ({})],
         ["/hook/trust-target", () => ({})],
         ["/hook/expired-signer", () => ({ certificateValidity: "expired" })],
@@ -882,6 +883,7 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
         ["/reject/signature", 2],
         ["/reject/ess", 2],
         ["/reject/eku", 2],
+        ["/reject/validity", 2],
         ["/hook/crafted-valid", 2],
         ["/hook/trust-target", 1],
         ["/hook/expired-signer", 1],
@@ -893,7 +895,7 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
             `expected ${count.toString()} direct TSA request(s) on ${route}`
         );
     }
-    assert.equal(direct.length, 22, "total direct TSA requests");
+    assert.equal(direct.length, 24, "total direct TSA requests");
     assert.equal(world.redirectHits.length, 1, "the redirect hook must execute its initial POST");
     const followUps = world.requests.filter((captured) => captured.viaRedirect);
     assert.equal(
@@ -1414,6 +1416,7 @@ const REJECTION_REASONS: Record<string, string> = {
     "invalid-signature": "CMS signature verification failed",
     "invalid-ess": "does not bind the selected signer",
     "invalid-eku": "exclusive id-kp-timeStamping EKU",
+    "invalid-validity": "not valid at genTime",
 };
 
 function assertRejections(rejections: RejectionOutcome[]): void {
@@ -1423,6 +1426,7 @@ function assertRejections(rejections: RejectionOutcome[]): void {
         "invalid-signature",
         "invalid-ess",
         "invalid-eku",
+        "invalid-validity",
     ];
     const expected = [
         ...cases.map((name) => `session:${name}`),
@@ -1444,6 +1448,16 @@ function assertRejections(rejections: RejectionOutcome[]): void {
             `${label}: message must identify the rejected predicate (got: ${outcome.message})`
         );
     }
+}
+
+/** T09a: the expired-signer hook must reject pre-embed, not embed. */
+function assertSignerValidityHook(outcome: SignerValidityObservation): void {
+    assert.equal(outcome.embedded, false, "signer-validity: expired signer must not embed");
+    assert.equal(outcome.code, "VERIFICATION_FAILED", "signer-validity: error code");
+    assert.ok(
+        outcome.message.includes("not valid at genTime"),
+        `signer-validity: message must cite the genTime window (got: ${outcome.message})`
+    );
 }
 
 function assertTrustTarget(outcome: TrustTargetOutcome): void {
@@ -1826,6 +1840,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
             rejectSignature: `${tsaOrigin}/reject/signature`,
             rejectEss: `${tsaOrigin}/reject/ess`,
             rejectEku: `${tsaOrigin}/reject/eku`,
+            rejectValidity: `${tsaOrigin}/reject/validity`,
             craftedValid: `${tsaOrigin}/hook/crafted-valid`,
             trustTarget: `${tsaOrigin}/hook/trust-target`,
             expiredSigner: `${tsaOrigin}/hook/expired-signer`,
@@ -1976,6 +1991,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
         assertTsaRequests(world, pageOrigin, TSA_POLICY);
         assertPreflights(world, pageOrigin);
         assertRejections(driven.rejections);
+        assertSignerValidityHook(driven.signerValidityHook);
         assertResourceLimit(resourceLimit);
         assertPlaceholderBounds(placeholderBounds);
         assertCors(driven.cors);

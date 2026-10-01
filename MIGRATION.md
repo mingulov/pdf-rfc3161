@@ -150,6 +150,26 @@ collection APIs (`sources`, `ocspResponses`, `crls`, `exportLTVData`),
 but collection is now strictly more complete. Success-path `errors`
 entries also carry new structural diagnostic strings.
 
+### Pre-embed signing rejects signers outside their genTime window
+
+`timestampPdf` and `TimestampSession.embedTimestampToken` now reject a
+token whose SID-selected signer certificate was expired, not yet valid,
+or carried unparseable validity dates at the token `genTime`, with
+`VERIFICATION_FAILED` ("Timestamp signer certificate was not valid at
+genTime"). Previously such tokens embedded successfully and only the
+post-embed `verifyTimestamp` default caught them (still opt-outable via
+`requireCertValidAtGenTime: false` for historical verification). There
+is no opt-out for the pre-embed check: a TSA that mints tokens outside
+its signer window must fix its certificate; callers cannot re-enable
+embedding those tokens.
+
+The gate compares against the token `genTime`, not the current time, so
+a token whose signer has lapsed since issuance still embeds and
+verifies. Signers whose `notBefore` or `notAfter` exactly equals the
+`genTime` are accepted (the window is inclusive). Accepted tokens embed
+byte-for-byte: the PDF `/Contents` value is the token plus reservation
+zero padding, unchanged.
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before

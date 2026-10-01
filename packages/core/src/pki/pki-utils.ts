@@ -172,14 +172,63 @@ export function parseTimestampToken(token: Uint8Array): TimestampInfo {
 /**
  * Reports whether a certificate is valid at a given point in time
  * (notBefore <= time <= notAfter). Returns false defensively when the
- * cert is missing either bound -- callers should treat that as
- * "do not trust" rather than "trust by default".
+ * cert is missing either bound or when any compared date is not a
+ * finite Date -- callers should treat that as "do not trust" rather
+ * than "trust by default".
  */
 export function isCertValidAtTime(cert: pkijs.Certificate, time: Date): boolean {
-    const notBefore = cert.notBefore.value as unknown;
-    const notAfter = cert.notAfter.value as unknown;
-    if (!(notBefore instanceof Date) || !(notAfter instanceof Date)) {
+    const start = cert.notBefore.value;
+    const end = cert.notAfter.value;
+    if (!(start instanceof Date) || !(end instanceof Date) || !(time instanceof Date)) {
         return false;
     }
-    return time.getTime() >= notBefore.getTime() && time.getTime() <= notAfter.getTime();
+    const check = time.getTime();
+    const from = start.getTime();
+    const to = end.getTime();
+    return (
+        Number.isFinite(check) &&
+        Number.isFinite(from) &&
+        Number.isFinite(to) &&
+        check >= from &&
+        check <= to
+    );
+}
+
+/**
+ * Reports whether a parsed certificate's original validity encodings are
+ * well formed DER. asn1js silently normalizes corrupted UTCTime -- non-digit
+ * content degrades to 1899 and out-of-range fields roll over (month 13, day
+ * 32, Feb 30) -- so comparing normalized Dates alone accepts corrupted
+ * bounds. Each bound is well formed only when the parser raised no conversion
+ * error and the normalized value re-encodes to the exact original TLV.
+ * Certificates without original TBS bytes (never parsed from DER) fail
+ * closed; callers with programmatic certificates keep using
+ * isCertValidAtTime alone.
+ */
+export function validityOk(certificate: pkijs.Certificate): boolean {
+    const tbs = certificate.tbsView;
+    if (tbs.byteLength === 0) return false;
+    const parsed = asn1js.fromBER(tbs);
+    if (parsed.offset !== tbs.byteLength || !(parsed.result instanceof asn1js.Sequence)) {
+        return false;
+    }
+    const validity = parsed.result.valueBlock.value.find(
+        (field) =>
+            field instanceof asn1js.Sequence && field.valueBlock.value[0] instanceof asn1js.UTCTime
+    );
+    if (!(validity instanceof asn1js.Sequence)) return false;
+    const times = validity.valueBlock.value;
+    const bounds = [certificate.notBefore, certificate.notAfter];
+    return (
+        times.length === 2 &&
+        times.every((field, index) => {
+            const bound = bounds[index];
+            return (
+                bound !== undefined &&
+                !field.error &&
+                bytesToHex(bound.toSchema().toBER(false)) ===
+                    bytesToHex(field.valueBeforeDecodeView)
+            );
+        })
+    );
 }
