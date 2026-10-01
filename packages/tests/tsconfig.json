@@ -9,6 +9,7 @@
         ]
     },
     "include": [
+        "browser/**/*",
         "test/**/*",
         "src/**/*",
         "scripts/**/*"

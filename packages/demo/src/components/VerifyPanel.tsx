@@ -19,7 +19,7 @@ interface RFC8933Result {
 export default function VerifyPanel() {
     const [file, setFile] = useState<File | null>(null);
     const [timestamps, setTimestamps] = useState<ExtractedTimestamp[]>([]);
-    const [rfc8933Results, setRfc8933Results] = useState<RFC8933Result[]>([]);
+    const [rfc8933Results, setRfc8933Results] = useState<(RFC8933Result | null)[]>([]);
     const [dssInfo, setDssInfo] = useState<{ certs: number; crls: number; ocsps: number } | null>(
         null
     );
@@ -54,7 +54,7 @@ export default function VerifyPanel() {
             );
 
             setTimestamps(verifiedResults);
-            setRfc8933Results(rfc8933Results as RFC8933Result[]);
+            setRfc8933Results(rfc8933Results);
 
             const dss = await getDSSInfo(pdfBytes);
             setDssInfo(dss);
@@ -144,82 +144,88 @@ export default function VerifyPanel() {
             )}
 
             {!loading &&
-                timestamps.map((ts, idx) => (
-                    <div
-                        key={idx}
-                        className="card"
-                        role="article"
-                        aria-label={`Timestamp ${idx + 1} verification result`}
-                    >
-                        <div className="flex gap2 mb2">
-                            {ts.verified ? (
-                                <CheckCircle className="status-ok" aria-hidden="true" />
-                            ) : (
-                                <AlertCircle className="status-err" aria-hidden="true" />
-                            )}
-                            <strong className="bold">Timestamp #{idx + 1}</strong>
-                            <span
-                                className="badge"
-                                aria-label={`Signed at ${ts.info.genTime.toLocaleString()}`}
-                            >
-                                {ts.info.genTime.toLocaleString()}
-                            </span>
-                        </div>
-
-                        <div className="grid">
-                            <div className="tag">TSA Policy:</div>
-                            <div>{ts.info.policy}</div>
-
-                            <div className="tag">Hash Algo:</div>
-                            <div>{ts.info.hashAlgorithm}</div>
-
-                            <div className="tag">Message Digest:</div>
-                            <div className="break mono">{ts.info.messageDigest}</div>
-
-                            <div className="tag">Status:</div>
-                            <div className={`bold ${ts.verified ? "status-ok" : "status-err"}`}>
-                                {ts.verified
-                                    ? "Cryptographically Valid"
-                                    : `Invalid: ${ts.verificationError}`}
+                timestamps.map((ts, idx) => {
+                    // Parallel to `timestamps`: null for unverified entries,
+                    // which carry no compliance result.
+                    const rfc8933 = idx < rfc8933Results.length ? rfc8933Results[idx] : null;
+                    return (
+                        <div
+                            key={idx}
+                            className="card"
+                            role="article"
+                            aria-label={`Timestamp ${idx + 1} verification result`}
+                        >
+                            <div className="flex gap2 mb2">
+                                {ts.verified ? (
+                                    <CheckCircle className="status-ok" aria-hidden="true" />
+                                ) : (
+                                    <AlertCircle className="status-err" aria-hidden="true" />
+                                )}
+                                <strong className="bold">Timestamp #{idx + 1}</strong>
+                                <span
+                                    className="badge"
+                                    aria-label={`Signed at ${ts.info.genTime.toLocaleString()}`}
+                                >
+                                    {ts.info.genTime.toLocaleString()}
+                                </span>
                             </div>
 
-                            {ts.verified && rfc8933Results[idx] && (
-                                <>
-                                    <div className="tag">
-                                        <Shield size={14} className="mr1" aria-hidden="true" />
-                                        RFC 8933:
-                                    </div>
-                                    <div
-                                        className={`bold ${rfc8933Results[idx].compliant ? "status-ok" : "status-warn"}`}
-                                    >
-                                        {rfc8933Results[idx].compliant
-                                            ? "Compliant"
-                                            : `Issues: ${rfc8933Results[idx].issues.join(", ")}`}
-                                    </div>
-                                </>
-                            )}
+                            <div className="grid">
+                                <div className="tag">TSA Policy:</div>
+                                <div>{ts.info.policy}</div>
 
-                            {ts.certificates && ts.certificates.length > 0 && (
-                                <>
-                                    <div className="tag">Certificates:</div>
-                                    <div className="text-xs slate">
-                                        {ts.certificates.length} certificates embedded in signature
-                                    </div>
-                                </>
-                            )}
+                                <div className="tag">Hash Algo:</div>
+                                <div>{ts.info.hashAlgorithm}</div>
 
-                            {(ts.crlCount !== undefined || ts.ocspCount !== undefined) && (
-                                <>
-                                    <div className="tag">Local Revocation:</div>
-                                    <div className="text-xs slate">
-                                        {ts.crlCount || 0} CRLs, {ts.ocspCount || 0} OCSP responses
-                                        (inside signature)
-                                    </div>
-                                </>
-                            )}
+                                <div className="tag">Message Digest:</div>
+                                <div className="break mono">{ts.info.messageDigest}</div>
+
+                                <div className="tag">Status:</div>
+                                <div className={`bold ${ts.verified ? "status-ok" : "status-err"}`}>
+                                    {ts.verified
+                                        ? "Cryptographically Valid"
+                                        : `Invalid: ${ts.verificationError}`}
+                                </div>
+
+                                {ts.verified && rfc8933 !== null && (
+                                    <>
+                                        <div className="tag">
+                                            <Shield size={14} className="mr1" aria-hidden="true" />
+                                            RFC 8933:
+                                        </div>
+                                        <div
+                                            className={`bold ${rfc8933.compliant ? "status-ok" : "status-warn"}`}
+                                        >
+                                            {rfc8933.compliant
+                                                ? "Compliant"
+                                                : `Issues: ${rfc8933.issues.join(", ")}`}
+                                        </div>
+                                    </>
+                                )}
+
+                                {ts.certificates && ts.certificates.length > 0 && (
+                                    <>
+                                        <div className="tag">Certificates:</div>
+                                        <div className="text-xs slate">
+                                            {ts.certificates.length} certificates embedded in
+                                            signature
+                                        </div>
+                                    </>
+                                )}
+
+                                {(ts.crlCount !== undefined || ts.ocspCount !== undefined) && (
+                                    <>
+                                        <div className="tag">Local Revocation:</div>
+                                        <div className="text-xs slate">
+                                            {ts.crlCount || 0} CRLs, {ts.ocspCount || 0} OCSP
+                                            responses (inside signature)
+                                        </div>
+                                    </>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
         </div>
     );
 }

@@ -11,7 +11,7 @@
 //     requirement: every CI job runs on ubuntu-24.04 with full OpenSSL, so a
 //     missing `ts` there means a broken runner, not an unsupported laptop.
 import assert from "node:assert/strict";
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
     existsSync,
     mkdtempSync,
@@ -24,12 +24,21 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib-incremental-save";
 import { lastXrefFormat, xrefSections } from "../test/utils/xref-format";
 import { createLocalTsa } from "./local-tsa-fixture";
 import { writeConsumerWorkspace } from "./packed-consumer-config";
+import {
+    commandOutput,
+    commandSucceeded,
+    installConsumer,
+    packPackage,
+    run,
+    runPnpm,
+    tarballFiles,
+} from "./packed-consumer-spawn";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, "../../..");
@@ -57,12 +66,6 @@ const CORE_EXPORTS = [
     ["pdf-rfc3161/rfcs/rfc8933", "validateRFC8933Compliance"],
 ] as const;
 
-interface CommandResult {
-    command: string;
-    args: string[];
-    result: SpawnSyncReturns<string>;
-}
-
 interface PackedArtifacts {
     coreTarballPath: string;
     cliTarballPath: string;
@@ -73,12 +76,6 @@ interface PackageManifest {
     dependencies?: Record<string, string>;
     exports?: unknown;
     version?: unknown;
-}
-
-function commandOutput(result: SpawnSyncReturns<string>): string {
-    return [result.stdout, result.stderr]
-        .filter((value): value is string => typeof value === "string" && value.length > 0)
-        .join("\n");
 }
 
 const RUNNING_IN_CI = (process.env.CI ?? "") !== "";
@@ -99,54 +96,6 @@ function opensslTimestampAvailable(): boolean {
     return probe.status === 0 || commandOutput(probe).includes("-queryfile");
 }
 
-function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): CommandResult {
-    const result = spawnSync(command, args, {
-        cwd,
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (result.error) {
-        throw new Error(command + " could not start: " + result.error.message);
-    }
-    return { command, args, result };
-}
-
-function runPnpm(
-    args: string[],
-    cwd: string,
-    env?: NodeJS.ProcessEnv
-): CommandResult {
-    const extension = extname(PNPM_ENTRYPOINT).toLowerCase();
-    return [".js", ".cjs", ".mjs"].includes(extension)
-        ? run(process.execPath, [PNPM_ENTRYPOINT, ...args], cwd, env)
-        : run(PNPM_ENTRYPOINT, args, cwd, env);
-}
-
-function commandSucceeded(commandResult: CommandResult): void {
-    const output = commandOutput(commandResult.result);
-    assert.equal(
-        commandResult.result.status,
-        0,
-        commandResult.command +
-            " " +
-            commandResult.args.join(" ") +
-            " failed" +
-            (output ? ":\n" + output : "")
-    );
-}
-
-function packPackage(packageDirectory: string, packRoot: string): string {
-    const destination = join(packRoot, basename(packageDirectory));
-    mkdirSync(destination, { recursive: true });
-    commandSucceeded(runPnpm(["pack", "--pack-destination", destination], packageDirectory));
-    const tarballs = readdirSync(destination).filter((file) => file.endsWith(".tgz"));
-    assert.equal(tarballs.length, 1, "expected one tarball for " + packageDirectory);
-    const tarballPath = join(destination, tarballs[0] ?? "");
-    assert(existsSync(tarballPath), "tarball does not exist: " + tarballPath);
-    return tarballPath;
-}
-
 function packedArtifacts(temporaryDirectory: string): PackedArtifacts {
     const supplied = process.argv.slice(2).filter((argument) => argument !== "--");
     assert(
@@ -162,20 +111,9 @@ function packedArtifacts(temporaryDirectory: string): PackedArtifacts {
     }
     const packRoot = join(temporaryDirectory, "pack");
     return {
-        coreTarballPath: packPackage(CORE_DIRECTORY, packRoot),
-        cliTarballPath: packPackage(CLI_DIRECTORY, packRoot),
+        coreTarballPath: packPackage(PNPM_ENTRYPOINT, CORE_DIRECTORY, packRoot),
+        cliTarballPath: packPackage(PNPM_ENTRYPOINT, CLI_DIRECTORY, packRoot),
     };
-}
-
-function tarballFiles(tarballPath: string): string[] {
-    const result = run("tar", ["-tzf", tarballPath], dirname(tarballPath));
-    commandSucceeded(result);
-    return commandOutput(result.result)
-        .split("\n")
-        .map((file) => file.trim())
-        .filter((file) => file.startsWith("package/") && !file.endsWith("/"))
-        .map((file) => file.slice("package/".length))
-        .sort();
 }
 
 function manifest(packageDirectory: string): PackageManifest {
@@ -532,6 +470,7 @@ async function checkInstalledConsumer(
     const typeChecks = writeTypeChecks(consumerDirectory);
     commandSucceeded(
         runPnpm(
+            PNPM_ENTRYPOINT,
             [
                 "exec",
                 "tsc",
@@ -552,6 +491,7 @@ async function checkInstalledConsumer(
     assert(existsSync(viteEntry), "Vite entry does not exist: " + viteEntry);
     commandSucceeded(
         runPnpm(
+            PNPM_ENTRYPOINT,
             ["exec", "vite", "build", "--outDir", join(consumerDirectory, "vite-dist")],
             consumerDirectory
         )
@@ -609,14 +549,24 @@ async function checkInstalledConsumer(
         process.platform === "win32" ? "pdf-rfc3161.cmd" : "pdf-rfc3161"
     );
     assert(existsSync(executable), "installed CLI executable does not exist: " + executable);
-    const version = runPnpm(["exec", "pdf-rfc3161", "--version"], consumerDirectory, env);
+    const version = runPnpm(
+        PNPM_ENTRYPOINT,
+        ["exec", "pdf-rfc3161", "--version"],
+        consumerDirectory,
+        env
+    );
     commandSucceeded(version);
     assert.equal(
         commandOutput(version.result).trim(),
         manifestVersion(CLI_DIRECTORY),
         "installed CLI version output"
     );
-    const help = runPnpm(["exec", "pdf-rfc3161", "--help"], consumerDirectory, env);
+    const help = runPnpm(
+        PNPM_ENTRYPOINT,
+        ["exec", "pdf-rfc3161", "--help"],
+        consumerDirectory,
+        env
+    );
     commandSucceeded(help);
     assert.match(commandOutput(help.result), /Usage: pdf-rfc3161/, "installed CLI help output");
 }
@@ -624,7 +574,7 @@ async function checkInstalledConsumer(
 async function main(): Promise<void> {
     let temporaryDirectory: string | undefined;
     try {
-        const pnpmVersion = runPnpm(["--version"], REPOSITORY_ROOT);
+        const pnpmVersion = runPnpm(PNPM_ENTRYPOINT, ["--version"], REPOSITORY_ROOT);
         commandSucceeded(pnpmVersion);
         assert.equal(
             commandOutput(pnpmVersion.result).trim(),
@@ -638,23 +588,14 @@ async function main(): Promise<void> {
         const failures = packageContract(artifacts);
         writeConsumerPackage(consumerDirectory, artifacts);
         writeConsumerWorkspace(consumerDirectory, artifacts.coreTarballPath);
-        const consumerPnpmVersion = runPnpm(["--version"], consumerDirectory);
+        const consumerPnpmVersion = runPnpm(PNPM_ENTRYPOINT, ["--version"], consumerDirectory);
         commandSucceeded(consumerPnpmVersion);
         assert.equal(
             commandOutput(consumerPnpmVersion.result).trim(),
             ROOT_PNPM_VERSION,
             "consumer pnpm version must match root packageManager"
         );
-        commandSucceeded(
-            runPnpm(
-                [
-                    "install",
-                    "--config.node-linker=isolated",
-                    "--config.virtual-store-dir=.pnpm",
-                ],
-                consumerDirectory
-            )
-        );
+        installConsumer(PNPM_ENTRYPOINT, consumerDirectory);
         await checkInstalledConsumer(consumerDirectory, temporaryDirectory, artifacts, failures);
         assert.equal(
             failures.length,

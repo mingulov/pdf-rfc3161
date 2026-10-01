@@ -9,6 +9,18 @@ export const TSA_POLICY = "1.3.6.1.4.1.57264.1.1";
 export interface LocalTsaConfiguration {
     rootCert: string;
     config: string;
+    tsaCert: string;
+    tsaKey: string;
+}
+
+export interface LocalTsaOptions {
+    /**
+     * OCSP responder URL embedded as an AuthorityInfoAccess extension in
+     * the TSA signer certificate. Revocation-collection tests point this
+     * at a controlled endpoint; omit it for a chain without revocation
+     * endpoints (the deterministic default).
+     */
+    ocspUrl?: string;
 }
 
 function commandOutput(result: SpawnSyncReturns<string>): string {
@@ -38,8 +50,10 @@ function assertOpenSslSuccess(args: string[]): SpawnSyncReturns<string> {
     return result;
 }
 
-function createOpenSslConfig(directory: string): string {
+function createOpenSslConfig(directory: string, options: LocalTsaOptions = {}): string {
     const configPath = join(directory, "tsa.cnf");
+    const ocspExtension =
+        options.ocspUrl === undefined ? "" : `\nauthorityInfoAccess = OCSP;URI:${options.ocspUrl}`;
     writeFileSync(
         configPath,
         `[req]
@@ -60,7 +74,7 @@ basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature,nonRepudiation
 extendedKeyUsage = critical,timeStamping
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer
+authorityKeyIdentifier = keyid:always,issuer${ocspExtension}
 
 [tsa]
 default_tsa = tsa_config
@@ -86,13 +100,16 @@ ess_cert_id_alg = sha256
     return configPath;
 }
 
-export function createLocalTsa(directory: string): LocalTsaConfiguration {
+export function createLocalTsa(
+    directory: string,
+    options: LocalTsaOptions = {}
+): LocalTsaConfiguration {
     const rootKey = join(directory, "root.key");
     const rootCert = join(directory, "root.pem");
     const tsaKey = join(directory, "tsa.key");
     const tsaRequest = join(directory, "tsa.csr");
     const tsaCert = join(directory, "tsa.pem");
-    const config = createOpenSslConfig(directory);
+    const config = createOpenSslConfig(directory, options);
 
     writeFileSync(join(directory, "index.txt"), "");
     writeFileSync(join(directory, "tsaserial"), "01\n");
@@ -165,7 +182,7 @@ export function createLocalTsa(directory: string): LocalTsaConfiguration {
     const ekuValue = lines.slice(ekuHeader + 1).find((line) => line.trim().length > 0);
     assert.equal(ekuValue?.trim(), "Time Stamping", "Local TSA certificate EKU must be exclusive");
 
-    return { rootCert, config };
+    return { rootCert, config, tsaCert, tsaKey };
 }
 
 export function createTimestampResponse(

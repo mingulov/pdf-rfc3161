@@ -39,6 +39,15 @@ jobs:
         if: matrix.node == '24'
         run: pnpm --filter pdf-rfc3161-tests test:package
 
+      - name: Install Playwright Chromium (browser signing gate)
+        if: matrix.node == '24'
+        run: pnpm --filter pdf-rfc3161-tests exec playwright install --with-deps chromium
+
+      - name: Verify browser signing gate
+        if: matrix.node == '24'
+        timeout-minutes: 15
+        run: pnpm --filter pdf-rfc3161-tests test:browser:package
+
       - name: Type check
         run: pnpm typecheck
 
@@ -178,3 +187,87 @@ jobs:
         env:
           NODE_ENV: test
           LIVE_TSA_TESTS: 'true'
+
+  browser-matrix:
+    name: Cross-browser signing matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install Playwright browsers (chromium, firefox, webkit)
+        # One install covers both the signing gate and demo E2E: both
+        # packages resolve the same Playwright and share the browser cache.
+        run: pnpm --filter pdf-rfc3161-tests exec playwright install --with-deps chromium firefox webkit
+
+      - name: Run browser signing gate on all engines
+        timeout-minutes: 25
+        run: pnpm --filter pdf-rfc3161-tests test:browser:package -- --engine all --receipt /tmp/browser-matrix-receipt.json --trace-dir /tmp/browser-matrix-traces --pdf-export-dir /tmp/browser-matrix-pdfs
+
+      - name: Run deterministic demo E2E on all engines
+        # Only the offline specs: automatic-flow, timestamp-manual and
+        # ltv-timestamp still drive public TSAs and stay local-only until
+        # a later task makes them deterministic.
+        timeout-minutes: 15
+        run: pnpm --filter pdf-rfc3161-demo exec playwright test manual-flow timestamp-direct validator --reporter=list
+
+      - name: Upload gate receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-matrix-receipt
+          path: /tmp/browser-matrix-receipt.json
+          if-no-files-found: warn
+
+      - name: Upload signing-gate failure traces
+        # The standalone gate runner saves one trace zip per failed
+        # engine (trace-<engine>.zip, save-on-failure only); the demo
+        # step below is skipped when the gate fails, so this directory
+        # is the only trace evidence for signing-gate failures.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signing-gate-traces
+          path: /tmp/browser-matrix-traces/
+          if-no-files-found: warn
+
+      # Native-reader handoff (gate side; T10 owns consumption). The
+      # browser-matrix-pdfs artifact carries the exact candidate-produced
+      # PDFs for native qualification: one <engine>-<case>.pdf per gate
+      # case (10 cases x chromium/firefox/webkit) plus manifest.json.
+      # Manifest format (JSON): { gate: "T18", hashAlgorithm: "SHA-256",
+      # candidate: { tarballSha256, distSha256, version }, files: [{
+      # engine, case, file, sha256, bytes }] }. The T10 native job
+      # should download this artifact, verify every file against its
+      # SHA-256 manifest entry, feed the PDFs to the native readers,
+      # and retain their results alongside the gate receipt.
+      - name: Upload candidate PDFs for native readers
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-matrix-pdfs
+          path: /tmp/browser-matrix-pdfs/
+          if-no-files-found: warn
+
+      - name: Upload demo E2E failure traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: demo-e2e-traces
+          path: packages/demo/test-results/
+          if-no-files-found: warn

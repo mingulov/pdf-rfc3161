@@ -327,12 +327,18 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^5.0.2
         version: 5.0.2(vitest@5.0.2)
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       eslint:
         specifier: 10.11.0
         version: 10.11.0(supports-color@7.2.0)
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
+      playwright:
+        specifier: ^1.63.0
+        version: 1.63.0
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
