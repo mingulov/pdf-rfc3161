@@ -4,8 +4,8 @@ import { isCertValidAtTime } from "../../../core/src/pki/pki-utils.js";
 
 function certWithValidity(notBefore: Date, notAfter: Date): pkijs.Certificate {
     const cert = new pkijs.Certificate();
-    cert.notBefore = new pkijs.Time({ type: 1, value: notBefore });
-    cert.notAfter = new pkijs.Time({ type: 1, value: notAfter });
+    cert.notBefore = new pkijs.Time({ type: pkijs.TimeType.GeneralizedTime, value: notBefore });
+    cert.notAfter = new pkijs.Time({ type: pkijs.TimeType.GeneralizedTime, value: notAfter });
     return cert;
 }
 

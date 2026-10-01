@@ -15,16 +15,16 @@
         "test:full": "pnpm run test && pnpm --filter pdf-rfc3161-tests run test:robustness && pnpm --filter pdf-rfc3161-tests run test:package && pnpm --filter pdf-rfc3161-demo run test:e2e"
     },
     "devDependencies": {
-        "@changesets/cli": "^3.0.2",
+        "@changesets/cli": "^3.0.3",
         "@eslint/js": "^10.0.1",
         "@typescript/native": "npm:typescript@7.0.2",
-        "eslint": "^10.10.0",
-        "eslint-plugin-security": "^4.0.1",
-        "prettier": "^3.9.6",
+        "eslint": "^10.11.0",
+        "eslint-plugin-security": "^4.1.0",
+        "prettier": "^3.9.9",
         "tsup": "^8.5.1",
-        "tsx": "^4.23.13",
+        "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
-        "typescript-eslint": "^8.69.0"
+        "typescript-eslint": "^8.71.0"
     },
     "engines": {
         "node": ">=22.12.0",

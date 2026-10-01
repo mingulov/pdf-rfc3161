@@ -918,6 +918,8 @@ async function createToken(
         (options.statusString === undefined ? undefined : [options.statusString]);
     const response = new pkijs.TimeStampResp({
         status: new pkijs.PKIStatusInfo({
+            // Fixture encodes arbitrary status integers, including out-of-range ones.
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment
             status: options.status ?? 0,
             ...(statusStrings !== undefined && {
                 statusStrings: statusStrings.map((value) => new asn1js.Utf8String({ value })),
