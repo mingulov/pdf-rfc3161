@@ -146,5 +146,19 @@ describe("SimpleTrustStore", () => {
             const result = await trustStore.verifyChain([leafCert]);
             expect(result).toBe(false);
         });
+
+        it("should verify the first certificate as the target, not any chain member", async () => {
+            const untrustedRoot = await createTestCertificate("Untrusted CA", true);
+            trustStore.addCertificate(rootCert);
+            const result = await trustStore.verifyChain([untrustedRoot, rootCert]);
+            expect(result).toBe(false);
+        });
+
+        it("should trust a pinned target regardless of unrelated candidates", async () => {
+            const untrustedRoot = await createTestCertificate("Untrusted CA", true);
+            trustStore.addCertificate(rootCert);
+            const result = await trustStore.verifyChain([rootCert, untrustedRoot]);
+            expect(result).toBe(true);
+        });
     });
 });

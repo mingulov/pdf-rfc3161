@@ -77,11 +77,14 @@ import type {
     SignerValidityObservation,
     T00Urls,
     TransportObservation,
+    TrustTargetOutcome,
 } from "../browser/signer.spec.js";
+import { parseTimestampToken } from "../../core/src/tsa/token-validation.js";
 import {
     createRFC3161TokenFixtureFromRequest,
     type RFC3161TokenFixtureOptions,
 } from "../test/fixtures/rfc3161-token.js";
+import { cryptoEngine, generateRSAKeyPair, importKeyForCertificate } from "../test/utils/crypto.js";
 import {
     createLocalTsa,
     createTimestampResponse,
@@ -306,12 +309,69 @@ interface TsaWorld {
     tsaAia: LocalTsaConfiguration | undefined;
     tsaDirectory: string;
     tsaAiaDirectory: string;
+    /** Unrelated intermediate appended to the T01 trust-target token bag. */
+    trustTargetIntermediate: Uint8Array | undefined;
     requests: CapturedRequest[];
     acceptedTokens: Uint8Array[];
     ocspHits: OcspHit[];
     opaqueHits: OpaqueHit[];
     redirectHits: RedirectHit[];
     preflights: Preflight[];
+}
+
+/**
+ * T01 poison material: a pinned root plus an unrelated intermediate that
+ * chains to it. The trust-target token is signed by the crafted fixture
+ * signer, so the intermediate must never verify in the signer's place.
+ */
+async function createTrustTargetMaterial(): Promise<{
+    rootDer: Uint8Array;
+    intermediateDer: Uint8Array;
+}> {
+    const buildCertificate = async (
+        commonName: string,
+        keys: CryptoKeyPair,
+        serial: number,
+        issuer?: pkijs.Certificate,
+        issuerKeys?: CryptoKeyPair
+    ): Promise<pkijs.Certificate> => {
+        const certificate = new pkijs.Certificate();
+        certificate.version = 2;
+        certificate.serialNumber = new asn1js.Integer({ value: serial });
+        certificate.subject.typesAndValues.push(
+            new pkijs.AttributeTypeAndValue({
+                type: "2.5.4.3",
+                value: new asn1js.PrintableString({ value: commonName }),
+            })
+        );
+        certificate.issuer = issuer?.subject ?? certificate.subject;
+        certificate.notBefore.value = new Date(Date.now() - 86400000);
+        certificate.notAfter.value = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+        certificate.subjectPublicKeyInfo = await importKeyForCertificate(keys.publicKey);
+        certificate.extensions = [
+            new pkijs.Extension({
+                extnID: "2.5.29.19",
+                critical: true,
+                extnValue: new pkijs.BasicConstraints({ cA: true }).toSchema().toBER(),
+            }),
+        ];
+        await certificate.sign((issuerKeys ?? keys).privateKey, "SHA-256", cryptoEngine);
+        return certificate;
+    };
+    const rootKeys = await generateRSAKeyPair();
+    const intermediateKeys = await generateRSAKeyPair();
+    const root = await buildCertificate("Browser Trust Target Root", rootKeys, 2001);
+    const intermediate = await buildCertificate(
+        "Browser Trust Target Intermediate",
+        intermediateKeys,
+        2002,
+        root,
+        rootKeys
+    );
+    return {
+        rootDer: new Uint8Array(root.toSchema().toBER(false)),
+        intermediateDer: new Uint8Array(intermediate.toSchema().toBER(false)),
+    };
 }
 
 function flippedNonce(nonce: Uint8Array): Uint8Array {
@@ -332,6 +392,42 @@ async function craftedResponse(
         ...buildOptions(parsed),
     });
     return fixture.input;
+}
+
+/**
+ * Appends extra certificates to the unsigned CMS bag of a crafted
+ * TimeStampResp without touching its signature or signed attributes.
+ * The response stays byte-comparable through the accepted-token record.
+ */
+function poisonResponseBag(
+    response: Uint8Array,
+    extraBagCertificates: readonly Uint8Array[]
+): Uint8Array {
+    const parsed = parseTimestampToken(extractRawToken(response));
+    assert.ok(
+        parsed.signedData.certificates !== undefined,
+        "crafted token must carry a certificate bag to poison"
+    );
+    for (const extra of extraBagCertificates) {
+        const schema = asn1js.fromBER(toExactBuffer(extra));
+        assert.notEqual(schema.offset, -1, "poison certificate must be DER");
+        parsed.signedData.certificates.push(new pkijs.Certificate({ schema: schema.result }));
+    }
+    const poisonedToken = new Uint8Array(
+        new pkijs.ContentInfo({
+            contentType: "1.2.840.113549.1.7.2",
+            content: parsed.signedData.toSchema(),
+        })
+            .toSchema()
+            .toBER(false)
+    );
+    const responseSchema = asn1js.fromBER(toExactBuffer(response));
+    assert.notEqual(responseSchema.offset, -1, "crafted response must be DER");
+    const timeStampResp = new pkijs.TimeStampResp({ schema: responseSchema.result });
+    const tokenSchema = asn1js.fromBER(toExactBuffer(poisonedToken));
+    assert.notEqual(tokenSchema.offset, -1, "poisoned token must be DER");
+    timeStampResp.timeStampToken = new pkijs.ContentInfo({ schema: tokenSchema.result });
+    return new Uint8Array(timeStampResp.toSchema().toBER(false));
 }
 
 async function handleTsaRequest(
@@ -435,6 +531,7 @@ async function handleTsaRequest(
         ["/reject/ess", () => ({ ess: "mismatched" })],
         ["/reject/eku", () => ({ eku: "extra" })],
         ["/hook/crafted-valid", () => ({})],
+        ["/hook/trust-target", () => ({})],
         ["/hook/expired-signer", () => ({ certificateValidity: "expired" })],
     ]);
     const crafted = craftedRoutes.get(route);
@@ -459,7 +556,7 @@ async function handleTsaRequest(
         hasPdfMagic: hasPdfMagic(body),
         viaRedirect: route === "/tsa" && url.searchParams.get("via") === "redirect",
     });
-    const reply =
+    let reply =
         crafted !== undefined
             ? await craftedResponse(body, crafted)
             : createTimestampResponse(
@@ -467,6 +564,11 @@ async function handleTsaRequest(
                   opensslConfig?.config ?? "",
                   body
               );
+    if (route === "/hook/trust-target") {
+        const intermediate = world.trustTargetIntermediate;
+        assert.ok(intermediate !== undefined, "trust-target intermediate must exist");
+        reply = poisonResponseBag(reply, [intermediate]);
+    }
     world.acceptedTokens.push(extractRawToken(reply));
     response.writeHead(
         200,
@@ -761,9 +863,10 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
     // the certReq=false journey and the worker journey hit /tsa; the
     // revocation journey hits /tsa-aia; each rejection case hits its
     // endpoint twice (session + one-call); the crafted-valid control
-    // hits twice (session + one-call); the T09 hook hits once. The
-    // CORS-denied TSA never reaches the server (the browser blocks its
-    // preflight), and the resource-limit probe fails before any request.
+    // hits twice (session + one-call); the T01 trust-target case and
+    // the T09 hook hit once each. The CORS-denied TSA never reaches
+    // the server (the browser blocks its preflight), and the
+    // resource-limit probe fails before any request.
     // The T02 redirect follow-up is recorded separately below without
     // prescribing it: redirect rejection must not fail this gate.
     const direct = world.requests.filter((captured) => !captured.viaRedirect);
@@ -780,6 +883,7 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
         ["/reject/ess", 2],
         ["/reject/eku", 2],
         ["/hook/crafted-valid", 2],
+        ["/hook/trust-target", 1],
         ["/hook/expired-signer", 1],
     ]);
     for (const [route, count] of expected) {
@@ -789,7 +893,7 @@ function assertTsaRequests(world: TsaWorld, pageOrigin: string, policy: string):
             `expected ${count.toString()} direct TSA request(s) on ${route}`
         );
     }
-    assert.equal(direct.length, 21, "total direct TSA requests");
+    assert.equal(direct.length, 22, "total direct TSA requests");
     assert.equal(world.redirectHits.length, 1, "the redirect hook must execute its initial POST");
     const followUps = world.requests.filter((captured) => captured.viaRedirect);
     assert.ok(followUps.length <= 1, "at most one redirect follow-up POST may arrive");
@@ -1067,6 +1171,7 @@ interface EngineReceipt {
         customTrustStoreVerify: CorsOutcome["customTrustStoreVerify"];
     };
     signerValidityHook: SignerValidityObservation;
+    trustTarget: TrustTargetOutcome;
     transportHooks: TransportObservation[];
     ocspHits: OcspHit[];
     opaqueHits: OpaqueHit[];
@@ -1144,6 +1249,7 @@ interface DriveArguments {
     policy: string;
     tsaSignerCert: number[];
     rootDer: number[];
+    trustTargetRootDer: number[];
     workerUrl: string;
 }
 
@@ -1155,6 +1261,7 @@ interface DrivenJourneys {
     craftedValid: { session: CertlessJourneyOutput; oneCall: CertlessJourneyOutput };
     cors: CorsOutcome;
     signerValidityHook: SignerValidityObservation;
+    trustTarget: TrustTargetOutcome;
     transportHooks: TransportObservation[];
     worker: { pdf: number[]; workerUserAgent: string };
 }
@@ -1243,6 +1350,19 @@ async function driveJourneys(
         { input: modernInput, urls: args.urls, policy: args.policy }
     );
     progress("signer-validity hook ok");
+    const trustTarget = await page.evaluate(
+        (arg: { input: number[]; urls: T00Urls; policy: string; rootDer: number[] }) => {
+            const api = (globalThis as unknown as { __T00__: PageApi }).__T00__;
+            return api.runTrustTargetCase(arg.input, arg.urls, arg.policy, arg.rootDer);
+        },
+        {
+            input: modernInput,
+            urls: args.urls,
+            policy: args.policy,
+            rootDer: args.trustTargetRootDer,
+        }
+    );
+    progress("trust-target case ok");
     const transportHooks = await page.evaluate(
         (arg: { input: number[]; urls: T00Urls; policy: string }) => {
             const api = (globalThis as unknown as { __T00__: PageApi }).__T00__;
@@ -1272,6 +1392,7 @@ async function driveJourneys(
         craftedValid,
         cors,
         signerValidityHook,
+        trustTarget,
         transportHooks,
         worker,
     };
@@ -1318,6 +1439,22 @@ function assertRejections(rejections: RejectionOutcome[]): void {
             `${label}: message must identify the rejected predicate (got: ${outcome.message})`
         );
     }
+}
+
+function assertTrustTarget(outcome: TrustTargetOutcome): void {
+    assert.equal(outcome.name, "trust-target", "trust-target case name");
+    assert.equal(outcome.embedded, true, "trust-target: poisoned token must embed");
+    assert.equal(outcome.count, 1, "trust-target: verified timestamp count");
+    assert.equal(outcome.certificateCount, 2, "trust-target: bag must carry the poison cert");
+    assert.equal(
+        outcome.verified,
+        false,
+        "trust-target: unrelated trusted intermediate must not verify the signer"
+    );
+    assert.ok(
+        (outcome.error ?? "").includes("not trusted"),
+        `trust-target: error must cite the untrusted chain (got: ${outcome.error ?? "(none)"})`
+    );
 }
 
 function assertResourceLimit(outcome: RejectionOutcome): void {
@@ -1468,6 +1605,8 @@ interface SharedGate {
     bundles: BrowserBundles;
     inputs: Record<string, number[]>;
     modern: Uint8Array;
+    /** T01 poison material, generated once and shared by every engine. */
+    trustTarget: { rootDer: Uint8Array; intermediateDer: Uint8Array };
     /** When set, a Playwright trace zip per failed engine is saved here (save-on-failure only). */
     traceDirectory: string | undefined;
     /** When set, candidate-produced PDFs plus a SHA-256 hash manifest are exported here. */
@@ -1553,6 +1692,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
             tsaAia: undefined,
             tsaDirectory,
             tsaAiaDirectory,
+            trustTargetIntermediate: shared.trustTarget.intermediateDer,
             requests: [],
             acceptedTokens: [],
             ocspHits: [],
@@ -1580,6 +1720,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
             rejectEss: `${tsaOrigin}/reject/ess`,
             rejectEku: `${tsaOrigin}/reject/eku`,
             craftedValid: `${tsaOrigin}/hook/crafted-valid`,
+            trustTarget: `${tsaOrigin}/hook/trust-target`,
             expiredSigner: `${tsaOrigin}/hook/expired-signer`,
             tsaNoCors: `${tsaOrigin}/tsa-no-cors`,
             redirect: `${tsaOrigin}/tsa-redirect`,
@@ -1653,6 +1794,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
                     // The post-embed verification runs on the revocation-journey
                     // PDF, which the AIA TSA signed under its own root.
                     rootDer: Array.from(pemToDer(tsaAia.rootCert)),
+                    trustTargetRootDer: Array.from(shared.trustTarget.rootDer),
                     workerUrl: `${pageOrigin}/worker.js`,
                 });
                 // Bounded resource-limit probe, isolated so the harness
@@ -1713,6 +1855,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
         assertRejections(driven.rejections);
         assertResourceLimit(resourceLimit);
         assertCors(driven.cors);
+        assertTrustTarget(driven.trustTarget);
         assert.ok(
             world.ocspHits.length > 0,
             "the revocation journey must attempt the AIA OCSP fetch"
@@ -1861,6 +2004,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
                 rejectionCases: driven.rejections.length,
                 resourceLimitCases: 1,
                 corsCases: 2,
+                trustTargetCases: 1,
                 workerOutputs: 1,
                 oracleCases: cases.length,
                 pageTamperControls: driven.positives.length,
@@ -1880,6 +2024,7 @@ async function runEngine(engine: EngineName, shared: SharedGate): Promise<Engine
                 customTrustStoreVerify: driven.cors.customTrustStoreVerify,
             },
             signerValidityHook: driven.signerValidityHook,
+            trustTarget: driven.trustTarget,
             transportHooks: driven.transportHooks,
             ocspHits: world.ocspHits,
             opaqueHits: world.opaqueHits,
@@ -1994,6 +2139,8 @@ async function main(): Promise<void> {
             enginePath
         );
         progress("fixtures bundled");
+        const trustTarget = await createTrustTargetMaterial();
+        progress("trust-target material generated");
 
         // One candidate, every requested engine: each run gets its
         // own servers and receipt. Dispositions for all requested
@@ -2006,6 +2153,7 @@ async function main(): Promise<void> {
             bundles,
             inputs,
             modern,
+            trustTarget,
             traceDirectory,
             pdfExportDirectory,
             exportedCases: [],

@@ -2,6 +2,28 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
+## Unreleased
+
+### `verifyChain` verifies `chain[0]` (trust-target binding)
+
+`TrustStore.verifyChain(chain)` now defines first-certificate target
+semantics: only `chain[0]` is verified, and the remaining entries are
+untrusted path-building candidates rather than additional trust sources.
+Previously the verdict could follow an unrelated trusted intermediate
+elsewhere in the array, so an untrusted signer with such a bag entry could
+verify as trusted. That input now returns `false`, and
+`verifyTimestamp`/`verifyPdfTimestamps` report "Certificate chain not
+trusted".
+
+No change is needed if you already pass the selected signer first (as
+`verifyTimestamp` does). If you relied on the old order-dependent behavior,
+place the intended target at index 0. A target that is itself a pinned
+anchor is verified against that anchor without needing intermediates, but
+engine validation still applies: CA-ness, validity-period, and name-chaining
+checks must pass. In particular a pinned self-signed end-entity (non-CA)
+target still returns `false`, while a pinned intermediate still chains to
+its issuer anchor.
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before

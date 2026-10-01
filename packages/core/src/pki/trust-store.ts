@@ -8,20 +8,20 @@ import { toArrayBuffer } from "../utils.js";
  *
  * This module provides TrustStore and SimpleTrustStore for certificate chain validation.
  *
- * NOTE: TrustStore is NOT currently integrated into the core timestamp verification flow.
- * This is a design choice - RFC 3161 timestamps focus on cryptographic integrity of the
- * timestamp token itself, not on validating the TSA's certificate chain.
- *
- * Reasons for this design:
+ * NOTE: chain validation is caller-owned trust policy, not a default. RFC 3161
+ * timestamp verification without a trust store checks cryptographic integrity of the
+ * timestamp token itself, not the TSA's certificate chain:
  * 1. TSA certificates are typically validated by the TLS connection to the TSA
  * 2. Trust validation requirements vary significantly between jurisdictions (e.g., eIDAS, FIPS)
  * 3. Users may have custom trust requirements (private PKI, specific CAs, etc.)
- * 4. Adding trust validation would require a trust store configuration mechanism
  *
  * If you need chain validation, you can:
  * 1. Use the TrustStore API directly: `trustStore.verifyChain(chain)`
- * 2. Pass a TrustStore to verifyTimestamp() options if you modify the API
+ * 2. Pass a TrustStore to verifyTimestamp()/verifyPdfTimestamps() options
  * 3. Implement custom validation logic using pkijs
+ *
+ * `verifyChain` verifies `chain[0]`; every other entry is an untrusted
+ * path-building candidate. Callers must place the selected signer first.
  *
  * Example usage:
  * ```typescript
@@ -30,7 +30,7 @@ import { toArrayBuffer } from "../utils.js";
  * const trustStore = new SimpleTrustStore();
  * trustStore.addCertificate( rootCaCert );
  *
- * // Use for custom validation
+ * // Use for custom validation: verifies certChain[0], others are candidates
  * const isTrusted = await trustStore.verifyChain(certChain);
  * ```
  */
@@ -46,11 +46,53 @@ export interface TrustStore {
     addCertificate(cert: Uint8Array | pkijs.Certificate): void;
 
     /**
-     * Verifies that a certificate chain chains back to a trusted root
+     * Verifies that the first certificate chains back to a trusted root.
+     *
+     * First-certificate target semantics: `chain[0]` is the verified trust
+     * target and every other entry is an untrusted path-building candidate,
+     * never an additional trusted root. Candidate order and duplicates
+     * cannot change the verdict for a fixed target. An empty store verifies
+     * nothing.
+     *
      * @param chain List of certificates (DER-encoded or pkijs.Certificate objects)
-     * @returns True if the chain is trusted
+     * @returns True if `chain[0]` chains back to a trusted root
      */
     verifyChain(chain: (Uint8Array | pkijs.Certificate)[]): Promise<boolean>;
+}
+
+/**
+ * Compares two byte strings for exact equality.
+ */
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+    if (left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index++) {
+        if (left[index] !== right[index]) return false;
+    }
+    return true;
+}
+
+/**
+ * A certificate with the encodings this adapter compares, computed once.
+ *
+ * Target identity is bound by exact DER bytes, while pkijs conflates engine
+ * inputs by TBS bytes when it deduplicates. Both views are precomputed per
+ * call so comparisons never re-encode.
+ */
+interface PreparedCertificate {
+    cert: pkijs.Certificate;
+    der: Uint8Array;
+    tbs: Uint8Array;
+}
+
+function prepareCertificate(cert: pkijs.Certificate): PreparedCertificate {
+    return {
+        cert,
+        der: new Uint8Array(cert.toSchema().toBER(false)),
+        tbs:
+            cert.tbsView.length > 0
+                ? cert.tbsView
+                : new Uint8Array(cert.encodeTBS().toBER()),
+    };
 }
 
 /**
@@ -79,10 +121,16 @@ export class SimpleTrustStore implements TrustStore {
     }
 
     /**
-     * Verifies a certificate chain validation using pkijs
+     * Verifies that `chain[0]` chains back to a trusted root using pkijs.
+     *
+     * The pkijs path engine selects its own leaf (the last local
+     * certificate), so the adapter reorders and deduplicates the engine
+     * input internally without changing the public caller order, then
+     * checks that the returned path begins with the intended target.
      */
     async verifyChain(chain: (Uint8Array | pkijs.Certificate)[]): Promise<boolean> {
         if (chain.length === 0) return false;
+        if (this.trustedCerts.length === 0) return false;
 
         // Convert input chain to pkijs.Certificate objects
         const certChain = chain.map((c) => {
@@ -91,16 +139,72 @@ export class SimpleTrustStore implements TrustStore {
             return new pkijs.Certificate({ schema: asn1.result });
         });
 
+        // Encode each input once; every step below reuses these views.
+        const preparedChain = certChain.map((cert) => prepareCertificate(cert));
+        const preparedAnchors = this.trustedCerts.map((cert) => prepareCertificate(cert));
+
+        // Deduplicate by exact DER bytes, keeping the caller's first
+        // occurrence: chain[0] is the verified target and must survive.
+        const uniqueChain = preparedChain.filter(
+            (candidate, index) =>
+                preparedChain.findIndex((other) => bytesEqual(candidate.der, other.der)) ===
+                index
+        );
+        const target = uniqueChain[0];
+        if (target === undefined) return false;
+
+        // Exclude candidate aliases the engine would conflate with the
+        // target: pkijs deduplicates by TBS bytes and could otherwise drop
+        // the caller's exact target in favor of a different signature over
+        // the same TBS. The target object itself is always retained.
+        const candidates = uniqueChain
+            .slice(1)
+            .filter((candidate) => !bytesEqual(candidate.tbs, target.tbs));
+
+        // Place the target last: pkijs builds its path from the last local
+        // certificate, while every other entry stays an untrusted candidate.
+        // A self-signed target that is itself a pinned anchor needs no
+        // intermediates; narrowing the engine to the matching anchor keeps
+        // pkijs from leafing on an unrelated candidate or a different
+        // anchor. Any other pinned target keeps its issuer anchors so an
+        // explicitly trusted intermediate still chains to its root.
+        const matchingAnchors = preparedAnchors.filter((anchor) =>
+            bytesEqual(anchor.der, target.der)
+        );
+        const selfSigned = target.cert.subject.isEqual(target.cert.issuer);
+        let engineCerts: pkijs.Certificate[];
+        let engineAnchors: pkijs.Certificate[];
+        if (matchingAnchors.length > 0 && selfSigned) {
+            engineCerts = [target.cert];
+            engineAnchors = matchingAnchors.map((anchor) => anchor.cert);
+        } else {
+            engineCerts = [...candidates.map((candidate) => candidate.cert), target.cert];
+            engineAnchors =
+                matchingAnchors.length > 0
+                    ? preparedAnchors
+                          .filter((anchor) => !bytesEqual(anchor.tbs, target.tbs))
+                          .map((anchor) => anchor.cert)
+                    : preparedAnchors.map((anchor) => anchor.cert);
+            if (engineAnchors.length === 0) return false;
+        }
+
         // Use pkijs CertificateChainValidationEngine
         const chainEngine = new pkijs.CertificateChainValidationEngine({
-            trustedCerts: this.trustedCerts,
-            certs: [...certChain], // All certs in the potential chain
+            trustedCerts: engineAnchors,
+            certs: engineCerts,
             crls: [], // CRLs not supported in simple verify yet
         });
 
         // Verify the chain
         const result = await chainEngine.verify();
+        if (!result.result) return false;
 
-        return result.result;
+        // Bind the verdict to the intended target: the returned path must
+        // begin with chain[0]. Without this check an unrelated trusted
+        // intermediate from the bag could verify in the signer's place.
+        const leaf = result.certificatePath?.[0];
+        if (leaf === undefined) return false;
+        const leafDer = new Uint8Array(leaf.toSchema().toBER(false));
+        return bytesEqual(leafDer, target.der);
     }
 }
