@@ -1,103 +1,203 @@
-import { test, expect } from "@playwright/test";
-import * as fs from "fs";
-import * as path from "path";
-import { readFileSync, writeFileSync } from "fs";
+import { test, expect, type Route } from "@playwright/test";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import * as asn1js from "asn1js";
+import * as pkijs from "pkijs";
+import {
+    createLocalTsa,
+    createTimestampResponse,
+} from "../../../tests/scripts/local-tsa-fixture";
+
+// The manual LTV tab ships AI Moda as its default TSA and shows the
+// automatic-fetch button for it. Intercepting that URL keeps this journey
+// offline and deterministic while driving the real UI path.
+const AIMODA_TSA_URL = "https://rfc3161.ai.moda/tsa";
+const CORS_HEADERS = {
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-origin": "http://127.0.0.1:5173",
+};
+const SHA256_OID = "2.16.840.1.101.3.4.2.1";
+
+/** The TSA receives a message imprint, never the PDF. */
+function assertTsqShape(body: Buffer): void {
+    expect(body.length).toBeLessThan(1024);
+    expect(body.includes(Buffer.from("%PDF"))).toBe(false);
+    const parsed = asn1js.fromBER(new Uint8Array(body).buffer as ArrayBuffer);
+    expect(parsed.offset).toBe(body.length);
+    const tsq = new pkijs.TimeStampReq({ schema: parsed.result });
+    expect(tsq.messageImprint.hashAlgorithm.algorithmId).toBe(SHA256_OID);
+    expect(tsq.messageImprint.hashedMessage.valueBlock.valueHexView.byteLength).toBe(32);
+    expect(tsq.nonce).toBeDefined();
+}
+
+/**
+ * Structural download check, independent of any cryptographic oracle:
+ * the signed PDF extends the original bytes and carries a document
+ * timestamp dictionary.
+ */
+function assertSignedPdf(originalPath: string, signedPath: string): void {
+    const originalBytes = readFileSync(originalPath);
+    const signedBytes = readFileSync(signedPath);
+    expect(signedBytes.length).toBeGreaterThan(originalBytes.length);
+    expect(Buffer.from(signedBytes.subarray(0, originalBytes.length)).equals(originalBytes)).toBe(
+        true
+    );
+    expect(signedBytes.includes(Buffer.from("DocTimeStamp"))).toBe(true);
+}
 
 test.describe("Manual LTV Flow", () => {
     test("should go through the manual LTV timestamping process", async ({ page }) => {
-        // 1. Navigate to the app
-        await page.goto("/");
+        // Fully offline: the downloaded TSQ is signed by the local TSA
+        // fixture instead of a public server, so this journey is
+        // deterministic and uses per-test temporary paths only.
+        const workDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-demo-manual-"));
+        const tsaDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-demo-manual-tsa-"));
+        try {
+            const localTsa = createLocalTsa(tsaDirectory);
 
-        // 2. Switch to 'Add Timestamp with LTV' tab
-        await page.getByTestId("tab-manual-ltv").click();
+            await page.goto("/");
+            await page.getByTestId("tab-manual-ltv").click();
 
-        // 3. Upload the test PDF
-        const filePath = path.resolve("test.pdf");
-        await page.setInputFiles('input[type="file"]', filePath);
+            const filePath = resolve("test.pdf");
+            await page.setInputFiles('input[type="file"]', filePath);
 
-        // 4. Generate TSQ
-        await page.getByTestId("btn-generate-tsq").click();
+            // TSQ generation: the UI must reach step 2 and offer the download.
+            await page.getByTestId("btn-generate-tsq").click();
+            await expect(page.getByTestId("ltv-step-2")).toBeVisible({ timeout: 15000 });
+            const curlHint = await page.locator(".code").first().textContent();
+            expect(curlHint).toContain("curl");
 
-        // 5. Catch the download of request.tsq
-        const [download] = await Promise.all([
-            page.waitForEvent("download"),
-            page.getByTestId("btn-download-tsq").click(),
-        ]);
+            const [tsqDownload] = await Promise.all([
+                page.waitForEvent("download"),
+                page.getByTestId("btn-download-tsq").click(),
+            ]);
+            const tsqPath = join(workDirectory, "request.tsq");
+            await tsqDownload.saveAs(tsqPath);
+            const tsqBytes = readFileSync(tsqPath);
+            assertTsqShape(tsqBytes);
 
-        const downloadDir = path.resolve("temp_test");
-        if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir);
-        const tsqPath = path.join(downloadDir, "request.tsq");
-        await download.saveAs(tsqPath);
+            // Local signed response fixture: replaces the curl-to-public-TSA step.
+            const tsrBytes = createTimestampResponse(tsaDirectory, localTsa.config, tsqBytes);
+            expect(tsrBytes.length).toBeGreaterThan(tsqBytes.length);
+            const parsedTsr = asn1js.fromBER(new Uint8Array(tsrBytes).buffer as ArrayBuffer);
+            expect(parsedTsr.offset).toBe(tsrBytes.length);
+            const tsrPath = join(workDirectory, "response.tsr");
+            writeFileSync(tsrPath, tsrBytes);
 
-        // 6. Extract curl command from the UI and make HTTP request manually
-        const curlCommandText = await page.locator(".code").first().textContent();
-        expect(curlCommandText).toContain("curl");
+            // Response import: uploading the TSR must reach step 3 & 4.
+            const dropZone = page.getByTestId("upload-response-section");
+            await dropZone.locator('input[type="file"]').setInputFiles(tsrPath);
+            await expect(page.getByTestId("ltv-step-4")).toBeVisible({ timeout: 15000 });
+            // The fixture TSA chain carries no AIA/OCSP/CRL endpoints.
+            await expect(page.locator("text=No external validation sources")).toBeVisible();
 
-        const tsrPath = path.join(downloadDir, "response.tsr");
+            // Verification: finalizing must report success.
+            await page.getByTestId("btn-finalize-ltv").click();
+            await expect(page.getByTestId("ltv-success-message")).toBeVisible();
 
-        const urlMatch = curlCommandText!.match(/response\.tsr\s+(\S+)/);
-        const url = urlMatch ? urlMatch[1] : "";
-
-        const headerMatches = [...curlCommandText!.matchAll(/-H\s+"([^"]+)"/g)];
-        const headers: Record<string, string> = {};
-        for (const match of headerMatches) {
-            const [key, ...valueParts] = match[1].split(": ");
-            if (key && valueParts.length > 0) headers[key] = valueParts.join(": ");
+            // Download: the final PDF preserves the original and carries a timestamp.
+            const [finalDownload] = await Promise.all([
+                page.waitForEvent("download"),
+                page.getByTestId("btn-download-final-ltv").click(),
+            ]);
+            const finalPdfPath = join(workDirectory, "final.pdf");
+            await finalDownload.saveAs(finalPdfPath);
+            assertSignedPdf(filePath, finalPdfPath);
+        } finally {
+            rmSync(workDirectory, { force: true, recursive: true });
+            rmSync(tsaDirectory, { force: true, recursive: true });
         }
+    });
 
-        console.log(`Sending request to: ${url}`);
-        console.log(`Headers:`, headers);
+    test("should complete the manual LTV flow against the offline TSA fixture", async ({
+        page,
+    }) => {
+        const tsaDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-demo-manual-tsa-"));
+        const workDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-demo-manual-"));
+        let handleTsaRequest: ((route: Route) => Promise<void>) | undefined;
+        const capturedTsq: Buffer[] = [];
 
-        if (!url) {
-            console.warn("Could not parse URL from curl command");
-            return;
+        try {
+            const localTsa = createLocalTsa(tsaDirectory);
+            const routeHandler = async (route: Route) => {
+                const request = route.request();
+                if (request.method() === "OPTIONS") {
+                    await route.fulfill({ status: 204, headers: CORS_HEADERS });
+                    return;
+                }
+                if (request.method() !== "POST") {
+                    await route.abort();
+                    throw new Error(`Unexpected TSA method: ${request.method()}`);
+                }
+                const requestBody = request.postDataBuffer();
+                if (requestBody === null) {
+                    await route.abort();
+                    throw new Error("TSA request body is missing");
+                }
+                capturedTsq.push(requestBody);
+                try {
+                    const response = createTimestampResponse(
+                        tsaDirectory,
+                        localTsa.config,
+                        requestBody
+                    );
+                    await route.fulfill({
+                        status: 200,
+                        headers: {
+                            ...CORS_HEADERS,
+                            "content-type": "application/timestamp-reply",
+                        },
+                        body: Buffer.from(response),
+                    });
+                } catch (error: unknown) {
+                    await route.abort();
+                    throw error;
+                }
+            };
+            handleTsaRequest = routeHandler;
+            await page.route(AIMODA_TSA_URL, routeHandler);
+            await page.goto("/");
+
+            await page.getByTestId("tab-manual-ltv").click();
+
+            const filePath = resolve("test.pdf");
+            await page.setInputFiles('input[type="file"]', filePath);
+
+            await expect(page.locator("select")).toHaveValue(AIMODA_TSA_URL);
+            await page.getByTestId("btn-generate-tsq").click();
+
+            await expect(page.getByTestId("btn-automatic-fetch")).toBeVisible();
+            await page.getByTestId("btn-automatic-fetch").click();
+
+            await expect(page.locator('h3:has-text("Step 3 & 4")')).toBeVisible({
+                timeout: 15000,
+            });
+            // The fixture TSA chain carries no AIA/OCSP/CRL endpoints.
+            await expect(page.locator("text=No external validation sources")).toBeVisible();
+
+            await page.getByTestId("btn-finalize-ltv").click();
+            await expect(page.getByTestId("ltv-success-message")).toBeVisible();
+
+            const [finalDownload] = await Promise.all([
+                page.waitForEvent("download"),
+                page.getByTestId("btn-download-final-ltv").click(),
+            ]);
+            const finalPdfPath = join(workDirectory, "final.pdf");
+            await finalDownload.saveAs(finalPdfPath);
+
+            expect(capturedTsq.length).toBeGreaterThan(0);
+            for (const body of capturedTsq) {
+                assertTsqShape(body);
+            }
+            assertSignedPdf(filePath, finalPdfPath);
+        } finally {
+            if (handleTsaRequest !== undefined) {
+                await page.unroute(AIMODA_TSA_URL, handleTsaRequest);
+            }
+            rmSync(workDirectory, { force: true, recursive: true });
+            rmSync(tsaDirectory, { force: true, recursive: true });
         }
-
-        const tsqContent = readFileSync(tsqPath);
-
-        const response = await fetch(url, {
-            method: "POST",
-            headers,
-            body: tsqContent,
-        });
-
-        if (!response.ok) {
-            console.warn(`Request failed: ${response.status} ${response.statusText}`);
-            return;
-        }
-
-        const arrayBuffer = await response.arrayBuffer();
-        writeFileSync(tsrPath, new Uint8Array(arrayBuffer));
-
-        expect(fs.existsSync(tsrPath)).toBe(true);
-
-        // 7. Upload the TSR response
-        // Step 2 has an upload area
-        await page.setInputFiles(
-            '.section:has-text("Upload response") input[type="file"]',
-            tsrPath
-        );
-
-        // 8. Analyze and move to Step 3&4
-        await expect(page.locator('h3:has-text("Step 3 & 4")')).toBeVisible({ timeout: 10000 });
-
-        // 10. Finalize the PDF
-        await page.getByTestId("btn-finalize-ltv").click();
-
-        // 11. Verify success
-        await expect(page.getByTestId("ltv-success-message")).toBeVisible();
-
-        // 12. Download final PDF
-        const [finalDownload] = await Promise.all([
-            page.waitForEvent("download"),
-            page.getByTestId("btn-download-final-ltv").click(),
-        ]);
-
-        const finalPdfPath = path.join(downloadDir, "final.pdf");
-        await finalDownload.saveAs(finalPdfPath);
-        expect(fs.existsSync(finalPdfPath)).toBe(true);
-
-        // Cleanup
-        fs.rmSync(downloadDir, { recursive: true, force: true });
     });
 });

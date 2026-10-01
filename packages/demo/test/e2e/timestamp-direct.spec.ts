@@ -4,6 +4,8 @@ import fs from 'fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import * as asn1js from 'asn1js';
+import * as pkijs from 'pkijs';
 import {
     createLocalTsa,
     createTimestampResponse,
@@ -15,11 +17,13 @@ const CORS_HEADERS = {
     'access-control-allow-methods': 'POST, OPTIONS',
     'access-control-allow-origin': 'http://127.0.0.1:5173',
 };
+const SHA256_OID = '2.16.840.1.101.3.4.2.1';
 
 test.describe('Add Timestamp - Direct Mode', () => {
-    test('should timestamp automatically using the offline TSA fixture', async ({ page }) => {
+    test('should timestamp automatically using the offline TSA fixture', async ({ page }, testInfo) => {
         const tsaDirectory = mkdtempSync(join(tmpdir(), 'pdf-rfc3161-demo-tsa-'));
         let handleTsaRequest: ((route: Route) => Promise<void>) | undefined;
+        const capturedTsq: Buffer[] = [];
 
         try {
             const localTsa = createLocalTsa(tsaDirectory);
@@ -39,6 +43,7 @@ test.describe('Add Timestamp - Direct Mode', () => {
                     await route.abort();
                     throw new Error('TSA request body is missing');
                 }
+                capturedTsq.push(requestBody);
 
                 try {
                     const response = createTimestampResponse(
@@ -89,10 +94,34 @@ test.describe('Add Timestamp - Direct Mode', () => {
             await page.getByTestId('btn-download-final-pdf').click();
             const download = await downloadPromise;
 
-            // Save to temp file
-            const timestampedPath = path.resolve('test-results', 'timestamped-direct.pdf');
+            // Save to the per-test output directory: the shared
+            // test-results/ path races when projects run in parallel workers.
+            const timestampedPath = testInfo.outputPath('timestamped-direct.pdf');
             await download.saveAs(timestampedPath);
             expect(fs.existsSync(timestampedPath)).toBeTruthy();
+
+            // The TSA receives a message imprint, never the PDF: every
+            // captured request must be a small decodable TimeStampReq with
+            // a SHA-256 imprint and a nonce, without PDF bytes.
+            expect(capturedTsq.length).toBeGreaterThan(0);
+            for (const body of capturedTsq) {
+                expect(body.length).toBeLessThan(1024);
+                expect(body.includes(Buffer.from('%PDF'))).toBe(false);
+                const parsed = asn1js.fromBER(new Uint8Array(body).buffer as ArrayBuffer);
+                expect(parsed.offset).toBe(body.length);
+                const tsq = new pkijs.TimeStampReq({ schema: parsed.result });
+                expect(tsq.messageImprint.hashAlgorithm.algorithmId).toBe(SHA256_OID);
+                expect(tsq.messageImprint.hashedMessage.valueBlock.valueHexView.byteLength).toBe(32);
+                expect(tsq.nonce).toBeDefined();
+            }
+
+            // The signed download preserves the original PDF prefix.
+            const originalBytes = fs.readFileSync(filePath);
+            const signedBytes = fs.readFileSync(timestampedPath);
+            expect(signedBytes.length).toBeGreaterThan(originalBytes.length);
+            expect(
+                Buffer.from(signedBytes.subarray(0, originalBytes.length)).equals(originalBytes)
+            ).toBe(true);
 
             // Upload the result to "Validation and Inspect" and check the timestamp result.
             await page.goto('/');
