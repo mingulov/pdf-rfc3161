@@ -5,6 +5,7 @@ import {
     PDFDocument,
     PDFName,
     PDFNumber,
+    type PDFObject,
     PDFRef,
     PDFString,
 } from "pdf-lib-incremental-save";
@@ -314,5 +315,249 @@ describe("preparePdfForTimestamp form preservation", () => {
         await expect(prepareError(await oversizedFieldHierarchyPdf())).resolves.toMatchObject({
             code: TimestampErrorCode.PDF_ERROR,
         });
+    });
+});
+
+interface SigFlagsFixtureOptions {
+    indirectAcroForm: boolean;
+    indirectSigFlags: boolean;
+}
+
+async function createSigFlagsFixture(
+    sigFlags: PDFObject | undefined,
+    options: SigFlagsFixtureOptions
+): Promise<Uint8Array> {
+    const document = await PDFDocument.create();
+    document.addPage([100, 100]);
+    const context = document.context;
+    const acroForm = context.obj({ Fields: PDFArray.withContext(context) });
+    if (sigFlags !== undefined) {
+        acroForm.set(
+            PDFName.of("SigFlags"),
+            options.indirectSigFlags ? context.register(sigFlags) : sigFlags
+        );
+    }
+    document.catalog.set(
+        PDFName.of("AcroForm"),
+        options.indirectAcroForm ? context.register(acroForm) : acroForm
+    );
+    return document.save({ useObjectStreams: false });
+}
+
+async function readSigFlags(bytes: Uint8Array): Promise<PDFObject | undefined> {
+    const document = await PDFDocument.load(bytes, { updateMetadata: false });
+    const acroFormValue = document.catalog.get(PDFName.of("AcroForm"));
+    if (!(acroFormValue instanceof PDFDict) && !(acroFormValue instanceof PDFRef)) {
+        throw new Error("AcroForm is missing from the prepared PDF");
+    }
+    const acroForm = resolveDict(document.context, acroFormValue);
+    const raw = acroForm.get(PDFName.of("SigFlags"));
+    if (raw === undefined) return undefined;
+    return raw instanceof PDFRef ? document.context.lookup(raw) : raw;
+}
+
+async function expectSigFlags(bytes: Uint8Array, expected: number): Promise<void> {
+    const value = await readSigFlags(bytes);
+    expect(value).toBeInstanceOf(PDFNumber);
+    expect((value as PDFNumber).asNumber()).toBe(expected);
+}
+
+describe("preparePdfForTimestamp SigFlags handling (T10 R14)", () => {
+    it("sets SigFlags to 3 when the key is absent", async () => {
+        const prepared = await preparePdfForTimestamp(
+            await createSigFlagsFixture(undefined, {
+                indirectAcroForm: false,
+                indirectSigFlags: false,
+            })
+        );
+
+        await expectSigFlags(prepared.bytes, 3);
+    });
+
+    it.each([0, 1, 2])("upgrades a direct SigFlags %i to 3", async (initial: number) => {
+        const prepared = await preparePdfForTimestamp(
+            await createSigFlagsFixture(PDFNumber.of(initial), {
+                indirectAcroForm: false,
+                indirectSigFlags: false,
+            })
+        );
+
+        await expectSigFlags(prepared.bytes, 3);
+    });
+
+    it.each([
+        { initial: 4, expected: 7 },
+        { initial: 8, expected: 11 },
+        { initial: 12, expected: 15 },
+    ])(
+        "retains unrelated SigFlags bits ($initial becomes $expected)",
+        async ({ initial, expected }: { initial: number; expected: number }) => {
+            const prepared = await preparePdfForTimestamp(
+                await createSigFlagsFixture(PDFNumber.of(initial), {
+                    indirectAcroForm: false,
+                    indirectSigFlags: false,
+                })
+            );
+
+            await expectSigFlags(prepared.bytes, expected);
+        }
+    );
+
+    it("leaves an already conformant SigFlags 3 untouched", async () => {
+        const input = await createSigFlagsFixture(PDFNumber.of(3), {
+            indirectAcroForm: false,
+            indirectSigFlags: false,
+        });
+
+        const prepared = await preparePdfForTimestamp(input);
+
+        await expectSigFlags(prepared.bytes, 3);
+        expect(prepared.bytes.subarray(0, input.length)).toEqual(input);
+    });
+
+    it("leaves an indirect already conformant SigFlags 3 untouched without rewrite", async () => {
+        const input = await createSigFlagsFixture(PDFNumber.of(3), {
+            indirectAcroForm: false,
+            indirectSigFlags: true,
+        });
+
+        const prepared = await preparePdfForTimestamp(input);
+
+        await expectSigFlags(prepared.bytes, 3);
+        expect(prepared.bytes.subarray(0, input.length)).toEqual(input);
+        const reloaded = await PDFDocument.load(prepared.bytes, { updateMetadata: false });
+        const acroFormValue = reloaded.catalog.get(PDFName.of("AcroForm"));
+        expect(acroFormValue).toBeDefined();
+        const acroForm = resolveDict(reloaded.context, acroFormValue as PDFDict | PDFRef);
+        expect(acroForm.get(PDFName.of("SigFlags"))).toBeInstanceOf(PDFRef);
+    });
+
+    it.each([true, false])(
+        "upgrades an indirect SigFlags through %s AcroForm storage",
+        async (indirectAcroForm: boolean) => {
+            const prepared = await preparePdfForTimestamp(
+                await createSigFlagsFixture(PDFNumber.of(1), {
+                    indirectAcroForm,
+                    indirectSigFlags: true,
+                })
+            );
+
+            await expectSigFlags(prepared.bytes, 3);
+        }
+    );
+
+    it.each([true, false])(
+        "upgrades a direct SigFlags through %s AcroForm storage",
+        async (indirectAcroForm: boolean) => {
+            const prepared = await preparePdfForTimestamp(
+                await createSigFlagsFixture(PDFNumber.of(2), {
+                    indirectAcroForm,
+                    indirectSigFlags: false,
+                })
+            );
+
+            await expectSigFlags(prepared.bytes, 3);
+        }
+    );
+
+    it.each([
+        { label: "string", indirect: false },
+        { label: "array", indirect: false },
+        { label: "non-integer number", indirect: false },
+        { label: "negative number", indirect: false },
+        { label: "indirect string", indirect: true },
+    ])("rejects a malformed $label SigFlags value", async ({ label, indirect }: { label: string; indirect: boolean }) => {
+        const document = await PDFDocument.create();
+        document.addPage([100, 100]);
+        const context = document.context;
+        const malformed: PDFObject =
+            label === "string" || label === "indirect string"
+                ? PDFString.of("3")
+                : label === "array"
+                  ? PDFArray.withContext(context)
+                  : label === "non-integer number"
+                    ? PDFNumber.of(1.5)
+                    : PDFNumber.of(-1);
+        const acroForm = context.obj({ Fields: PDFArray.withContext(context) });
+        acroForm.set(
+            PDFName.of("SigFlags"),
+            indirect ? context.register(malformed) : malformed
+        );
+        document.catalog.set(PDFName.of("AcroForm"), acroForm);
+        const input = await document.save({ useObjectStreams: false });
+
+        await expect(preparePdfForTimestamp(input)).rejects.toMatchObject({
+            code: TimestampErrorCode.PDF_ERROR,
+        });
+    });
+});
+
+describe("preparePdfForTimestamp certification policy preservation (T10)", () => {
+    it("preserves DocMDP/FieldMDP policy dictionaries byte-identically; authorization is unsupported", async () => {
+        // Certification authorization (whether timestamping is permitted under
+        // the DocMDP/FieldMDP policy, and whether this update keeps the
+        // certification valid) is explicitly unsupported: the library performs
+        // no policy evaluation. This pins the structural guarantee only: the
+        // policy dictionaries survive preparation byte-identically because the
+        // original revision is never rewritten.
+        const document = await PDFDocument.create();
+        document.addPage([100, 100]);
+        const context = document.context;
+        const docMdpReference = context.obj({
+            Type: PDFName.of("SigRef"),
+            TransformMethod: PDFName.of("DocMDP"),
+            TransformParams: context.obj({
+                Type: PDFName.of("TransformParams"),
+                P: PDFNumber.of(2),
+                V: PDFName.of("1.2"),
+            }),
+        });
+        const fieldMdpReference = context.obj({
+            Type: PDFName.of("SigRef"),
+            TransformMethod: PDFName.of("FieldMDP"),
+            TransformParams: context.obj({
+                Type: PDFName.of("TransformParams"),
+                P: PDFNumber.of(2),
+                Fields: context.obj(["Existing"]),
+            }),
+        });
+        const perms = context.obj({
+            DocMDP: context.register(
+                context.obj({
+                    Type: PDFName.of("Sig"),
+                    Filter: PDFName.of("Adobe.PPKLite"),
+                    SubFilter: PDFName.of("adbe.pkcs7.detached"),
+                    Reference: context.obj([docMdpReference]),
+                })
+            ),
+            FieldMDP: context.register(
+                context.obj({
+                    Type: PDFName.of("Sig"),
+                    Filter: PDFName.of("Adobe.PPKLite"),
+                    SubFilter: PDFName.of("adbe.pkcs7.detached"),
+                    Reference: context.obj([fieldMdpReference]),
+                })
+            ),
+        });
+        document.catalog.set(PDFName.of("Perms"), context.register(perms));
+        const input = await document.save({ useObjectStreams: false });
+
+        const prepared = await preparePdfForTimestamp(input);
+
+        expect(prepared.bytes.subarray(0, input.length)).toEqual(input);
+        const reloaded = await PDFDocument.load(prepared.bytes, { updateMetadata: false });
+        const reloadedPerms = reloaded.catalog.lookup(PDFName.of("Perms"), PDFDict);
+        const docMdp = reloadedPerms.lookup(PDFName.of("DocMDP"), PDFDict);
+        const docMdpReferences = docMdp.lookup(PDFName.of("Reference"), PDFArray);
+        const docMdpParams = (
+            resolveDict(reloaded.context, docMdpReferences.get(0) as PDFDict | PDFRef).lookup(
+                PDFName.of("TransformParams"),
+                PDFDict
+            )
+        ).lookup(PDFName.of("P"), PDFNumber);
+        expect(docMdpParams.asNumber()).toBe(2);
+        const fieldMdp = reloadedPerms.lookup(PDFName.of("FieldMDP"), PDFDict);
+        const fieldMdpReferences = fieldMdp.lookup(PDFName.of("Reference"), PDFArray);
+        expect(fieldMdpReferences.size()).toBe(1);
     });
 });

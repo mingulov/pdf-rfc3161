@@ -43,16 +43,12 @@ const MAX_PDF_STRING_LENGTH = 2048;
  */
 function sanitizePdfString(value: string, fieldName: string): string {
     if (value.length > MAX_PDF_STRING_LENGTH) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
+        throw pdfError(
             `${fieldName} exceeds maximum length of ${MAX_PDF_STRING_LENGTH.toString()} characters (got ${value.length.toString()})`
         );
     }
     if (value.includes("\x00")) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
-            `${fieldName} contains embedded NUL character`
-        );
+        throw pdfError(`${fieldName} contains embedded NUL character`);
     }
     return value;
 }
@@ -254,27 +250,13 @@ function allocateSignatureFieldName(requestedBaseName: string, existingNames: Se
 }
 
 /**
- * Search window constants for ByteRange replacement.
- * These values ensure we find the correct ByteRange placeholder when
- * multiple signatures exist in a PDF.
- */
-
-/**
- * Bytes to search backward from the dictionary start hint.
- * The hint points to the start of the signature dictionary (`<<`),
- * but the `/ByteRange` key might appear slightly before in edge cases
- * (e.g., whitespace or formatting variations). 100 bytes provides a
- * small safety margin without risking matching a previous signature.
- */
-const BYTERANGE_SEARCH_BACKWARD = 100;
-
-/**
- * Bytes to search forward from the dictionary start hint.
- * Must be large enough to cover:
- * - The entire signature dictionary structure (~1KB)
- * - The `/Contents` hex string which can be up to 65,536 hex chars (32KB token)
- * - Additional dictionary entries after `/Contents`
- * 100KB (102,400 bytes) provides ample headroom for the largest supported tokens.
+ * Bytes to search forward from the signature dictionary start hint for the
+ * ByteRange placeholder. The hint is the `<<` of the newly serialized
+ * signature object, whose frozen serialization always emits `/ByteRange`
+ * before `/Contents`, so the first match at or after the hint is that
+ * object's placeholder. Candidates before the hint belong to earlier
+ * content and must never be patched; a miss is PDF_ERROR, never a
+ * file-wide lexical fallback (R2).
  */
 const BYTERANGE_SEARCH_FORWARD = 100 * 1024;
 
@@ -413,10 +395,7 @@ export async function preparePdfForTimestamp(
         );
     }
     if (!(sigPdfDoc.catalog instanceof PDFDict)) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
-            "Failed to load PDF for timestamp preparation: catalog is missing"
-        );
+        throw pdfError("Failed to load PDF for timestamp preparation: catalog is missing");
     }
 
     const sigContext = sigPdfDoc.context;
@@ -450,8 +429,21 @@ export async function preparePdfForTimestamp(
         markCatalogForSave();
         acroForm = { value: newAcroForm, ref: newAcroFormRef };
     } else {
-        if (!acroForm.value.has(PDFName.of("SigFlags"))) {
-            acroForm.value.set(PDFName.of("SigFlags"), PDFNumber.of(3));
+        const rawSigFlags = acroForm.value.get(PDFName.of("SigFlags"));
+        const resolved = rawSigFlags instanceof PDFRef ? sigContext.lookup(rawSigFlags) : rawSigFlags;
+        const existing = resolved instanceof PDFNumber ? resolved.asNumber() : -1;
+        if (rawSigFlags !== undefined && (!Number.isSafeInteger(existing) || existing < 0)) {
+            throw pdfError("AcroForm /SigFlags is malformed");
+        }
+        // Set bits 1 and 2, keeping other bits.
+        let updated = 3;
+        if (rawSigFlags !== undefined) {
+            updated = existing;
+            if (updated % 2 === 0) updated += 1;
+            if (updated % 4 < 2) updated += 2;
+        }
+        if (rawSigFlags === undefined || updated !== existing) {
+            acroForm.value.set(PDFName.of("SigFlags"), PDFNumber.of(updated));
             if (acroForm.ref === undefined) {
                 markCatalogForSave();
             } else {
@@ -476,7 +468,7 @@ export async function preparePdfForTimestamp(
     const sigPages = sigPdfDoc.getPages();
     const sigFirstPage = sigPages[0];
     if (!sigFirstPage) {
-        throw new TimestampError(TimestampErrorCode.PDF_ERROR, "PDF has no pages");
+        throw pdfError("PDF has no pages");
     }
 
     const sigPageRef = sigFirstPage.ref;
@@ -554,24 +546,29 @@ export async function preparePdfForTimestamp(
     finalBytes.set(pdfBytes, 0);
     finalBytes.set(incrementalBytes, pdfBytes.length);
 
-    const prepared = calculateByteRanges(finalBytes, placeholderHexLength);
+    const prepared = calculateByteRanges(finalBytes, placeholderHexLength, pdfBytes.length);
     return prepared;
 }
 /**
- * Finds the signature placeholder in the PDF and calculates byte ranges.
- * Optimized to search from the end of the file since signatures are appended.
+ * Finds the new signature placeholder in the appended revision and calculates
+ * byte ranges. The search never leaves the incremental update starting at
+ * `revisionStart`: earlier revisions may hold same-length placeholders, and a
+ * second match inside the update means a decoy (e.g. inside a field-name
+ * string) shares it with the real placeholder, so the new signature's
+ * identity is ambiguous and must reject with PDF_ERROR (R2).
  */
-function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number): PreparedPDF {
-    // We only need to search the tail of the PDF because we just appended the signature
-    // a few lines ago in preparePdfForTimestamp.
-    // Ensure we read enough to cover the placeholder plus some overhead (e.g. 4KB for dict structure)
-    const minSearchSize = 50 * 1024;
-    const requiredSize = placeholderHexLength + 4096;
-    const searchBufferSize = Math.min(pdfBytes.length, Math.max(minSearchSize, requiredSize));
-
-    let searchStartOffset = pdfBytes.length - searchBufferSize;
-    let tailBytes = pdfBytes.subarray(searchStartOffset);
-    let tailString = new TextDecoder("latin1").decode(tailBytes);
+function calculateByteRanges(
+    pdfBytes: Uint8Array,
+    placeholderHexLength: number,
+    revisionStart: number
+): PreparedPDF {
+    // Decode the appended revision only: the new signature object is always in
+    // it, earlier revisions may hold same-length placeholders, and a tail
+    // window could cut the real placeholder while keeping a decoy (ambiguous
+    // identity must reject, never patch a positional guess).
+    const searchStartOffset = revisionStart;
+    const tailBytes = pdfBytes.subarray(searchStartOffset);
+    const tailString = new TextDecoder("latin1").decode(tailBytes);
 
     // Find the Contents hex string - it will look like: /Contents<000000...>
     // We look for a Contents with our exact placeholder length filled with zeros.
@@ -581,34 +578,26 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
         `/Contents\\s{0,100}<(0{${String(placeholderHexLength)}})>`,
         "g"
     );
-    // Helper to find match in string
+    // Helper to find the single placeholder match in a revision-scoped string.
+    // The real placeholder is always inside the appended revision, so exactly
+    // one match there is provably the new signature's; a second match is a
+    // same-length decoy and the identity is ambiguous (R2: reject, never guess).
     const findMatch = (str: string) => {
         let m;
         let pMatch = null;
         // Reset regex state
         contentsPattern.lastIndex = 0;
         while ((m = contentsPattern.exec(str)) !== null) {
+            if (pMatch !== null) throw pdfError("Ambiguous signature placeholder");
             pMatch = m;
-            // Take the last match (most recently added signature)
         }
         return pMatch;
     };
 
-    let placeholderMatch: RegExpExecArray | null = findMatch(tailString);
-
-    // If not found in tail, search the whole file (expensive but necessary fallback)
-    if (!placeholderMatch?.[1]) {
-        searchStartOffset = 0;
-        tailBytes = pdfBytes;
-        tailString = new TextDecoder("latin1").decode(tailBytes);
-        placeholderMatch = findMatch(tailString);
-    }
+    const placeholderMatch: RegExpExecArray | null = findMatch(tailString);
 
     if (!placeholderMatch?.[1]) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
-            "Could not find signature placeholder in PDF tail"
-        );
+        throw pdfError("Could not find signature placeholder in PDF tail");
     }
 
     // Now find the enclosing dictionary by searching backwards from the placeholder
@@ -665,16 +654,20 @@ function calculateByteRanges(pdfBytes: Uint8Array, placeholderHexLength: number)
 
 /**
  * Updates the ByteRange values in a prepared PDF.
+ *
+ * @internal Exported for PDF-invariant regression tests only; not part of
+ * the package surface.
  */
-function updateByteRange(
+export function updateByteRange(
     pdfBytes: Uint8Array,
     byteRange: [number, number, number, number],
     searchHintOffset = 0
 ): Uint8Array {
-    // Only decode the relevant part around the hint
-    // See BYTERANGE_SEARCH_BACKWARD and BYTERANGE_SEARCH_FORWARD for rationale
-    const searchStart = Math.max(0, searchHintOffset - BYTERANGE_SEARCH_BACKWARD);
-    const searchEnd = Math.min(pdfBytes.length, searchHintOffset + BYTERANGE_SEARCH_FORWARD);
+    // Decode only the forward window at/after the hint: the new signature
+    // dictionary starts there, so its ByteRange placeholder is the first
+    // match. Anything earlier belongs to prior content (R2).
+    const searchStart = Math.min(Math.max(0, searchHintOffset), pdfBytes.length);
+    const searchEnd = Math.min(pdfBytes.length, searchStart + BYTERANGE_SEARCH_FORWARD);
     const searchRegion = pdfBytes.subarray(searchStart, searchEnd);
     const searchString = new TextDecoder("latin1").decode(searchRegion);
 
@@ -685,13 +678,7 @@ function updateByteRange(
     const match = byteRangePattern.exec(searchString);
 
     if (!match) {
-        // Fallback to full search if not found in hint region
-        const fullString = new TextDecoder("latin1").decode(pdfBytes);
-        const fullMatch = byteRangePattern.exec(fullString);
-        if (!fullMatch) return pdfBytes;
-
-        // Recalculate match relative to start
-        return replaceByteRangeAt(pdfBytes, byteRange, fullMatch.index, fullMatch[0].length);
+        throw pdfError("Could not find the new signature ByteRange placeholder");
     }
 
     return replaceByteRangeAt(pdfBytes, byteRange, searchStart + match.index, match[0].length);
@@ -711,8 +698,7 @@ function replaceByteRangeAt(
     )} ${String(byteRange[3])}]`;
 
     if (basicStr.length > oldLength) {
-        throw new TimestampError(
-            TimestampErrorCode.PDF_ERROR,
+        throw pdfError(
             `ByteRange placeholder too small! Need ${String(basicStr.length)} chars, found ${String(
                 oldLength
             )}. ` + `Please increase placeholder size in preparePdfForTimestamp.`

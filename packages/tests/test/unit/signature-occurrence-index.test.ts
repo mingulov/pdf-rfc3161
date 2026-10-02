@@ -769,7 +769,9 @@ describe("lexical signature /Contents occurrence binding", () => {
 
     it("shares cached signature buffers and decodes shared metadata once", async () => {
         const pdf = await manyFieldsSharingOneSignaturePdf(4, true);
-        const metadataDecode = vi.spyOn(PDFHexString.prototype, "asString");
+        // T10 S5 decodes hex metadata via decodeText (asString returns raw
+        // hex digits); the shared-value single-decode contract is unchanged.
+        const metadataDecode = vi.spyOn(PDFHexString.prototype, "decodeText");
 
         try {
             const timestamps = await extractTimestamps(pdf);
