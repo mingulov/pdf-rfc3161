@@ -15,6 +15,12 @@ function invalidResponse(message: string): TimestampError {
  */
 export interface DerDecodeBudget {
     remainingNodes: number;
+    /**
+     * Allowance the budget started with, cited when it exhausts. Budgets
+     * from createDerDecodeBudget always record it; hand-built budgets
+     * without it fall back to MAX_DER_NODES in the message.
+     */
+    initialNodes?: number;
 }
 
 /** Creates a fresh node budget (default: one full `MAX_DER_NODES` allowance). */
@@ -25,13 +31,13 @@ export function createDerDecodeBudget(maxNodes: number = MAX_DER_NODES): DerDeco
             `DER node budget must be a positive safe integer (got ${String(maxNodes)})`
         );
     }
-    return { remainingNodes: maxNodes };
+    return { remainingNodes: maxNodes, initialNodes: maxNodes };
 }
 
 function consumeDerNode(budget: DerDecodeBudget, description: string): void {
     if (!Number.isSafeInteger(budget.remainingNodes) || budget.remainingNodes <= 0) {
         throw invalidResponse(
-            `${description}: ASN.1 node count exceeds the supported limit of ${MAX_DER_NODES.toString()} nodes`
+            `${description}: ASN.1 node count exceeds the supported limit of ${(budget.initialNodes ?? MAX_DER_NODES).toString()} nodes`
         );
     }
     budget.remainingNodes -= 1;
@@ -291,7 +297,14 @@ export function parseCanonicalDERSequenceTree(
         throw invalidResponse(`${description}: trailing bytes are not permitted`);
     }
 
-    const parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    // asn1js throws a plain Error on undecodable content (e.g. corrupted
+    // GeneralizedTime); normalize it like the offset failure below.
+    let parsed: ReturnType<typeof asn1js.fromBER>;
+    try {
+        parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    } catch {
+        throw invalidResponse(`${description}: ASN.1 parse failed`);
+    }
     if (parsed.offset === -1) {
         throw invalidResponse(`${description}: ASN.1 parse failed${decoderDetail(parsed)}`);
     }
@@ -325,7 +338,14 @@ export function parseCanonicalDERValue(
         throw invalidResponse(`${description}: trailing bytes are not permitted`);
     }
 
-    const parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    // asn1js throws a plain Error on undecodable content (e.g. corrupted
+    // GeneralizedTime); normalize it like the offset failure below.
+    let parsed: ReturnType<typeof asn1js.fromBER>;
+    try {
+        parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    } catch {
+        throw invalidResponse(`${description}: ASN.1 parse failed`);
+    }
     if (parsed.offset === -1) {
         throw invalidResponse(`${description}: ASN.1 parse failed${decoderDetail(parsed)}`);
     }

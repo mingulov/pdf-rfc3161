@@ -196,8 +196,24 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
 
         let index = 0;
 
-        // Parse version
-        const version = (values[index++] as asn1js.Integer).valueBlock.valueDec;
+        // Parse version. A missing element throws below and funnels
+        // through the normalized wrapper; a present non-INTEGER would
+        // otherwise decode as undefined (or, for ENUMERATED, as a
+        // numeric valueDec), so reject anything that is not a
+        // universal INTEGER by tag. instanceof alone is insufficient
+        // because asn1js Enumerated extends Integer.
+        const versionElement = values[index++] as asn1js.Integer;
+        const version = versionElement.valueBlock.valueDec;
+        if (
+            versionElement.idBlock.tagClass !== 1 ||
+            versionElement.idBlock.tagNumber !== 2 ||
+            typeof version !== "number"
+        ) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "TimeStampedData version must be an INTEGER"
+            );
+        }
 
         // Parse dataUri (optional)
         let dataUri: string | undefined;
@@ -243,9 +259,12 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
         if (error instanceof TimestampError) {
             throw error;
         }
+        // Deterministic rejection: engine-specific crash text stays out
+        // of the contract; the original failure is retained as `cause`.
         throw new TimestampError(
             TimestampErrorCode.INVALID_RESPONSE,
-            `Failed to parse TimeStampedData: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to parse TimeStampedData envelope",
+            error
         );
     }
 }
@@ -375,11 +394,18 @@ function parseMetaData(metaDataSeq: asn1js.Sequence): ParsedTimeStampedData["met
         const attributes = (values[index] as asn1js.Sequence).valueBlock.value;
         for (const attr of attributes) {
             if (attr instanceof asn1js.Sequence) {
+                // Skip (never crash on or coerce) attributes outside the
+                // OID plus SET-of-Utf8String shape the builder emits.
                 const attrValues = attr.valueBlock.value;
-                if (attrValues.length >= 2) {
-                    const oid = (attrValues[0] as asn1js.ObjectIdentifier).valueBlock.toString();
-                    const values = (attrValues[1] as asn1js.Set).valueBlock.value;
-                    otherMetaData[oid] = values.map(
+                const attrId = attrValues[0];
+                const attrSet = attrValues[1];
+                if (
+                    attrId instanceof asn1js.ObjectIdentifier &&
+                    attrSet instanceof asn1js.Set &&
+                    attrSet.valueBlock.value.every((v) => v instanceof asn1js.Utf8String)
+                ) {
+                    const oid = attrId.valueBlock.toString();
+                    otherMetaData[oid] = attrSet.valueBlock.value.map(
                         (v: asn1js.AsnType) => (v as asn1js.Utf8String).valueBlock.value
                     );
                 }

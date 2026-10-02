@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import * as asn1js from "asn1js";
+import * as pkijs from "pkijs";
 import {
     createTimeStampedData,
     parseTimeStampedData,
@@ -228,6 +230,211 @@ describe("RFC 5544 TimeStampedData", () => {
     // temporalEvidence starts with a context-specific tag for the CHOICE
     // between tstEvidence and ersEvidence. Before the fix the parser would
     // treat the temporalEvidence Sequence as a malformed metaData.
+    // T11 (R9): hostile-schema inputs must reject deterministically --
+    // stable INVALID_RESPONSE code and message (never engine-specific
+    // TypeError text), with the original failure retained as `cause`.
+    // A non-INTEGER version must reject instead of parsing as undefined.
+    // Malformed otherMetaData attributes follow the established skip
+    // policy instead of crashing or coercing to null.
+    describe("deterministic schema rejection (T11/R9)", () => {
+        const TSD_OID = "1.2.840.113549.1.9.16.1.31";
+        const STABLE_MESSAGE = "Failed to parse TimeStampedData envelope";
+
+        function temporalEvidence(): asn1js.Sequence {
+            return new asn1js.Sequence({
+                value: [
+                    new asn1js.Constructed({
+                        idBlock: { tagClass: 3, tagNumber: 0 },
+                        value: [new asn1js.Sequence({ value: [] })],
+                    }),
+                ],
+            });
+        }
+
+        function envelopeWithInner(inner: asn1js.AsnType): Uint8Array {
+            const contentInfo = new pkijs.ContentInfo({
+                contentType: TSD_OID,
+                content: new asn1js.OctetString({ valueHex: inner.toBER(false) }),
+            });
+            return new Uint8Array(contentInfo.toSchema().toBER(false));
+        }
+
+        function expectStableRejection(envelope: Uint8Array): TimestampError {
+            let thrown: unknown;
+            try {
+                parseTimeStampedData(envelope);
+            } catch (error) {
+                thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(TimestampError);
+            const timestampError = thrown as TimestampError;
+            expect(timestampError.code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect(timestampError.message).toBe(STABLE_MESSAGE);
+            return timestampError;
+        }
+
+        it("rejects a non-SEQUENCE TimeStampedData with the stable message", () => {
+            expectStableRejection(envelopeWithInner(new asn1js.Integer({ value: 1 })));
+        });
+
+        it("rejects an empty TimeStampedData SEQUENCE with the stable message", () => {
+            expectStableRejection(envelopeWithInner(new asn1js.Sequence({ value: [] })));
+        });
+
+        it("rejects a non-INTEGER version instead of parsing it as undefined", () => {
+            const envelope = envelopeWithInner(
+                new asn1js.Sequence({
+                    value: [new asn1js.Utf8String({ value: "x" }), temporalEvidence()],
+                })
+            );
+            let thrown: unknown;
+            try {
+                parseTimeStampedData(envelope);
+            } catch (error) {
+                thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(TimestampError);
+            expect((thrown as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect((thrown as TimestampError).message).toBe(
+                "TimeStampedData version must be an INTEGER"
+            );
+        });
+
+        it("rejects an ENUMERATED version even when its value is 1 (T11 fix round 1)", () => {
+            // ENUMERATED decodes to a numeric valueDec, so a value-only
+            // guard accepts it; the parser must require the INTEGER tag.
+            // (instanceof asn1js.Integer alone is insufficient because
+            // asn1js Enumerated extends Integer.)
+            const envelope = envelopeWithInner(
+                new asn1js.Sequence({
+                    value: [new asn1js.Enumerated({ value: 1 }), temporalEvidence()],
+                })
+            );
+            let thrown: unknown;
+            try {
+                parseTimeStampedData(envelope);
+            } catch (error) {
+                thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(TimestampError);
+            expect((thrown as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect((thrown as TimestampError).message).toBe(
+                "TimeStampedData version must be an INTEGER"
+            );
+        });
+
+        it("rejects an ENUMERATED version with a non-1 value via the tag check (T11 fix round 1)", () => {
+            // Variant: numeric valueDec (2) would also pass a value-only
+            // guard, so rejection proves the tag check fires rather than
+            // any value comparison.
+            const envelope = envelopeWithInner(
+                new asn1js.Sequence({
+                    value: [new asn1js.Enumerated({ value: 2 }), temporalEvidence()],
+                })
+            );
+            let thrown: unknown;
+            try {
+                parseTimeStampedData(envelope);
+            } catch (error) {
+                thrown = error;
+            }
+            expect(thrown).toBeInstanceOf(TimestampError);
+            expect((thrown as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect((thrown as TimestampError).message).toBe(
+                "TimeStampedData version must be an INTEGER"
+            );
+        });
+
+        it("rejects a missing temporalEvidence with the stable message", () => {
+            expectStableRejection(
+                envelopeWithInner(new asn1js.Sequence({ value: [new asn1js.Integer({ value: 1 })] }))
+            );
+        });
+
+        it("rejects a non-SEQUENCE temporalEvidence with the stable message", () => {
+            expectStableRejection(
+                envelopeWithInner(
+                    new asn1js.Sequence({
+                        value: [new asn1js.Integer({ value: 1 }), new asn1js.Integer({ value: 2 })],
+                    })
+                )
+            );
+        });
+
+        it("rejects a missing ContentInfo content with the stable message", () => {
+            const raw = new asn1js.Sequence({
+                value: [new asn1js.ObjectIdentifier({ value: TSD_OID })],
+            });
+            expectStableRejection(new Uint8Array(raw.toBER(false)));
+        });
+
+        it("retains the original failure as cause on schema crashes", () => {
+            const timestampError = expectStableRejection(
+                envelopeWithInner(new asn1js.Integer({ value: 1 }))
+            );
+            expect(timestampError.cause).toBeInstanceOf(Error);
+        });
+
+        it("skips malformed otherMetaData attributes instead of crashing", () => {
+            const envelope = envelopeWithInner(
+                new asn1js.Sequence({
+                    value: [
+                        new asn1js.Integer({ value: 1 }),
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.Boolean({ value: true }),
+                                new asn1js.Sequence({
+                                    value: [
+                                        new asn1js.Sequence({
+                                            value: [
+                                                new asn1js.ObjectIdentifier({ value: "1.2.3.4" }),
+                                                new asn1js.Integer({ value: 9 }),
+                                            ],
+                                        }),
+                                    ],
+                                }),
+                            ],
+                        }),
+                        temporalEvidence(),
+                    ],
+                })
+            );
+            const parsed = parseTimeStampedData(envelope);
+            expect(parsed.version).toBe(1);
+            expect(parsed.metaData?.otherMetaData ?? {}).toEqual({});
+        });
+
+        it("skips non-Utf8String otherMetaData values instead of coercing to null", () => {
+            const envelope = envelopeWithInner(
+                new asn1js.Sequence({
+                    value: [
+                        new asn1js.Integer({ value: 1 }),
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.Boolean({ value: true }),
+                                new asn1js.Sequence({
+                                    value: [
+                                        new asn1js.Sequence({
+                                            value: [
+                                                new asn1js.ObjectIdentifier({ value: "1.2.3.4" }),
+                                                new asn1js.Set({
+                                                    value: [new asn1js.Integer({ value: 9 })],
+                                                }),
+                                            ],
+                                        }),
+                                    ],
+                                }),
+                            ],
+                        }),
+                        temporalEvidence(),
+                    ],
+                })
+            );
+            const parsed = parseTimeStampedData(envelope);
+            expect(parsed.metaData?.otherMetaData ?? {}).toEqual({});
+        });
+    });
+
     describe("metaData/temporalEvidence disambiguator (audit D)", () => {
         it("envelope without metaData parses temporalEvidence cleanly (dataUri-only)", () => {
             // Reproduces the Task 4.9 regression: only dataUri set, no

@@ -79,4 +79,22 @@ describe("hasTimestampingEKU", () => {
             )
         ).toBe(false);
     });
+
+    // T11 (0x18): asn1js throws a plain Error on corrupted
+    // GeneralizedTime content; the EKU check must fail closed (false),
+    // never let it escape uncoded.
+    it("returns false when the EKU value throws during DER decoding", () => {
+        const hostile = new Uint8Array([0x18, 0x0f, ...new TextEncoder().encode("2030010100000!Z")]);
+        expect(
+            hasTimestampingEKU(
+                certWithExtensions([
+                    new pkijs.Extension({
+                        extnID: OID_EKU_EXT,
+                        critical: true,
+                        extnValue: hostile.buffer,
+                    }),
+                ])
+            )
+        ).toBe(false);
+    });
 });

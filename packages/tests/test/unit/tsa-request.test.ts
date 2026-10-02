@@ -5,6 +5,7 @@ import {
     createTimestampRequest,
     createTimestampRequestFromHash,
 } from "../../../core/src/tsa/request.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 
 const SHA256_OID = "2.16.840.1.101.3.4.2.1";
 const SHA384_OID = "2.16.840.1.101.3.4.2.2";
@@ -165,6 +166,59 @@ describe("TSA Request", () => {
             expect(tsReq.messageImprint.hashAlgorithm.algorithmId).toBe(SHA256_OID);
             const actualHash = Array.from(tsReq.messageImprint.hashedMessage.valueBlock.valueHexView);
             expect(actualHash).toEqual(Array.from(hash));
+        });
+
+        // T11 (R19): RFC 3161 S2.4.1 requires the imprint length to match
+        // the hash algorithm (32/48/64 bytes). Wrong lengths reject with
+        // INVALID_ARGUMENT before serialization -- including offset views,
+        // which must measure the view, not the backing buffer.
+        it.each([
+            ["SHA-256" as const, 32],
+            ["SHA-384" as const, 48],
+            ["SHA-512" as const, 64],
+        ])("accepts an exact-length %s digest", (algorithm, length) => {
+            const hash = new Uint8Array(length).fill(7);
+            const { request } = createTimestampRequestFromHash(hash, algorithm);
+            const tsReq = parseRequest(request);
+            expect(tsReq.messageImprint.hashedMessage.valueBlock.valueHexView.length).toBe(length);
+        });
+
+        it.each([
+            ["SHA-256" as const, 31, 32],
+            ["SHA-256" as const, 33, 32],
+            ["SHA-384" as const, 32, 48],
+            ["SHA-384" as const, 49, 48],
+            ["SHA-512" as const, 33, 64],
+            ["SHA-512" as const, 65, 64],
+            ["SHA-256" as const, 0, 32],
+        ])("rejects a %s digest of %i bytes before serialization", (algorithm, length, expected) => {
+            const hash = new Uint8Array(length).fill(7);
+            try {
+                createTimestampRequestFromHash(hash, algorithm);
+            } catch (error) {
+                expect(error).toBeInstanceOf(TimestampError);
+                expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_ARGUMENT);
+                expect((error as TimestampError).message).toContain(
+                    `${algorithm} digest must be ${expected.toString()} bytes`
+                );
+                return;
+            }
+            throw new Error(`expected a ${length.toString()}-byte ${algorithm} digest to throw`);
+        });
+
+        it("measures offset views by the view, not the backing buffer", () => {
+            const backing = new Uint8Array(96).fill(7);
+            const shortView = backing.subarray(8, 39);
+            expect(shortView.length).toBe(31);
+            expect(() => createTimestampRequestFromHash(shortView, "SHA-256")).toThrow(TimestampError);
+
+            const exactView = backing.subarray(8, 40);
+            expect(exactView.length).toBe(32);
+            const { request } = createTimestampRequestFromHash(exactView, "SHA-256");
+            const tsReq = parseRequest(request);
+            expect(Array.from(tsReq.messageImprint.hashedMessage.valueBlock.valueHexView)).toEqual(
+                Array.from(exactView)
+            );
         });
     });
 

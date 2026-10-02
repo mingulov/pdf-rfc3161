@@ -22,6 +22,10 @@ import {
     type RFC3161TokenFixture,
     type RFC3161TokenFixtureOptions,
 } from "../fixtures/rfc3161-token.js";
+import {
+    parseTimestampToken as parseStrictToken,
+    selectSignerCertificate,
+} from "../../../core/src/tsa/token-validation.js";
 
 interface ValidationResult {
     token: Uint8Array;
@@ -674,9 +678,11 @@ describe("signer validity encodings (T09a fix round 1)", () => {
         expect(extracted[0]?.token).toEqual(token.rawToken);
     });
 
-    it("rejects corrupted GeneralizedTime validity with a parse error", async () => {
-        // GeneralizedTime corruption throws during ASN.1 parsing, before any
-        // validity gate runs: assert the throw itself, not a gate message.
+    it("rejects corrupted GeneralizedTime validity with a coded parse error", async () => {
+        // T11 (0x18) intentional delta: GeneralizedTime corruption still
+        // rejects during ASN.1 parsing before any validity gate runs, but
+        // the plain asn1js Error is now normalized to a coded
+        // TimestampError instead of escaping uncoded.
         const { session, token } = await prepareSessionWithToken({
             signerValidityGeneralizedTime: true,
             signerValidityWire: { notBefore: "X".repeat(15) },
@@ -685,9 +691,9 @@ describe("signer validity encodings (T09a fix round 1)", () => {
             () => undefined,
             (cause: unknown) => cause
         );
-        expect(error).toBeInstanceOf(Error);
-        expect((error as Error).message).toMatch(/conversion/);
-        expect(error).not.toBeInstanceOf(TimestampError);
+        expect(error).toBeInstanceOf(TimestampError);
+        expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+        expect((error as TimestampError).message).toBe("Timestamp token: ASN.1 parse failed");
     });
 
     it("rejects externally supplied corrupted validity at the same gate", async () => {
@@ -803,5 +809,192 @@ describe("signer validity encodings (T09a fix round 1)", () => {
         expect(extracted).toHaveLength(1);
         expect(extracted[0]?.token).toEqual(token.rawToken);
         expect(extracted[0]?.token).not.toEqual(mutated);
+    });
+});
+
+// T11 (R19/S19): the strict parser enforces the TSTInfo profile --
+// version 1 (RFC 3161 S2.4: servers MUST provide v1, requesters MUST
+// recognize v1, and no v2 exists), no unsupported critical extensions
+// (RFC 5280 S4.2 criticality; this library supports none), and
+// absent-or-NULL digest parameters (RFC 5754 S2: MUST accept NULL,
+// MUST generate absent). Surgery below re-encodes the token, which
+// breaks the CMS signature by design; the strict parse runs before
+// any signature check, so profile rejections surface regardless.
+describe("TSTInfo profile (T11/R19/S19)", () => {
+    function withModifiedTstInfo(
+        token: Uint8Array,
+        modify: (tst: asn1js.Sequence) => void
+    ): Uint8Array {
+        const parsed = asn1js.fromBER(new Uint8Array(token).buffer);
+        if (parsed.offset === -1) throw new Error("fixture token is not DER");
+        const root = parsed.result as asn1js.Sequence;
+        const content = root.valueBlock.value[1] as asn1js.Constructed;
+        const signedData = content.valueBlock.value[0] as asn1js.Sequence;
+        const encap = signedData.valueBlock.value[2] as asn1js.Sequence;
+        const wrapped = encap.valueBlock.value[1] as asn1js.Constructed;
+        const eContent = wrapped.valueBlock.value[0] as asn1js.OctetString;
+        const segments = eContent.idBlock.isConstructed
+            ? (eContent.valueBlock.value as asn1js.OctetString[])
+            : [eContent];
+        const total = segments.reduce((n, s) => n + s.valueBlock.valueHexView.length, 0);
+        const tstBytes = new Uint8Array(total);
+        let offset = 0;
+        for (const segment of segments) {
+            const view = new Uint8Array(segment.valueBlock.valueHexView);
+            tstBytes.set(view, offset);
+            offset += view.length;
+        }
+        const tstParsed = asn1js.fromBER(new Uint8Array(tstBytes).buffer);
+        if (tstParsed.offset === -1) throw new Error("fixture TSTInfo is not DER");
+        const tst = tstParsed.result as asn1js.Sequence;
+        modify(tst);
+        wrapped.valueBlock.value[0] = new asn1js.OctetString({
+            valueHex: new Uint8Array(tst.toBER(false)).buffer,
+        });
+        return new Uint8Array(root.toBER(false));
+    }
+
+    function messageImprintAlgId(tst: asn1js.Sequence): asn1js.Sequence {
+        const imprint = tst.valueBlock.value[2] as asn1js.Sequence;
+        return imprint.valueBlock.value[0] as asn1js.Sequence;
+    }
+
+    function tstExtension(critical: boolean): asn1js.Constructed {
+        const extension = new pkijs.Extension({
+            extnID: "1.2.3.4.5.6.7",
+            critical,
+            extnValue: new asn1js.OctetString({
+                valueHex: new Uint8Array([1, 2, 3]).buffer,
+            }).toBER(false),
+        });
+        return new asn1js.Constructed({
+            idBlock: { tagClass: 3, tagNumber: 1 },
+            value: [extension.toSchema()],
+        });
+    }
+
+    function expectMalformedProfile(token: Uint8Array, message: string): void {
+        try {
+            parseStrictToken(token);
+        } catch (error) {
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.MALFORMED_RESPONSE);
+            expect((error as TimestampError).message).toBe(message);
+            return;
+        }
+        throw new Error(`expected the strict parser to reject: ${message}`);
+    }
+
+    it("accepts the unmodified fixture profile (surgery-harness control)", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        const rebuilt = withModifiedTstInfo(token, () => {});
+        expect(parseStrictToken(rebuilt).tstInfo.version).toBe(1);
+    });
+
+    it("requires TSTInfo version 1", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        const mutated = withModifiedTstInfo(token, (tst) => {
+            tst.valueBlock.value[0] = new asn1js.Integer({ value: 2 });
+        });
+        expectMalformedProfile(mutated, "TSTInfo version must be 1");
+    });
+
+    it("rejects an unsupported critical TSTInfo extension", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        const mutated = withModifiedTstInfo(token, (tst) => {
+            tst.valueBlock.value.push(tstExtension(true));
+        });
+        expectMalformedProfile(mutated, "TSTInfo has an unsupported critical extension");
+    });
+
+    it("accepts an unknown non-critical TSTInfo extension", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        const mutated = withModifiedTstInfo(token, (tst) => {
+            tst.valueBlock.value.push(tstExtension(false));
+        });
+        expect(parseStrictToken(mutated).tstInfo.extensions?.length).toBe(1);
+    });
+
+    it("accepts absent and NULL digest parameters", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        expect(parseStrictToken(token).tstInfo.messageImprint.hashAlgorithm.algorithmParams).toBeUndefined();
+        const nulled = withModifiedTstInfo(token, (tst) => {
+            messageImprintAlgId(tst).valueBlock.value.push(new asn1js.Null());
+        });
+        const params: unknown = parseStrictToken(nulled).tstInfo.messageImprint.hashAlgorithm
+            .algorithmParams;
+        expect(params).toBeInstanceOf(asn1js.Null);
+    });
+
+    it("rejects non-NULL digest parameters", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        const octetParams = withModifiedTstInfo(token, (tst) => {
+            messageImprintAlgId(tst).valueBlock.value.push(
+                new asn1js.OctetString({ valueHex: new Uint8Array([9, 9]).buffer })
+            );
+        });
+        expectMalformedProfile(octetParams, "TSTInfo digest parameters must be absent or NULL");
+        const integerParams = withModifiedTstInfo(token, (tst) => {
+            messageImprintAlgId(tst).valueBlock.value.push(new asn1js.Integer({ value: 0 }));
+        });
+        expectMalformedProfile(integerParams, "TSTInfo digest parameters must be absent or NULL");
+    });
+});
+
+// T11 (0x18): asn1js throws a plain Error on corrupted GeneralizedTime
+// content. The strict token parser normalizes that to a coded
+// TimestampError, and SKI selection fails closed (no match) instead of
+// letting the decode throw escape.
+describe("corrupted GeneralizedTime normalization (T11/0x18)", () => {
+    function corruptOnlyGeneralizedTime(token: Uint8Array): Uint8Array {
+        const hits: number[] = [];
+        for (let at = 0; at + 17 <= token.length; at++) {
+            if (token[at] === 0x18 && token[at + 1] === 0x0f) hits.push(at);
+        }
+        // The fixture token carries exactly one GeneralizedTime (the
+        // TSTInfo genTime); anything else means the harness is stale.
+        expect(hits).toHaveLength(1);
+        const out = new Uint8Array(token);
+        out.set(new TextEncoder().encode("2060010100000!Z"), hits[0]! + 2);
+        return out;
+    }
+
+    it("codes a corrupted TSTInfo genTime as INVALID_RESPONSE", async () => {
+        const token = (await fixture({ form: "raw" })).rawToken;
+        try {
+            parseStrictToken(corruptOnlyGeneralizedTime(token));
+        } catch (error) {
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            expect((error as TimestampError).message).toBe("TSTInfo: ASN.1 parse failed");
+            return;
+        }
+        throw new Error("expected the strict parser to reject a corrupted genTime");
+    });
+
+    it("selects no signer (coded) when the SKI extension is undecodable", () => {
+        const cert = new pkijs.Certificate();
+        const hostile = new Uint8Array([0x18, 0x0f, ...new TextEncoder().encode("2030010100000!Z")]);
+        cert.extensions = [
+            new pkijs.Extension({
+                extnID: "2.5.29.14",
+                critical: false,
+                extnValue: hostile.buffer,
+            }),
+        ];
+        const signerInfo = new pkijs.SignerInfo();
+        (signerInfo as unknown as { sid: unknown }).sid = new asn1js.Primitive({
+            idBlock: { tagClass: 3, tagNumber: 0 },
+            valueHex: new Uint8Array(20).buffer,
+        });
+        try {
+            selectSignerCertificate(signerInfo, [cert]);
+        } catch (error) {
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.VERIFICATION_FAILED);
+            expect((error as TimestampError).message).toContain("matched 0 signer certificates");
+            return;
+        }
+        throw new Error("expected SKI selection to fail closed on undecodable bytes");
     });
 });

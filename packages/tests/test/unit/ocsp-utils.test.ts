@@ -6,7 +6,7 @@ import {
     OCSPResponseStatus,
     CertificateStatus,
 } from "../../../core/src/pki/ocsp-utils.js";
-import { TimestampErrorCode } from "../../../core/src/types.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { inspectOCSPRequest } from "../fixtures/signed-revocation-material.js";
@@ -267,6 +267,211 @@ describe("OCSP Utils", () => {
             const uri = getOCSPURI(cert);
             expect(uri).toBeNull();
         });
+
+        // T11 (R10): the claimed hostile-DER escape could not be
+        // demonstrated -- pkijs yields AccessDescription instances or an
+        // empty list for real AIA bytes, never hostile elements (see the
+        // disposition vectors below, pinned with exact bytes). The shape
+        // guard below is hygiene for programmatically-built certificates
+        // only and claims no DER defect fixed.
+        it("returns null (never throws) for hostile AIA DER through a real parse", () => {
+            // Hand-built v3 certificate carrying the given AIA extension
+            // value. No signature is minted: this path parses extensions
+            // only and verifies nothing, so an unverifiable signature
+            // changes nothing about the exercised behavior.
+            function certDerWithAia(aiaInner: Uint8Array): Uint8Array {
+                const name = (commonName: string): asn1js.Sequence =>
+                    new asn1js.Sequence({
+                        value: [
+                            new asn1js.Set({
+                                value: [
+                                    new asn1js.Sequence({
+                                        value: [
+                                            new asn1js.ObjectIdentifier({ value: "2.5.4.3" }),
+                                            new asn1js.PrintableString({ value: commonName }),
+                                        ],
+                                    }),
+                                ],
+                            }),
+                        ],
+                    });
+                const tbs = new asn1js.Sequence({
+                    value: [
+                        new asn1js.Constructed({
+                            idBlock: { tagClass: 3, tagNumber: 0 },
+                            value: [new asn1js.Integer({ value: 2 })],
+                        }),
+                        new asn1js.Integer({ value: 1 }),
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.ObjectIdentifier({ value: "1.2.840.113549.1.1.11" }),
+                                new asn1js.Null(),
+                            ],
+                        }),
+                        name("T11 AIA"),
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.UTCTime({ valueDate: new Date("2020-01-01T00:00:00Z") }),
+                                new asn1js.UTCTime({ valueDate: new Date("2030-01-01T00:00:00Z") }),
+                            ],
+                        }),
+                        name("T11 AIA"),
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.Sequence({
+                                    value: [
+                                        new asn1js.ObjectIdentifier({
+                                            value: "1.2.840.113549.1.1.1",
+                                        }),
+                                        new asn1js.Null(),
+                                    ],
+                                }),
+                                new asn1js.BitString({ valueHex: new Uint8Array([0x00]).buffer }),
+                            ],
+                        }),
+                        new asn1js.Constructed({
+                            idBlock: { tagClass: 3, tagNumber: 3 },
+                            value: [
+                                new asn1js.Sequence({
+                                    value: [
+                                        new asn1js.Sequence({
+                                            value: [
+                                                new asn1js.ObjectIdentifier({
+                                                    value: "1.3.6.1.5.5.7.1.1",
+                                                }),
+                                                new asn1js.OctetString({
+                                                    valueHex: aiaInner.buffer as ArrayBuffer,
+                                                }),
+                                            ],
+                                        }),
+                                    ],
+                                }),
+                            ],
+                        }),
+                    ],
+                });
+                const cert = new asn1js.Sequence({
+                    value: [
+                        tbs,
+                        new asn1js.Sequence({
+                            value: [
+                                new asn1js.ObjectIdentifier({ value: "1.2.840.113549.1.1.11" }),
+                                new asn1js.Null(),
+                            ],
+                        }),
+                        new asn1js.BitString({ valueHex: new Uint8Array([0x00]).buffer }),
+                    ],
+                });
+                return new Uint8Array(cert.toBER(false));
+            }
+
+            function uriForAiaInner(aiaInner: Uint8Array): string | null {
+                const parsed = asn1js.fromBER(
+                    new Uint8Array(certDerWithAia(aiaInner)).buffer as ArrayBuffer
+                );
+                expect(parsed.offset).not.toBe(-1);
+                const cert = new pkijs.Certificate({ schema: parsed.result });
+                return getOCSPURI(cert);
+            }
+
+            // Control: a well-formed OCSP accessDescription resolves.
+            const validInner = new Uint8Array(
+                new pkijs.InfoAccess({
+                    accessDescriptions: [
+                        new pkijs.AccessDescription({
+                            accessMethod: "1.3.6.1.5.5.7.48.1",
+                            accessLocation: new pkijs.GeneralName({
+                                type: 6,
+                                value: "http://ocsp.example.com",
+                            }),
+                        }),
+                    ],
+                })
+                    .toSchema()
+                    .toBER(false)
+            );
+            expect(uriForAiaInner(validInner)).toBe("http://ocsp.example.com");
+
+            // Disposition vectors: hostile AIA shapes parse without
+            // producing hostile elements, so no TypeError can escape.
+            expect(uriForAiaInner(Uint8Array.of(0x30, 0x03, 0x02, 0x01, 0x05))).toBeNull();
+            expect(uriForAiaInner(Uint8Array.of(0x02, 0x01, 0x05))).toBeNull();
+            expect(uriForAiaInner(Uint8Array.of(0x30, 0x00))).toBeNull();
+            expect(uriForAiaInner(Uint8Array.of(0x05, 0x00))).toBeNull();
+            const mixedInner = new Uint8Array(
+                new asn1js.Sequence({
+                    value: [
+                        new pkijs.AccessDescription({
+                            accessMethod: "1.3.6.1.5.5.7.48.1",
+                            accessLocation: new pkijs.GeneralName({
+                                type: 6,
+                                value: "http://ocsp.example.com",
+                            }),
+                        }).toSchema(),
+                        new asn1js.Integer({ value: 9 }),
+                    ],
+                }).toBER(false)
+            );
+            expect(uriForAiaInner(mixedInner)).toBeNull();
+        });
+
+        it("skips null and non-object accessDescriptions instead of throwing", () => {
+            const cert = new pkijs.Certificate();
+            const aiaExt = new pkijs.Extension({
+                extnID: "1.3.6.1.5.5.7.1.1",
+                critical: false,
+                extnValue: new ArrayBuffer(0),
+            });
+            aiaExt.parsedValue = {
+                accessDescriptions: [
+                    null,
+                    42,
+                    {
+                        accessMethod: "1.3.6.1.5.5.7.48.1",
+                        accessLocation: { type: 6, value: "http://ocsp.example.com" },
+                    },
+                ],
+            };
+            cert.extensions = [aiaExt];
+
+            expect(getOCSPURI(cert)).toBe("http://ocsp.example.com");
+        });
+
+        // T11 (0x18): asn1js throws a plain Error on corrupted
+        // GeneralizedTime content; an undecodable AIA value yields no URI
+        // (null), never an uncoded throw.
+        it("returns null when the AIA value throws during DER decoding", () => {
+            const cert = new pkijs.Certificate();
+            const hostile = new Uint8Array([
+                0x18, 0x0f, ...new TextEncoder().encode("2030010100000!Z"),
+            ]);
+            cert.extensions = [
+                new pkijs.Extension({
+                    extnID: "1.3.6.1.5.5.7.1.1",
+                    critical: false,
+                    extnValue: hostile.buffer,
+                }),
+            ];
+            expect(getOCSPURI(cert)).toBeNull();
+        });
+
+        it("skips accessDescriptions with a missing accessLocation instead of throwing", () => {
+            const cert = new pkijs.Certificate();
+            const aiaExt = new pkijs.Extension({
+                extnID: "1.3.6.1.5.5.7.1.1",
+                critical: false,
+                extnValue: new ArrayBuffer(0),
+            });
+            aiaExt.parsedValue = {
+                accessDescriptions: [
+                    { accessMethod: "1.3.6.1.5.5.7.48.1" },
+                    { accessMethod: "1.3.6.1.5.5.7.48.1", accessLocation: null },
+                ],
+            };
+            cert.extensions = [aiaExt];
+
+            expect(getOCSPURI(cert)).toBeNull();
+        });
     });
 
     describe("createOCSPRequest", () => {
@@ -378,6 +583,106 @@ describe("OCSP Utils", () => {
             const noResponseBytes = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x00]);
 
             expect(() => parseOCSPResponse(noResponseBytes)).toThrow();
+        });
+
+        // T11 (0x18): corrupted GeneralizedTime inside the response must
+        // reject coded (INVALID_RESPONSE), never as a plain asn1js Error.
+        // Hand-built (no signature is minted: the collector parses only).
+        it("codes undecodable BasicOCSPResponse content as INVALID_RESPONSE", () => {
+            const certID = new asn1js.Sequence({
+                value: [
+                    new asn1js.Sequence({
+                        value: [new asn1js.ObjectIdentifier({ value: "1.3.14.3.2.26" })],
+                    }),
+                    new asn1js.OctetString({ valueHex: new Uint8Array(20).fill(1).buffer }),
+                    new asn1js.OctetString({ valueHex: new Uint8Array(20).fill(2).buffer }),
+                    new asn1js.Integer({ value: 1 }),
+                ],
+            });
+            const basic = new asn1js.Sequence({
+                value: [
+                    new asn1js.Sequence({
+                        value: [
+                            new asn1js.Constructed({
+                                idBlock: { tagClass: 3, tagNumber: 0 },
+                                value: [new asn1js.Integer({ value: 0 })],
+                            }),
+                            new asn1js.Primitive({
+                                idBlock: { tagClass: 3, tagNumber: 2 },
+                                valueHex: new Uint8Array(20).fill(3).buffer,
+                            }),
+                            new asn1js.GeneralizedTime({
+                                valueDate: new Date("2026-05-01T11:00:00Z"),
+                            }),
+                            new asn1js.Sequence({
+                                value: [
+                                    new asn1js.Sequence({
+                                        value: [
+                                            certID,
+                                            new asn1js.Primitive({
+                                                idBlock: { tagClass: 3, tagNumber: 0 },
+                                                valueHex: new ArrayBuffer(0),
+                                            }),
+                                            new asn1js.GeneralizedTime({
+                                                valueDate: new Date("2026-05-01T11:00:00Z"),
+                                            }),
+                                        ],
+                                    }),
+                                ],
+                            }),
+                        ],
+                    }),
+                    new asn1js.Sequence({
+                        value: [
+                            new asn1js.ObjectIdentifier({ value: "1.2.840.113549.1.1.11" }),
+                            new asn1js.Null(),
+                        ],
+                    }),
+                    new asn1js.BitString({ valueHex: new Uint8Array([0x00]).buffer }),
+                ],
+            });
+            const response = new Uint8Array(
+                new asn1js.Sequence({
+                    value: [
+                        new asn1js.Enumerated({ value: 0 }),
+                        new asn1js.Constructed({
+                            idBlock: { tagClass: 3, tagNumber: 0 },
+                            value: [
+                                new asn1js.Sequence({
+                                    value: [
+                                        new asn1js.ObjectIdentifier({
+                                            value: "1.3.6.1.5.5.7.48.1.1",
+                                        }),
+                                        new asn1js.OctetString({
+                                            valueHex: new Uint8Array(basic.toBER(false)).buffer,
+                                        }),
+                                    ],
+                                }),
+                            ],
+                        }),
+                    ],
+                }).toBER(false)
+            );
+            // Corrupt the first GeneralizedTime (producedAt) in place.
+            let at = -1;
+            for (let i = 0; i + 17 <= response.length; i++) {
+                if (response[i] === 0x18 && response[i + 1] === 0x0f) {
+                    at = i;
+                    break;
+                }
+            }
+            expect(at).toBeGreaterThan(-1);
+            const bad = new Uint8Array(response);
+            bad.set(new TextEncoder().encode("2026050111000!Z"), at + 2);
+            try {
+                parseOCSPResponse(bad);
+            } catch (error) {
+                expect(error).toBeInstanceOf(TimestampError);
+                expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+                expect((error as TimestampError).message).toBe("BasicOCSPResponse: ASN.1 parse failed");
+                return;
+            }
+            throw new Error("expected INVALID_RESPONSE for undecodable OCSP content");
         });
     });
 

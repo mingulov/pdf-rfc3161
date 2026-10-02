@@ -323,9 +323,18 @@ export function getOCSPURI(cert: pkijs.Certificate): string | null {
         return null;
     }
 
-    // Parse the extension value
-    const extRaw = asn1js.fromBER(aiaExtension.extnValue.valueBlock.valueHexView).result;
-    const extValue: unknown = (aiaExtension as { parsedValue?: unknown }).parsedValue ?? extRaw;
+    // Parse the extension value. Both the lazy parsedValue getter and
+    // the raw fallback decode untrusted bytes; asn1js throws a plain
+    // Error on undecodable input (e.g. corrupted GeneralizedTime), in
+    // which case there is no URI to return.
+    let extValue: unknown;
+    try {
+        extValue =
+            (aiaExtension as { parsedValue?: unknown }).parsedValue ??
+            asn1js.fromBER(aiaExtension.extnValue.valueBlock.valueHexView).result;
+    } catch {
+        return null;
+    }
 
     let accessDescriptions: pkijs.AccessDescription[] = [];
 
@@ -337,11 +346,21 @@ export function getOCSPURI(cert: pkijs.Certificate): string | null {
     }
 
     for (const desc of accessDescriptions) {
+        // Hygiene for programmatically-built certificates: skip elements
+        // outside the AccessDescription shape instead of crashing. Real
+        // DER parses never produce these (pkijs yields instances or an
+        // empty list); this claims no DER defect fixed. The unknown-typed
+        // aliases below are deliberate: the shapes are untyped at
+        // runtime, so the guards must not rely on the static types.
+        const shape: unknown = desc;
+        if (shape === null || typeof shape !== "object") continue;
         // accessMethod OID for OCSP is 1.3.6.1.5.5.7.48.1
         if (desc.accessMethod === "1.3.6.1.5.5.7.48.1") {
-            const location = desc.accessLocation;
-            if (location.type === 6 && typeof location.value === "string") {
-                return location.value;
+            const location: unknown = desc.accessLocation;
+            if (location === null || typeof location !== "object") continue;
+            const name = location as pkijs.GeneralName;
+            if (name.type === 6 && typeof name.value === "string") {
+                return name.value;
             }
         }
     }

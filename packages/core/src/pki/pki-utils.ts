@@ -6,6 +6,20 @@ import { toArrayBuffer, bytesToHex } from "../utils.js";
 export { hasTimestampingEKU } from "../tsa/token-validation.js";
 
 /**
+ * ESSCertIDv2 hash algorithm for an OID, or undefined when the OID is not
+ * one the library names. Unknown stays unknown: callers treat absence as
+ * "not detected", never as a known algorithm. A SHA-1 OID in the v2
+ * position likewise stays absent (preserved behavior); only the legacy
+ * v1 attribute reports SHA-1, set directly at the use site.
+ */
+export function certIdHashAlgorithmForOid(
+    oid: string
+): "SHA-256" | "SHA-384" | "SHA-512" | undefined {
+    const name = OID_TO_HASH_ALGORITHM[oid];
+    return name === "SHA-256" || name === "SHA-384" || name === "SHA-512" ? name : undefined;
+}
+
+/**
  * Extracts TimestampInfo from a ContentInfo containing SignedData with TSTInfo.
  * This is a low-level utility shared between response parsing and PDF extraction.
  */
@@ -102,12 +116,9 @@ export function extractTimestampInfoFromContentInfo(contentInfo: pkijs.ContentIn
             if (signingCertV2.certs && signingCertV2.certs.length > 0) {
                 const certID = signingCertV2.certs[0];
                 if (certID?.hashAlgorithm?.algorithmId) {
-                    const oid = certID.hashAlgorithm.algorithmId;
-                    certIdHashAlgorithm = OID_TO_HASH_ALGORITHM[oid] as
-                        | "SHA-1"
-                        | "SHA-256"
-                        | "SHA-384"
-                        | "SHA-512";
+                    certIdHashAlgorithm = certIdHashAlgorithmForOid(
+                        certID.hashAlgorithm.algorithmId
+                    );
                 }
             }
         }

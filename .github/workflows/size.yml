@@ -96,12 +96,24 @@ jobs:
       # modules, no duplication. Fixer compacted 258739 -> 258612
       # first; the remainder is irreducible mandated runtime.
       # Per-breach ruling; T19 still owns bundle efficiency.
-      - name: Enforce ESM bundle size budget (<= 253 KiB)
+      # R23 (T11): 255 KiB. The T11 parser/request contracts (R9 stable
+      # TimeStampedData schema rejection, R10 AIA shape guards, R11 ESS
+      # lookup, R19 digest-length + TSTInfo profile checks, T03-F8
+      # figure, 0x18 normalization at 3 choke points) grew the main
+      # entry by +2051 bytes (258442 -> 260493). 254 KiB (260096) is
+      # insufficient, so 255 KiB (261120, headroom 627) is the minimal
+      # integer-KiB fit. BASE rebuilt byte-identical; no new modules
+      # or imports (167 added / 31 removed core lines); new messages
+      # single-copy. Compaction applied throughout (terse messages,
+      # shared helpers); realistic remainder under 200 bytes, an order
+      # of magnitude short. Per-breach ruling; T19 still owns bundle
+      # efficiency.
+      - name: Enforce ESM bundle size budget (<= 255 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=259072
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 253 KiB)"
+          MAX=261120
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 255 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 253 KiB (259072 bytes) budget"
+            echo "::error::ESM bundle exceeds 255 KiB (261120 bytes) budget"
             exit 1
           fi
