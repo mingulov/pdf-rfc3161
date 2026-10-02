@@ -82,21 +82,24 @@ describe("ValidationSession", () => {
     describe("constructor", () => {
         it("should create a ValidationSession instance", () => {
             const session = new ValidationSession();
-            expect(session).toBeDefined();
             expect(session).toBeInstanceOf(ValidationSession);
         });
 
-        it("should accept custom options", () => {
+        it("should accept custom options", async () => {
             const session = new ValidationSession({
                 preferOCSP: false,
             });
-            expect(session).toBeDefined();
+            expect(session).toBeInstanceOf(ValidationSession);
+            // A custom-options session is still a usable session.
+            await expect(session.validateAll()).resolves.toEqual([]);
         });
 
-        it("should use default options when none provided", () => {
+        it("should use default options when none provided", async () => {
             const session = new ValidationSession();
-            expect(session).toBeDefined();
-            // The constructor should set up default fetcher and cache
+            expect(session).toBeInstanceOf(ValidationSession);
+            // The default fetcher and cache setup yields a session that
+            // validates an empty queue to no results.
+            await expect(session.validateAll()).resolves.toEqual([]);
         });
     });
 
@@ -184,16 +187,18 @@ describe("ValidationSession", () => {
             // Queue a certificate
             session.queueCertificate(mockCert);
 
-            // This will attempt validation and likely fail due to mocked dependencies,
-            // but should return a result array
+            // With every network dependency mocked away, no revocation
+            // evidence is reachable, so the verdict fails closed and the
+            // result still refers to the queued certificate.
             const results = await session.validateAll();
 
-            expect(Array.isArray(results)).toBe(true);
             expect(results).toHaveLength(1);
-            expect(results[0]).toHaveProperty("cert");
-            expect(results[0]).toHaveProperty("isValid");
-            expect(results[0]).toHaveProperty("sources");
-            expect(results[0]).toHaveProperty("errors");
+            expect(results[0]).toMatchObject({
+                cert: mockCert,
+                isValid: false,
+                sources: [],
+                errors: [expect.stringContaining("revocation status unknown")],
+            });
         });
 
         it("should handle validation attempts", async () => {
@@ -204,8 +209,7 @@ describe("ValidationSession", () => {
             const results = await session.validateAll();
 
             expect(results).toHaveLength(1);
-            expect(results[0]).toHaveProperty("cert");
-            expect(results[0]).toHaveProperty("isValid");
+            expect(results[0]).toMatchObject({ cert: mockCert, isValid: false });
         });
 
         it("should prevent double validation", async () => {
@@ -228,10 +232,12 @@ describe("ValidationSession", () => {
             const results = await session.validateAll();
 
             expect(results).toHaveLength(1);
-            expect(results[0]).toHaveProperty("cert");
-            expect(results[0]).toHaveProperty("isValid");
-            expect(results[0]).toHaveProperty("sources");
-            expect(results[0]).toHaveProperty("errors");
+            expect(results[0]).toMatchObject({
+                cert: mockCert,
+                isValid: false,
+                sources: [],
+                errors: [expect.stringContaining("revocation status unknown")],
+            });
         });
     });
 });

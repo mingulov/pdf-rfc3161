@@ -306,6 +306,25 @@ describe("One-call LTV diagnostics (ltvErrors)", () => {
         expect("ltvErrors" in result).toBe(false);
     });
 
+    it("falls back to empty lists for revocationData fields the caller omits", async () => {
+        const certificates = [new Uint8Array([0x30, 0x03])];
+        const crls = [new Uint8Array([0x30, 0x04])];
+
+        const result = await timestampPdf({
+            pdf: PDF_BYTES,
+            tsa: { url: "http://timestamp.mock.test" },
+            enableLTV: true,
+            revocationData: { certificates, crls },
+        });
+
+        expect(result.pdf).toEqual(PDF_BYTES);
+        expect(oneCallState.complete).not.toHaveBeenCalled();
+        expect(result.ltvData?.certificates).toEqual(certificates);
+        expect(result.ltvData?.crls).toEqual(crls);
+        expect(result.ltvData?.ocspResponses).toEqual([]);
+        expect("ltvErrors" in result).toBe(false);
+    });
+
     it("ignores revocationData without rejection when enableLTV is false", async () => {
         const result = await timestampPdf({
             pdf: PDF_BYTES,

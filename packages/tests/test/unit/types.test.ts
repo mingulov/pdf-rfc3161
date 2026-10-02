@@ -20,24 +20,57 @@ describe("Types and Error Handling", () => {
             expect(error.cause).toBe(cause);
         });
 
-        it("should have all error codes", () => {
-            expect(TimestampErrorCode.NETWORK_ERROR).toBe("NETWORK_ERROR");
-            expect(TimestampErrorCode.TSA_ERROR).toBe("TSA_ERROR");
-            expect(TimestampErrorCode.INVALID_RESPONSE).toBe("INVALID_RESPONSE");
-            expect(TimestampErrorCode.PDF_ERROR).toBe("PDF_ERROR");
-            expect(TimestampErrorCode.TIMEOUT).toBe("TIMEOUT");
-            expect(TimestampErrorCode.UNSUPPORTED_ALGORITHM).toBe("UNSUPPORTED_ALGORITHM");
+        it("pins every error code to its wire string", () => {
+            // Error codes serialize into receipts and messages; each
+            // member must equal its own key so the wire format cannot
+            // drift for one code while the others still match.
+            const entries = Object.entries(TimestampErrorCode);
+            expect(entries.length).toBeGreaterThan(0);
+            for (const [key, value] of entries) {
+                expect(value).toBe(key);
+            }
+        });
+
+        it("survives JSON serialization with the pinned code string", () => {
+            const error = new TimestampError(TimestampErrorCode.TSA_ERROR, "TSA failed");
+            const revived = JSON.parse(JSON.stringify(error)) as { code: unknown };
+
+            expect(revived.code).toBe("TSA_ERROR");
         });
     });
 
     describe("TSAStatus", () => {
-        it("should have correct status values", () => {
-            expect(TSAStatus.GRANTED).toBe(0);
-            expect(TSAStatus.GRANTED_WITH_MODS).toBe(1);
-            expect(TSAStatus.REJECTION).toBe(2);
-            expect(TSAStatus.WAITING).toBe(3);
-            expect(TSAStatus.REVOCATION_WARNING).toBe(4);
-            expect(TSAStatus.REVOCATION_NOTIFICATION).toBe(5);
+        it("pins the complete RFC 3161 PKIStatus wire mapping", () => {
+            // RFC 3161 section 2.4.2: the status INTEGER on the wire.
+            // Pinned exhaustively so a renumbered or added member fails
+            // here; response handling keyed off these values is covered
+            // in tsa-response.test.ts.
+            // Numeric enums also carry reverse mappings; the forward
+            // names are the non-numeric keys.
+            const names = Object.keys(TSAStatus).filter((key) => Number.isNaN(Number(key)));
+            expect(names.sort()).toEqual([
+                "GRANTED",
+                "GRANTED_WITH_MODS",
+                "REJECTION",
+                "REVOCATION_NOTIFICATION",
+                "REVOCATION_WARNING",
+                "WAITING",
+            ]);
+            expect({
+                GRANTED: TSAStatus.GRANTED,
+                GRANTED_WITH_MODS: TSAStatus.GRANTED_WITH_MODS,
+                REJECTION: TSAStatus.REJECTION,
+                WAITING: TSAStatus.WAITING,
+                REVOCATION_WARNING: TSAStatus.REVOCATION_WARNING,
+                REVOCATION_NOTIFICATION: TSAStatus.REVOCATION_NOTIFICATION,
+            }).toEqual({
+                GRANTED: 0,
+                GRANTED_WITH_MODS: 1,
+                REJECTION: 2,
+                WAITING: 3,
+                REVOCATION_WARNING: 4,
+                REVOCATION_NOTIFICATION: 5,
+            });
         });
     });
 });

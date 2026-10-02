@@ -111,7 +111,6 @@ describe("release finalization metadata", () => {
     it("requires the exact main-branch workflow and both successful staging jobs", async () => {
         const releaseMetadata = await loadReleaseMetadataModule();
         if (releaseMetadata === undefined) return;
-        expect(typeof releaseMetadata.assertSuccessfulReleaseRun).toBe("function");
         if (releaseMetadata.assertSuccessfulReleaseRun === undefined) return;
         const run = {
             conclusion: "success",

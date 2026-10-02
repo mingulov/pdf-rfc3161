@@ -29,13 +29,15 @@
         "pvutils": "^1.2.0"
     },
     "devDependencies": {
+        "@arethetypeswrong/cli": "0.18.5",
         "@types/node": "^26.6.3",
         "@typescript/native": "npm:typescript@7.0.2",
         "@vitest/coverage-v8": "^5.0.2",
-        "eslint": "^10.11.0",
         "esbuild": "0.28.2",
+        "eslint": "^10.11.0",
         "pdf-lib": "^1.17.1",
         "playwright": "^1.63.0",
+        "publint": "0.3.25",
         "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
         "verifiedby": "0.1.0",

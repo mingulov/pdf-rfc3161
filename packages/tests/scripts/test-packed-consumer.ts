@@ -2,6 +2,12 @@
 // checks the published contract end to end: tarball contents, ESM/CJS/type
 // resolution, a browser bundle, the CLI binary, and one real timestamping call.
 //
+// Usage: test:package [-- <core.tgz> <cli.tgz>] [--receipt <path>]. Without
+// tarball arguments both packages are packed fresh; with them, the exact
+// supplied bytes are exercised (T13: the same tarballs feed attw, publint
+// and the browser consumer). --receipt writes a JSON receipt recording the
+// tarball paths, versions, SHA-256 hashes and per-check outcomes.
+//
 // External tools:
 //   - pnpm, tar, tsc, vite  -- required everywhere.
 //   - OpenSSL WITH the `ts` subcommand -- required for the timestamp-behavior
@@ -12,6 +18,7 @@
 //     missing `ts` there means a broken runner, not an unsupported laptop.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
     existsSync,
     mkdtempSync,
@@ -71,6 +78,18 @@ interface PackedArtifacts {
     cliTarballPath: string;
 }
 
+interface ParsedArguments {
+    coreTarball: string | undefined;
+    cliTarball: string | undefined;
+    receiptPath: string | undefined;
+}
+
+interface InstalledVersions {
+    coreVersion: string;
+    cliVersion: string;
+    timestampBehavior: string;
+}
+
 interface PackageManifest {
     bin?: unknown;
     dependencies?: Record<string, string>;
@@ -96,15 +115,44 @@ function opensslTimestampAvailable(): boolean {
     return probe.status === 0 || commandOutput(probe).includes("-queryfile");
 }
 
-function packedArtifacts(temporaryDirectory: string): PackedArtifacts {
-    const supplied = process.argv.slice(2).filter((argument) => argument !== "--");
+function parseArguments(): ParsedArguments {
+    const raw = process.argv.slice(2).filter((argument) => argument !== "--");
+    let receiptPath: string | undefined;
+    const positional: string[] = [];
+    for (let index = 0; index < raw.length; index++) {
+        const argument = raw[index];
+        if (argument === "--receipt") {
+            receiptPath = raw[index + 1];
+            assert.ok(
+                receiptPath !== undefined && !receiptPath.startsWith("--"),
+                "--receipt requires a path"
+            );
+            index++;
+        } else if (argument !== undefined && !argument.startsWith("--")) {
+            positional.push(argument);
+        } else {
+            throw new Error(`unknown argument: ${argument ?? ""}`);
+        }
+    }
     assert(
-        supplied.length === 0 || supplied.length === 2,
+        positional.length === 0 || positional.length === 2,
         "test:package accepts either no tarballs or exact core and CLI tarball paths"
     );
-    if (supplied.length === 2) {
-        const coreTarballPath = resolve(supplied[0] ?? "");
-        const cliTarballPath = resolve(supplied[1] ?? "");
+    return {
+        coreTarball: positional[0],
+        cliTarball: positional[1],
+        receiptPath: receiptPath === undefined ? undefined : resolve(receiptPath),
+    };
+}
+
+function sha256File(path: string): string {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function packedArtifacts(temporaryDirectory: string, parsed: ParsedArguments): PackedArtifacts {
+    if (parsed.coreTarball !== undefined && parsed.cliTarball !== undefined) {
+        const coreTarballPath = resolve(parsed.coreTarball);
+        const cliTarballPath = resolve(parsed.cliTarball);
         assert(existsSync(coreTarballPath), "core tarball does not exist: " + coreTarballPath);
         assert(existsSync(cliTarballPath), "CLI tarball does not exist: " + cliTarballPath);
         return { coreTarballPath, cliTarballPath };
@@ -418,7 +466,7 @@ async function checkInstalledConsumer(
     temporaryDirectory: string,
     artifacts: PackedArtifacts,
     failures: string[]
-): Promise<void> {
+): Promise<InstalledVersions> {
     const coreDirectory = join(consumerDirectory, "node_modules", "pdf-rfc3161");
     const cliDirectory = join(consumerDirectory, "node_modules", "pdf-rfc3161-cli");
     const env = { ...process.env, CONSUMER_ROOT: consumerDirectory };
@@ -436,6 +484,7 @@ async function checkInstalledConsumer(
     // subcommand does not exist -- stock macOS, whose LibreSSL has no `ts` app
     // -- skip this one check rather than failing the documented `pnpm
     // test:full` on the very platform the xref fix targets. Never skip in CI.
+    let timestampBehavior = "skipped: openssl has no ts subcommand";
     if (opensslTimestampAvailable()) {
         const tsaDirectory = join(temporaryDirectory, "tsa");
         mkdirSync(tsaDirectory, { recursive: true });
@@ -451,7 +500,9 @@ async function checkInstalledConsumer(
                 TSA_CONFIG: tsa.config,
             })
         );
+        timestampBehavior = "passed";
     } else if (RUNNING_IN_CI) {
+        timestampBehavior = "failed: openssl ts subcommand missing in CI";
         failures.push(
             "openssl is missing the `ts` subcommand: the packed-consumer timestamp check cannot " +
                 "run, and CI must not skip it (all CI jobs are ubuntu-24.04 with full OpenSSL)"
@@ -569,6 +620,11 @@ async function checkInstalledConsumer(
     );
     commandSucceeded(help);
     assert.match(commandOutput(help.result), /Usage: pdf-rfc3161/, "installed CLI help output");
+    return {
+        coreVersion: manifestVersion(coreDirectory),
+        cliVersion: manifestVersion(cliDirectory),
+        timestampBehavior,
+    };
 }
 
 async function main(): Promise<void> {
@@ -584,7 +640,8 @@ async function main(): Promise<void> {
         temporaryDirectory = mkdtempSync(join(tmpdir(), "pdf-rfc3161-packed-consumer-"));
         const consumerDirectory = join(temporaryDirectory, "consumer");
         mkdirSync(consumerDirectory, { recursive: true });
-        const artifacts = packedArtifacts(temporaryDirectory);
+        const parsed = parseArguments();
+        const artifacts = packedArtifacts(temporaryDirectory, parsed);
         const failures = packageContract(artifacts);
         writeConsumerPackage(consumerDirectory, artifacts);
         writeConsumerWorkspace(consumerDirectory, artifacts.coreTarballPath);
@@ -596,12 +653,51 @@ async function main(): Promise<void> {
             "consumer pnpm version must match root packageManager"
         );
         installConsumer(PNPM_ENTRYPOINT, consumerDirectory);
-        await checkInstalledConsumer(consumerDirectory, temporaryDirectory, artifacts, failures);
+        const installed = await checkInstalledConsumer(
+            consumerDirectory,
+            temporaryDirectory,
+            artifacts,
+            failures
+        );
         assert.equal(
             failures.length,
             0,
             "Published artifact contract failed:\n" + failures.join("\n")
         );
+        // T13 receipt: the exact bytes exercised, with ESM/CJS outcomes
+        // for the C01/C04 downstream targets. Every check above either
+        // threw or pushed a failure, so reaching here means each entry
+        // below passed (or explicitly skipped for the TSA behavior
+        // check on machines without `openssl ts`).
+        const receipt = {
+            gate: "packed-consumer",
+            result: "passed",
+            node: process.version,
+            pnpm: ROOT_PNPM_VERSION,
+            core: {
+                tarball: artifacts.coreTarballPath,
+                sha256: sha256File(artifacts.coreTarballPath),
+                version: installed.coreVersion,
+            },
+            cli: {
+                tarball: artifacts.cliTarballPath,
+                sha256: sha256File(artifacts.cliTarballPath),
+                version: installed.cliVersion,
+            },
+            checks: {
+                esmExports: "passed",
+                cjsExports: "passed",
+                typesNodeNext: "passed",
+                viteBuild: "passed",
+                cliResolvesCandidateCore: "passed",
+                cliVersion: "passed",
+                cliHelp: "passed",
+                timestampBehavior: installed.timestampBehavior,
+            },
+        };
+        if (parsed.receiptPath !== undefined) {
+            writeFileSync(parsed.receiptPath, JSON.stringify(receipt, null, 4) + "\n", "utf8");
+        }
         process.stdout.write(
             "Packed consumer checks passed for " +
                 artifacts.coreTarballPath +
@@ -609,6 +705,7 @@ async function main(): Promise<void> {
                 artifacts.cliTarballPath +
                 "\nInstalled packages resolved under " +
                 realpathSync(consumerDirectory) +
+                (parsed.receiptPath !== undefined ? "\nReceipt: " + parsed.receiptPath : "") +
                 "\n"
         );
     } finally {

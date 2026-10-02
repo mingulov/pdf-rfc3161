@@ -475,10 +475,6 @@ describe("OCSP Utils", () => {
     });
 
     describe("createOCSPRequest", () => {
-        it("should be defined as a function", () => {
-            expect(typeof createOCSPRequest).toBe("function");
-        });
-
         function minimalCertificate(commonName: string, serial: number): pkijs.Certificate {
             const cert = new pkijs.Certificate();
             cert.serialNumber = new asn1js.Integer({ value: serial });

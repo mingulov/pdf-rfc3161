@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseTimestampToken } from "../../../core/src/pki/pki-utils.js";
-import { TimestampError } from "../../../core/src/types.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
 describe("PKI Utils", () => {
@@ -92,17 +92,6 @@ describe("PKI Utils", () => {
         });
     });
 
-    describe("Function exports", () => {
-        it("should export parseTimestampToken function", () => {
-            expect(typeof parseTimestampToken).toBe("function");
-        });
-
-        it("should have correct function signature", () => {
-            // Function should accept Uint8Array and return TimestampInfo
-            expect(parseTimestampToken.length).toBe(1);
-        });
-    });
-
     describe("TimestampError integration", () => {
         it("should throw TimestampError with correct error codes", () => {
             const invalidToken = new Uint8Array([0x00]);
@@ -113,8 +102,8 @@ describe("PKI Utils", () => {
             } catch (error) {
                 expect(error).toBeInstanceOf(TimestampError);
                 const tsError = error as TimestampError;
-                expect(tsError.code).toBeDefined();
-                expect(typeof tsError.message).toBe("string");
+                expect(tsError.code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+                expect(tsError.message).toContain("parse timestamp token");
             }
         });
 

@@ -223,7 +223,7 @@ describe("PDF Timestamp Extraction", () => {
             const result = await verifyTimestamp(invalidTimestamp);
 
             expect(result.verified).toBe(false);
-            expect(result.verificationError).toBeDefined();
+            expect(result.verificationError).toContain("expected canonical DER SEQUENCE tag");
         });
 
         it("should handle verification options", async () => {
@@ -233,10 +233,12 @@ describe("PDF Timestamp Extraction", () => {
 
             const result = await verifyTimestamp(mockExtractedTimestamp, options);
 
-            // The result should have the same structure regardless of options
-            expect(result).toHaveProperty("verified");
-            expect(result).toHaveProperty("fieldName");
-            expect(result).toHaveProperty("token");
+            // The mock token is not parseable DER, so verification fails
+            // closed; the failure preserves the input identity.
+            expect(result.verified).toBe(false);
+            expect(result.fieldName).toBe("Timestamp1");
+            expect(result.token).toEqual(mockExtractedTimestamp.token);
+            expect(result.verificationError).toContain("trailing bytes are not permitted");
         });
 
         it("should handle timestamp with invalid token data", async () => {
@@ -248,7 +250,7 @@ describe("PDF Timestamp Extraction", () => {
             const result = await verifyTimestamp(invalidTimestamp);
 
             expect(result.verified).toBe(false);
-            expect(result.verificationError).toBeDefined();
+            expect(result.verificationError).toContain("empty input");
         });
 
         it.todo("should preserve original timestamp properties (needs real DER fixture)");
@@ -260,8 +262,12 @@ describe("PDF Timestamp Extraction", () => {
 
             const result = await verifyTimestamp(mockExtractedTimestamp, options);
 
-            expect(result).toHaveProperty("verified");
-            expect(result).toHaveProperty("fieldName");
+            // Same malformed input as the strict variant: the verdict and
+            // the preserved identity agree regardless of the flag.
+            expect(result.verified).toBe(false);
+            expect(result.fieldName).toBe("Timestamp1");
+            expect(result.token).toEqual(mockExtractedTimestamp.token);
+            expect(result.verificationError).toContain("trailing bytes are not permitted");
         });
     });
 
