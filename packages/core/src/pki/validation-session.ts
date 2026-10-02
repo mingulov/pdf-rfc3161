@@ -2,25 +2,36 @@ import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import {
     CertificateToValidate,
+    RevocationDataFetcher,
     RevocationEvidenceResult,
     RevocationStatus,
+    ValidationCache,
     ValidationResult,
     ValidationSessionOptions,
 } from "./validation-types.js";
 import { DefaultFetcher } from "./fetchers/default-fetcher.js";
 import { InMemoryValidationCache } from "./fetchers/memory-cache.js";
-import {
-    CertificateStatus,
-    createOCSPRequest,
-    getOCSPURI,
-    parseOCSPResponse,
-} from "./ocsp-utils.js";
+import { createOCSPRequest, getOCSPURI, parseOCSPResponse } from "./ocsp-utils.js";
+import { validateOCSPEvidence } from "./ocsp-validation.js";
 import { getCRLDistributionPoints } from "./crl-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
 import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./cert-utils.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
+
+/**
+ * Default accepted OCSP clock skew: 5 minutes in both directions.
+ * Module-internal like the other session helpers (not re-exported from
+ * the package entries); tests pin the value through this module.
+ */
+export const DEFAULT_OCSP_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Default freshness horizon for OCSP responses without nextUpdate: 7
+ * days. Module-internal (see above).
+ */
+export const DEFAULT_OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Combines already-evaluated per-source evidence into one status. Revoked
@@ -154,14 +165,56 @@ export function deduplicateByteArtifacts(artifacts: Uint8Array[]): Uint8Array[] 
 export class ValidationSession {
     private certificates: CertificateToValidate[] = [];
     private results: ValidationResult[] = [];
-    private options: Required<ValidationSessionOptions>;
+    private options: {
+        fetcher: RevocationDataFetcher;
+        cache: ValidationCache;
+        preferOCSP: boolean;
+        checkDate: Date | undefined;
+        clockSkewMs: number;
+        maxAgeWithoutNextUpdateMs: number;
+        includeOCSPNonce: boolean;
+    };
     private state: "initialized" | "validating" | "completed" = "initialized";
 
     constructor(options: ValidationSessionOptions = {}) {
+        if (
+            options.checkDate !== undefined &&
+            (!(options.checkDate instanceof Date) || !Number.isFinite(options.checkDate.getTime()))
+        ) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                "ValidationSession checkDate must be a finite date"
+            );
+        }
+        if (
+            options.clockSkewMs !== undefined &&
+            (!Number.isFinite(options.clockSkewMs) || options.clockSkewMs < 0)
+        ) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                "ValidationSession clockSkewMs must be finite and non-negative"
+            );
+        }
+        if (
+            options.maxAgeWithoutNextUpdateMs !== undefined &&
+            (!Number.isFinite(options.maxAgeWithoutNextUpdateMs) ||
+                options.maxAgeWithoutNextUpdateMs < 0)
+        ) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                "ValidationSession maxAgeWithoutNextUpdateMs must be finite and non-negative"
+            );
+        }
         this.options = {
             fetcher: options.fetcher ?? new DefaultFetcher(),
             cache: options.cache ?? new InMemoryValidationCache(),
             preferOCSP: options.preferOCSP ?? true,
+            checkDate:
+                options.checkDate === undefined ? undefined : new Date(options.checkDate.getTime()),
+            clockSkewMs: options.clockSkewMs ?? DEFAULT_OCSP_CLOCK_SKEW_MS,
+            maxAgeWithoutNextUpdateMs:
+                options.maxAgeWithoutNextUpdateMs ?? DEFAULT_OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS,
+            includeOCSPNonce: options.includeOCSPNonce ?? true,
         };
     }
 
@@ -224,8 +277,8 @@ export class ValidationSession {
      * Execute validation for all queued certificates. Each certificate is
      * evaluated against collected OCSP/CRL revocation evidence; the result
      * carries a revocation status relative to a verified issuing key, not
-     * complete path trust. Until authenticated evaluators exist, structural
-     * evidence alone yields "unknown" for every certificate.
+     * complete path trust. OCSP evidence is authenticated; CRL evidence
+     * stays structural (always "unknown") until T07.
      *
      * @returns One `ValidationResult` per queued certificate, in the order
      *   they were queued.
@@ -242,9 +295,10 @@ export class ValidationSession {
 
         this.state = "validating";
         this.results = [];
+        const checkDate = this.options.checkDate ?? new Date();
 
         for (const certReq of this.certificates) {
-            const result = await this.validateCertificate(certReq);
+            const result = await this.validateCertificate(certReq, checkDate);
             this.results.push(result);
         }
 
@@ -257,11 +311,13 @@ export class ValidationSession {
      *
      * Attempt order follows `preferOCSP` (false tries CRL then OCSP).
      * Unknown permits fallback to the other source; only an authenticated
-     * decisive result stops the walk. No authenticated evaluator exists
-     * yet, so every evaluation below stays unknown by construction and the
-     * combined status is always unknown.
+     * decisive result stops the walk. OCSP evidence is authenticated;
+     * CRL evidence stays structural until T07.
      */
-    private async validateCertificate(req: CertificateToValidate): Promise<ValidationResult> {
+    private async validateCertificate(
+        req: CertificateToValidate,
+        checkDate: Date
+    ): Promise<ValidationResult> {
         const result: ValidationResult = {
             cert: req.cert,
             revocationStatus: "unknown",
@@ -277,7 +333,7 @@ export class ValidationSession {
         for (const source of order) {
             const evaluated =
                 source === "OCSP"
-                    ? await this.evaluateOCSPEvidence(req, result)
+                    ? await this.evaluateOCSPEvidence(req, result, checkDate)
                     : await this.evaluateCRLEvidence(req, result);
             if (evaluated !== null) {
                 evidence.push(evaluated);
@@ -285,6 +341,17 @@ export class ValidationSession {
                     break;
                 }
             }
+        }
+        if (evidence.length === 0) {
+            // T04 F3 decision: no source was attempted (the certificate
+            // carries no OCSP responder URL and no CRL distribution
+            // points). Record one result-level diagnostic so "nothing to
+            // check" never looks like "not evaluated". Per-source
+            // evidence stays absent; shared with T07 for the CRL side.
+            result.errors.push(
+                "No revocation endpoints attempted: certificate has no OCSP responder URL " +
+                    "and no CRL distribution points; revocation status unknown"
+            );
         }
 
         result.revocationStatus = combineRevocationEvidence(evidence);
@@ -296,16 +363,19 @@ export class ValidationSession {
     }
 
     /**
-     * Attempts OCSP evidence collection for one certificate.
+     * Attempts OCSP evidence evaluation for one certificate.
      *
      * Returns null when the certificate carries no OCSP responder URL
-     * (source not attempted). Otherwise collects the response bytes (when
-     * fetchable) into `result`, records diagnostics, and returns an unknown
-     * evidence record: structural OCSP status is unauthenticated.
+     * (source not attempted). Otherwise builds the request with the
+     * verified issuer, collects the response bytes (cached or fetched)
+     * into `result`, and routes them through validateOCSPEvidence with
+     * the exact request bytes. Candidate bytes and sources are preserved
+     * even when strict evaluation stays unknown (C06).
      */
     private async evaluateOCSPEvidence(
         req: CertificateToValidate,
-        result: ValidationResult
+        result: ValidationResult,
+        checkDate: Date
     ): Promise<RevocationEvidenceResult | null> {
         const ocspUrl = getOCSPURI(req.cert);
         if (!ocspUrl) {
@@ -316,9 +386,15 @@ export class ValidationSession {
             source: "OCSP",
             errors: [],
         };
+        let issuerCert: pkijs.Certificate;
+        let request: Uint8Array;
         let response: Uint8Array;
         try {
-            response = await this.fetchOCSPWithCache(ocspUrl, req);
+            issuerCert = await this.resolveIssuerForOCSP(req);
+            request = await createOCSPRequest(req.cert, issuerCert, {
+                includeNonce: this.options.includeOCSPNonce,
+            });
+            response = await this.fetchOCSPWithCache(ocspUrl, request);
         } catch (e) {
             const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
             evidence.errors.push(message);
@@ -328,13 +404,27 @@ export class ValidationSession {
         // M2: capture the OCSP bytes for downstream exportLTVData
         (result.ocspResponses ??= []).push(response);
         result.sources.push("OCSP");
-        const structural = this.describeOCSPStructure(response);
-        const message =
-            structural === "malformed"
-                ? "OCSP: malformed response; revocation status unknown"
-                : `OCSP: structural status "${structural}" is unauthenticated; revocation status unknown`;
-        evidence.errors.push(message);
-        result.errors.push(message);
+        // The nonce/freshness profile applies equally to cached and
+        // fetched bytes: validation runs after cache retrieval either way.
+        let evaluated: RevocationEvidenceResult;
+        try {
+            evaluated = await validateOCSPEvidence(response, {
+                cert: req.cert,
+                issuer: issuerCert,
+                requestBytes: request,
+                checkDate,
+                clockSkewMs: this.options.clockSkewMs,
+                maxAgeWithoutNextUpdateMs: this.options.maxAgeWithoutNextUpdateMs,
+            });
+        } catch (e) {
+            const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
+            evidence.errors.push(message);
+            result.errors.push(message);
+            return evidence;
+        }
+        evidence.status = evaluated.status;
+        evidence.errors.push(...evaluated.errors);
+        result.errors.push(...evaluated.errors);
         return evidence;
     }
 
@@ -415,7 +505,8 @@ export class ValidationSession {
 
     /**
      * Structural usability check for cached OCSP bytes. Rejects poisoned
-     * entries; passing it authenticates nothing (T06 owns authentication).
+     * entries; passing it authenticates nothing (every served response is
+     * authenticated after retrieval).
      */
     private isUsableCachedOCSP(response: Uint8Array): boolean {
         try {
@@ -438,10 +529,7 @@ export class ValidationSession {
         }
     }
 
-    private async fetchOCSPWithCache(url: string, req: CertificateToValidate): Promise<Uint8Array> {
-        const issuerCert = await this.resolveIssuerForOCSP(req);
-
-        const request = await createOCSPRequest(req.cert, issuerCert);
+    private async fetchOCSPWithCache(url: string, request: Uint8Array): Promise<Uint8Array> {
         const cached = this.options.cache.getOCSP(url, request);
         if (cached) {
             if (this.isUsableCachedOCSP(cached)) return cached;
@@ -473,28 +561,6 @@ export class ValidationSession {
         this.options.cache.setCRL(url, response);
 
         return response;
-    }
-
-    /**
-     * Structural OCSP status label for diagnostics only. Never a verdict:
-     * the response signature, responder authorization, nonce, CertID match
-     * and freshness are not verified here.
-     */
-    private describeOCSPStructure(
-        response: Uint8Array
-    ): "good" | "revoked" | "unknown" | "malformed" {
-        try {
-            const parsed = parseOCSPResponse(response);
-            if (parsed.certStatus === CertificateStatus.GOOD) {
-                return "good";
-            }
-            if (parsed.certStatus === CertificateStatus.REVOKED) {
-                return "revoked";
-            }
-            return "unknown";
-        } catch {
-            return "malformed";
-        }
     }
 
     /**

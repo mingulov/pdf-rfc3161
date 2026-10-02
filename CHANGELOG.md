@@ -59,7 +59,7 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   another TSA request once the cap is reached.
 - **Behavior (revocation verdict containment, C01/C06):** advanced
   `ValidationSession` results now carry `revocationStatus: "good" |
-  "revoked" | "unknown"` (also exported as the `RevocationStatus` type),
+"revoked" | "unknown"` (also exported as the `RevocationStatus` type),
   and `isValid` is a deprecated alias for `revocationStatus === "good"`.
   Missing endpoints/issuers, outages, malformed responses, and
   unauthenticated (including forged) OCSP/CRL evidence all yield
@@ -100,6 +100,73 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   retained and same-serial legitimate issuers are no longer skipped for
   OCSP collection. The embedded ContentInfo bytes remain exactly the
   accepted token bytes plus reservation zero padding; see MIGRATION.md.
+- **Behavior (authenticated OCSP evidence, C01/C06):** advanced
+  `ValidationSession` now authenticates OCSP responses instead of
+  reporting "unknown" for every certificate. A response yields "good"
+  or "revoked" only when it is signed by the verified issuer (no
+  embedded responder certificate needed) or an authorized delegate
+  (directly issued, `id-kp-OCSPSigning` EKU, `digitalSignature` key
+  usage when present, live at the check date, and carrying
+  `id-pkix-ocsp-nocheck`; delegates without nocheck are an unsupported
+  policy and stay "unknown"), answers the exact request CertID and
+  nonce, and is fresh at the check date. Wrong signers, CertID/nonce
+  mismatches, conflicting matches, stale or future-dated times, and
+  unauthorized responders yield "unknown" with a diagnostic; `isValid`
+  stays true only for authenticated "good". Fetched bytes are still
+  collected into `sources`, `ocspResponses`, and `exportLTVData` even
+  when strict evaluation stays unknown, and the one-call signing path
+  is unchanged (LTV collection stays structural). CRL evidence is
+  still structural until its own authenticator lands. See MIGRATION.md.
+- **Behavior (OCSP request nonce, C06):** OCSP requests now serialize a
+  fresh random 32-byte nonce inside `requestExtensions` (previously the
+  nonce was assigned to a pkijs field that never reached the wire, so
+  consecutive requests were byte-identical), and strict validation
+  requires an exact echo. Responders that drop or rewrite the nonce
+  yield "unknown"; pass the new `includeOCSPNonce: false` session
+  option for nonce-free requests. Fresh-nonce requests normally miss
+  the OCSP cache now. See MIGRATION.md.
+- **Behavior (session OCSP policy options, C01):** `ValidationSession`
+  accepts new optional `checkDate` (default: when `validateAll()`
+  runs), `clockSkewMs` (default: 300,000, i.e. 5 minutes), and
+  `maxAgeWithoutNextUpdateMs` (default: 604,800,000, i.e. 7 days)
+  options governing OCSP freshness; invalid values reject with
+  `INVALID_ARGUMENT`. A certificate with no OCSP responder URL and no
+  CRL distribution points now records one "No revocation endpoints
+  attempted" diagnostic in `errors` instead of succeeding silently.
+- **Behavior (strict OCSP profile hardening):** advanced OCSP validation
+  now rejects unsupported critical extensions (any critical extension
+  besides the nonce echo in responseExtensions, and besides key usage
+  / EKU / nocheck on the selected delegate; no SingleResponse
+  extension is processed, so any critical single extension fails
+  closed), requires
+  complete TBS consumption on the request, response, and selected
+  delegate certificate TBS (extra or duplicated TBS members yield
+  "unknown"), plus explicit Name/RDN/AttributeTypeAndValue grammar for
+  the delegate issuer/subject and responderID names that pkijs retains
+  verbatim (a malformed responder name matches nothing; an empty RDN
+  SET fails while an entirely empty Name passes), enforces v1-only
+  request and response versions, requires exactly one NULL-valued nocheck and a
+  clean id-kp-OCSPSigning EKU, requires canonical DER extension payloads
+  (nonce, key usage with zeroed padding bits, EKU) with complete
+  consumption, requires canonical DER OBJECT IDENTIFIER contents
+  (nonempty, terminated, minimal base-128) in every EKU member and
+  Name attribute type, rejects empty extension OIDs (extnID) in
+  response, SingleResponse, and delegate-certificate extension lists,
+  requires X.509 v3 for the selected
+  delegate, requires the delegate inner/outer signature algorithms to
+  agree and suit the issuer key family (RSA/ECDSA families only,
+  RSA-PSS unsupported), requires primitive octet-aligned signature BIT
+  STRINGs with canonical two-INTEGER ECDSA payloads on both the
+  response and the delegate certificate, requires strict delegate
+  public-key encodings (RSA parameters NULL-or-absent with a canonical
+  two-INTEGER key payload, EC parameters exactly the named-curve OID),
+  rejects inverted delegate validity intervals before skew is applied,
+  falls through from a non-verifying
+  issuer to matching embedded delegates, and checks the declared
+  signature algorithm against the responder key (RSA/ECDSA families
+  only, RSA-PSS unsupported, ECDSA parameters must be absent) before
+  verifying. Responses outside this narrowed profile yield "unknown"
+  with a diagnostic instead of a decisive verdict; see MIGRATION.md.
 
 ### Fixed
 
@@ -228,7 +295,7 @@ verify / extract path gain stricter defaults and several new opt-in checks.
   into that archive-owned DSS update. New `strictExistingVerification: true` throws
   on the first failing in-PDF timestamp; default is to warn via
   `getLogger().warn`. New `existingTimestampVerifyOptions?:
-  VerificationOptions` lets callers add a `trustStore` or opt out of the
+VerificationOptions` lets callers add a `trustStore` or opt out of the
   default timestamping-EKU and certificate-validity checks when required by
   caller policy.
 - `getDefaultTrustStore()` scaffolding (curated root CA bundle to follow).
