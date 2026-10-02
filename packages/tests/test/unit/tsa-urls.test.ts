@@ -3,34 +3,27 @@ import { KNOWN_TSA_URLS } from "../../../core/src/tsa-urls.js";
 
 describe("KNOWN_TSA_URLS", () => {
     it("should contain all expected TSA entries", () => {
-        const expectedKeys = [
-            "DIGICERT",
-            "SECTIGO",
-            "COMODO",
-            "GLOBALSIGN",
-            "ENTRUST",
-            "QUOVADIS",
-            "FREETSA",
-            "AIMODA",
-            "CODEGIC",
-        ];
-        for (const key of expectedKeys) {
-            expect(KNOWN_TSA_URLS).toHaveProperty(key);
-        }
+        // Pinned exhaustively: the registry is the library's TSA
+        // address book, so a renamed key or a changed endpoint must
+        // fail here rather than silently pointing elsewhere.
+        expect(KNOWN_TSA_URLS).toEqual({
+            DIGICERT: "http://timestamp.digicert.com",
+            SECTIGO: "https://timestamp.sectigo.com",
+            COMODO: "http://timestamp.comodoca.com",
+            GLOBALSIGN: "http://timestamp.globalsign.com/tsa/r6advanced1",
+            ENTRUST: "http://timestamp.entrust.net/TSS/RFC3161sha2TS",
+            QUOVADIS: "http://ts.quovadisglobal.com/eu",
+            FREETSA: "https://freetsa.org/tsr",
+            AIMODA: "https://rfc3161.ai.moda/tsa",
+            CODEGIC: "http://pki.codegic.com/codegic-service/timestamp",
+        });
     });
 
     it("should have valid URLs for all entries", () => {
         for (const url of Object.values(KNOWN_TSA_URLS)) {
-            expect(typeof url).toBe("string");
-            expect(url.startsWith("http://") || url.startsWith("https://")).toBe(true);
-            // Basic URL validation
-            expect(() => new URL(url)).not.toThrow();
+            const parsed = new URL(url);
+            expect(parsed.protocol === "http:" || parsed.protocol === "https:").toBe(true);
+            expect(parsed.hostname.length).toBeGreaterThan(0);
         }
-    });
-
-    it("should have correct values for key TSAs", () => {
-        expect(KNOWN_TSA_URLS.DIGICERT).toBe("http://timestamp.digicert.com");
-        expect(KNOWN_TSA_URLS.SECTIGO).toBe("https://timestamp.sectigo.com");
-        expect(KNOWN_TSA_URLS.GLOBALSIGN).toBe("http://timestamp.globalsign.com/tsa/r6advanced1");
     });
 });

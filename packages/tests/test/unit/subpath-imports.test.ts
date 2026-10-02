@@ -14,34 +14,58 @@ import * as internals from "pdf-rfc3161/internals";
 import * as rfc5544 from "pdf-rfc3161/rfcs/rfc5544";
 import * as rfc8933 from "pdf-rfc3161/rfcs/rfc8933";
 import * as pdf from "../../../core/src/pdf/index.js";
+// Direct source imports for identity pins: each subpath must re-export
+// the real implementation, not just any same-named function.
+import { CircuitState as CircuitStateSource } from "../../../core/src/utils/circuit-breaker.js";
+import { ValidationSession as ValidationSessionSource } from "../../../core/src/pki/validation-session.js";
+import {
+    DefaultFetcher as DefaultFetcherSource,
+    MockFetcher as MockFetcherSource,
+} from "../../../core/src/pki/index.js";
+import {
+    addDSS as addDSSSource,
+    addVRIForSignature as addVRIForSignatureSource,
+    extractLTVData as extractLTVDataSource,
+    getDSSInfo as getDSSInfoSource,
+} from "../../../core/src/pdf/ltv.js";
+import { ensureWebCrypto as ensureWebCryptoSource } from "../../../core/src/utils/web-crypto.js";
+import {
+    createTimeStampedData as createTimeStampedDataSource,
+    parseTimeStampedData as parseTimeStampedDataSource,
+} from "../../../core/src/rfcs/rfc5544.js";
+import { validateRFC8933Compliance as validateRFC8933ComplianceSource } from "../../../core/src/rfcs/rfc8933.js";
 
 describe("subpath imports (audit L8)", () => {
     describe("pdf-rfc3161/advanced", () => {
         it("exports DefaultFetcher", () => {
-            expect(typeof advanced.DefaultFetcher).toBe("function");
+            expect(advanced.DefaultFetcher).toBe(DefaultFetcherSource);
         });
 
         it("exports MockFetcher", () => {
-            expect(typeof advanced.MockFetcher).toBe("function");
+            expect(advanced.MockFetcher).toBe(MockFetcherSource);
         });
 
         it("exports CircuitState enum", () => {
-            expect(advanced.CircuitState).toBeDefined();
-            expect(typeof advanced.CircuitState).toBe("object");
+            expect(advanced.CircuitState).toBe(CircuitStateSource);
+            expect(advanced.CircuitState).toMatchObject({
+                CLOSED: "CLOSED",
+                OPEN: "OPEN",
+                HALF_OPEN: "HALF_OPEN",
+            });
         });
 
         it("exports ValidationSession", () => {
-            expect(typeof advanced.ValidationSession).toBe("function");
+            expect(advanced.ValidationSession).toBe(ValidationSessionSource);
         });
     });
 
     describe("pdf-rfc3161/internals", () => {
         it("exports getDSSInfo", () => {
-            expect(typeof internals.getDSSInfo).toBe("function");
+            expect(internals.getDSSInfo).toBe(getDSSInfoSource);
         });
 
         it("exports addDSS", () => {
-            expect(typeof internals.addDSS).toBe("function");
+            expect(internals.addDSS).toBe(addDSSSource);
         });
 
         it("exports addVRIForSignature without widening the root API", async () => {
@@ -49,14 +73,14 @@ describe("subpath imports (audit L8)", () => {
             type Root = typeof root;
             const rootExportsVRI: "addVRIForSignature" extends keyof Root ? true : false = false;
 
-            expect(typeof internals.addVRIForSignature).toBe("function");
-            expect(typeof pdf.addVRIForSignature).toBe("function");
+            expect(internals.addVRIForSignature).toBe(addVRIForSignatureSource);
+            expect(pdf.addVRIForSignature).toBe(addVRIForSignatureSource);
             expect(rootExportsVRI).toBe(false);
             expect("addVRIForSignature" in root).toBe(false);
         });
 
         it("exports extractLTVData", () => {
-            expect(typeof internals.extractLTVData).toBe("function");
+            expect(internals.extractLTVData).toBe(extractLTVDataSource);
         });
 
         it("does not export the unsafe raw PDF embed primitive", () => {
@@ -70,7 +94,7 @@ describe("subpath imports (audit L8)", () => {
         });
 
         it("exports ensureWebCrypto (added in 0.2.0 / Task 2.13)", () => {
-            expect(typeof internals.ensureWebCrypto).toBe("function");
+            expect(internals.ensureWebCrypto).toBe(ensureWebCryptoSource);
         });
 
         // Audit H2 regression check: circuit-breaker resets must NOT
@@ -84,17 +108,17 @@ describe("subpath imports (audit L8)", () => {
 
     describe("pdf-rfc3161/rfcs/rfc5544", () => {
         it("exports createTimeStampedData", () => {
-            expect(typeof rfc5544.createTimeStampedData).toBe("function");
+            expect(rfc5544.createTimeStampedData).toBe(createTimeStampedDataSource);
         });
 
         it("exports parseTimeStampedData", () => {
-            expect(typeof rfc5544.parseTimeStampedData).toBe("function");
+            expect(rfc5544.parseTimeStampedData).toBe(parseTimeStampedDataSource);
         });
     });
 
     describe("pdf-rfc3161/rfcs/rfc8933", () => {
         it("exports validateRFC8933Compliance", () => {
-            expect(typeof rfc8933.validateRFC8933Compliance).toBe("function");
+            expect(rfc8933.validateRFC8933Compliance).toBe(validateRFC8933ComplianceSource);
         });
     });
 });

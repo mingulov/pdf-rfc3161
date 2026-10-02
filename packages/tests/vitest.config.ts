@@ -36,6 +36,30 @@ export default defineConfig({
             allowExternal: true,
             reporter: ["text", "html", "lcov"],
             reportsDirectory: "./coverage",
+            // T13 floors: fail when coverage drops below the freshly
+            // measured post-T12 baseline. Baseline 2026-10-03, vitest
+            // 5.0.2 + @vitest/coverage-v8 5.0.2 on Node 24.21.0, suite
+            // 2100 passed / 51 skipped / 2 todo: statements 90.25
+            // (5418/6003), branches 85.39 (3882/4546), functions 96.72
+            // (621/642), lines 92.24 (5055/5480); validation-session
+            // lines 90.72 (225/248) / branches 87.64 (149/170); main
+            // index branches 93.87 (46/49). Glob keys are matched
+            // against paths relative to this directory. Later work
+            // must keep the suite above these floors (R7): raise them
+            // when coverage improves, never lower them to fit a drop.
+            thresholds: {
+                statements: 90.25,
+                branches: 85.39,
+                functions: 96.72,
+                lines: 92.24,
+                "../core/src/pki/validation-session.ts": {
+                    lines: 90.72,
+                    branches: 87.64,
+                },
+                "../core/src/index.ts": {
+                    branches: 93.87,
+                },
+            },
         },
         testTimeout: 30000, // TSA requests can be slow
     },

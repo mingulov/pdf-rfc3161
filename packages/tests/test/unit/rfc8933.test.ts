@@ -125,10 +125,12 @@ describe("RFC 8933 CMS Algorithm Identifier Protection", () => {
 
         const result = validateTimestampTokenRFC8933Compliance(timestampToken);
 
-        // Our mock token parsing may fail, but the function should handle it gracefully
-        expect(result).toHaveProperty("compliant");
-        expect(result).toHaveProperty("issues");
-        expect(Array.isArray(result.issues)).toBe(true);
+        // The mock token is not a parseable ContentInfo, so the verdict
+        // is non-compliant with the parse failure recorded as an issue.
+        expect(result.compliant).toBe(false);
+        expect(result.issues).toContain(
+            "Failed to parse timestamp token: Failed to parse timestamp token"
+        );
     });
 
     it("should handle invalid timestamp tokens gracefully", () => {
@@ -167,12 +169,31 @@ describe("RFC 8933 CMS Algorithm Identifier Protection", () => {
             }),
         ];
 
-        results.forEach((result) => {
-            expect(result).toHaveProperty("compliant");
-            expect(result).toHaveProperty("issues");
-            expect(result).toHaveProperty("digestAlgorithmConsistency");
-            expect(result).toHaveProperty("hasAlgorithmProtection");
+        // The mock SignedData is digest-consistent but carries no
+        // CMSAlgorithmProtection attribute, so only the option
+        // combinations that require protection fail.
+        expect(results[0]).toMatchObject({
+            compliant: true,
+            issues: [],
+            digestAlgorithmConsistency: true,
+            hasAlgorithmProtection: false,
         });
+        expect(results[1]).toMatchObject({
+            compliant: true,
+            issues: [],
+            digestAlgorithmConsistency: true,
+            hasAlgorithmProtection: false,
+        });
+        for (const result of results.slice(2)) {
+            expect(result).toMatchObject({
+                compliant: false,
+                digestAlgorithmConsistency: true,
+                hasAlgorithmProtection: false,
+            });
+            expect(result.issues).toContain(
+                "CMSAlgorithmProtection attribute not found (recommended by RFC 8933)"
+            );
+        }
     });
 
     it("should provide detailed compliance information", () => {

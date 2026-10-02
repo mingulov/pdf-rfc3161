@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlaceholderTooSmallError } from "../../../core/src/pdf/embed.js";
-import { TSAStatus } from "../../../core/src/types.js";
+import { TimestampErrorCode, TSAStatus } from "../../../core/src/types.js";
 
 interface MockLTVData {
     certificates: Uint8Array[];
@@ -40,6 +40,7 @@ const state = vi.hoisted(() => {
         embedAttempts: 0,
         optimalCalls: 0,
         forceCappedOptimal: false,
+        growingOptimal: false,
         baseEmbed,
         embed: vi.fn(baseEmbed),
         extractLtv: vi.fn(() => ({ certificates: [], crls: [], ocspResponses: [] })),
@@ -70,6 +71,10 @@ vi.mock("../../../core/src/session.js", () => {
             // identical too-small reservation.
             state.optimalCalls++;
             if (state.forceCappedOptimal) return 65536;
+            // Growing mode doubles every call so a persistently too-small
+            // placeholder survives to the final retry attempt (T13: the
+            // attempt < MAX_RETRIES exhaustion branch).
+            if (state.growingOptimal) return 4096 * 2 ** (state.optimalCalls - 1);
             return state.optimalCalls === 1 ? 4096 : 8192;
         }
     }
@@ -91,7 +96,7 @@ vi.mock("../../../core/src/pdf/ltv.js", () => ({
     addDSS: state.addDss,
 }));
 
-const { timestampPdf } = await import("../../../core/src/index.js");
+const { timestampPdf, timestampPdfMultiple } = await import("../../../core/src/index.js");
 
 const options = {
     pdf: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
@@ -111,6 +116,7 @@ describe("timestampPdf omitted options through optimization and retry", () => {
         state.embedAttempts = 0;
         state.optimalCalls = 0;
         state.forceCappedOptimal = false;
+        state.growingOptimal = false;
         state.embed.mockImplementation(state.baseEmbed);
     });
 
@@ -231,5 +237,76 @@ describe("timestampPdf omitted options through optimization and retry", () => {
         expect(state.send).toHaveBeenCalledTimes(3);
         expect(state.embed).toHaveBeenCalledTimes(2);
         expect(state.addDss).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces the placeholder error when the final retry attempt still does not fit", async () => {
+        state.growingOptimal = true;
+        state.embed.mockImplementation(async () => {
+            throw new PlaceholderTooSmallError(70000, "probe: Increase signatureSize");
+        });
+
+        const failure = await timestampPdf(options).then(
+            () => {
+                throw new Error("unexpected success after exhausting retries");
+            },
+            (error: unknown) => error
+        );
+        expect(failure).toBeInstanceOf(PlaceholderTooSmallError);
+        expect((failure as PlaceholderTooSmallError).requiredSignatureSize).toBe(70000);
+        // The reservation kept growing, so this is attempt exhaustion, not
+        // the reservation-cap path.
+        expect((failure as Error).message).not.toContain("reservation cap");
+        const sizes = state.sessionOptions.mock.calls.map(
+            (call) =>
+                (call[0] as { prepareOptions: { signatureSize: number } }).prepareOptions
+                    .signatureSize
+        );
+        expect(sizes).toEqual([0, 4096, 8192, 16384]);
+        expect(state.send).toHaveBeenCalledTimes(4);
+        expect(state.embed).toHaveBeenCalledTimes(4);
+    });
+
+    it("collects one LTV entry per TSA when timestamping with several TSAs", async () => {
+        const result = await timestampPdfMultiple({
+            pdf: options.pdf,
+            tsaList: [
+                { url: "http://timestamp-a.mock.test" },
+                { url: "http://timestamp-b.mock.test" },
+            ],
+        });
+
+        expect(result.timestamps).toHaveLength(2);
+        expect(result.timestamps[0]).toMatchObject({ policy: "1.2.3.4.5" });
+        expect(result.timestamps[1]).toMatchObject({ policy: "1.2.3.4.5" });
+        expect(result.ltvData).toHaveLength(2);
+        expect(result.ltvData?.[0]).toEqual({ certificates: [], crls: [], ocspResponses: [] });
+        expect(result.ltvData?.[1]).toEqual({ certificates: [], crls: [], ocspResponses: [] });
+        expect(result.pdf).toBeInstanceOf(Uint8Array);
+    });
+
+    it("passes the TSA policy through the optimization probe request", async () => {
+        await timestampPdf({
+            ...options,
+            optimizePlaceholder: true,
+            tsa: { url: "http://timestamp.mock.test", policy: "1.2.3.4" },
+        });
+
+        // The probe request carries the caller's policy, as do the retry
+        // attempts that follow it.
+        expect(state.createRequest).toHaveBeenCalledTimes(3);
+        for (const call of state.createRequest.mock.calls) {
+            expect(call[0]).toMatchObject({ policy: "1.2.3.4", requestCertificate: true });
+        }
+    });
+
+    it("rejects timestamping with an empty TSA list", async () => {
+        await expect(timestampPdfMultiple({ pdf: options.pdf, tsaList: [] })).rejects.toMatchObject(
+            {
+                code: TimestampErrorCode.INVALID_ARGUMENT,
+                message: "At least one TSA must be specified",
+            }
+        );
+        // The guard fires before any TSA request is issued.
+        expect(state.send).not.toHaveBeenCalled();
     });
 });

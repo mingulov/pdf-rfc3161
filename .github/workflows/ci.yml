@@ -91,6 +91,75 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Verify lint made no changes
+        # The per-package lint scripts run eslint --fix and exit 0 even
+        # when they rewrote files, so a tree whose committed sources
+        # violate lint would otherwise pass. Fail on any drift (T13).
+        run: git diff --exit-code
+
+  package-gates:
+    name: Package inspection gates
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # Fixed-version jobs pin 26; only the test matrix uses 24
+          # (supply-chain-policy.test.ts forbids 24 outside the matrix;
+          # fixed jobs pin 26 by convention).
+          node-version: 26
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack exactly one candidate tarball per public package
+        # T13: one pack feeds attw, publint and the packed consumer on
+        # identical bytes. Fail on zero/multiple tarballs per directory.
+        run: |
+          rm -rf /tmp/t13-candidates /tmp/t13-receipts
+          mkdir -p /tmp/t13-candidates/core /tmp/t13-candidates/cli /tmp/t13-receipts
+          pnpm --filter pdf-rfc3161 pack --pack-destination /tmp/t13-candidates/core
+          pnpm --filter pdf-rfc3161-cli pack --pack-destination /tmp/t13-candidates/cli
+          CORE_COUNT=$(ls /tmp/t13-candidates/core/*.tgz | wc -l)
+          CLI_COUNT=$(ls /tmp/t13-candidates/cli/*.tgz | wc -l)
+          [ "$CORE_COUNT" = "1" ] || { echo "expected one core tarball, found $CORE_COUNT"; exit 1; }
+          [ "$CLI_COUNT" = "1" ] || { echo "expected one CLI tarball, found $CLI_COUNT"; exit 1; }
+          echo "CORE_TARBALL=$(ls /tmp/t13-candidates/core/*.tgz)" >> "$GITHUB_ENV"
+          echo "CLI_TARBALL=$(ls /tmp/t13-candidates/cli/*.tgz)" >> "$GITHUB_ENV"
+          sha256sum /tmp/t13-candidates/core/*.tgz /tmp/t13-candidates/cli/*.tgz
+
+      - name: Check core types with attw (node16 profile)
+        # attw reads the tarball directly; never attw --pack here (it
+        # invokes npm pack, and this is a pnpm workspace). Obsolete
+        # node10 resolution is ignored by the profile; modern ESM/CJS
+        # and bundler checks must pass.
+        run: pnpm --filter pdf-rfc3161-tests exec attw "$CORE_TARBALL" --profile node16
+
+      - name: Lint both tarballs with publint --strict
+        run: |
+          pnpm --filter pdf-rfc3161-tests exec publint "$CORE_TARBALL" --strict
+          pnpm --filter pdf-rfc3161-tests exec publint "$CLI_TARBALL" --strict
+
+      - name: Verify packed consumer on the same tarballs
+        run: pnpm --filter pdf-rfc3161-tests test:package -- "$CORE_TARBALL" "$CLI_TARBALL" --receipt /tmp/t13-receipts/packed-consumer.json
+
+      - name: Upload package-gate receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-gate-receipts
+          path: /tmp/t13-receipts/
+          if-no-files-found: warn
+
   pades-conformance:
     name: Offline PAdES Interoperability
     runs-on: ubuntu-24.04

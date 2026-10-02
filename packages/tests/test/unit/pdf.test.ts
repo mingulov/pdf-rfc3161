@@ -37,13 +37,33 @@ describe("PDF Preparation", () => {
         it("should prepare a PDF with signature placeholder", async () => {
             const result = await preparePdfForTimestamp(MINIMAL_PDF);
 
-            expect(result).toHaveProperty("bytes");
-            expect(result).toHaveProperty("byteRange");
-            expect(result).toHaveProperty("contentsOffset");
-            expect(result).toHaveProperty("contentsPlaceholderLength");
-
             expect(result.bytes).toBeInstanceOf(Uint8Array);
             expect(result.bytes.length).toBeGreaterThan(MINIMAL_PDF.length);
+
+            // Exact ByteRange hole geometry: range 1 covers the file up
+            // to the '<' bracket, the hole is the whole <hex> string,
+            // and range 2 covers the '>' bracket to the end of file.
+            const [offset1, length1, offset2, length2] = result.byteRange;
+            expect(offset1).toBe(0);
+            expect(length1).toBe(result.contentsOffset - 1);
+            expect(offset2).toBe(result.contentsOffset + result.contentsPlaceholderLength + 1);
+            expect(length2).toBe(result.bytes.length - offset2);
+            expect(length1 + (result.contentsPlaceholderLength + 2) + length2).toBe(
+                result.bytes.length
+            );
+
+            // The hole itself is the zero placeholder: '<' + hex zeros + '>'.
+            expect(result.contentsPlaceholderLength).toBeGreaterThan(0);
+            expect(result.bytes[result.contentsOffset - 1]).toBe(0x3c); // '<'
+            const hole = result.bytes.slice(
+                result.contentsOffset,
+                result.contentsOffset + result.contentsPlaceholderLength
+            );
+            expect(hole.length).toBe(result.contentsPlaceholderLength);
+            expect(Array.from(hole).every((byte) => byte === 0x30)).toBe(true);
+            expect(result.bytes[result.contentsOffset + result.contentsPlaceholderLength]).toBe(
+                0x3e // '>'
+            );
         });
 
         it("should include ETSI.RFC3161 SubFilter", async () => {
