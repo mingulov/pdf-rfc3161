@@ -10,6 +10,8 @@ import {
     createOcspResponseCandidate,
 } from "../fixtures/revocation-material.js";
 import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
+import { getLogger, setLogger } from "../../../core/src/utils/logger.js";
+import { DefaultFetcher, MockFetcher } from "pdf-rfc3161/advanced";
 
 vi.mock(
     "../../../core/src/pki/ocsp-utils.js",
@@ -717,5 +719,194 @@ describe("issuer-gated AIA chain building and serial-twin handling (T05)", () =>
         expect(result.data.certificates).toHaveLength(1);
         expect(result.errors.join("\n")).toMatch(/did not issue/i);
         expect(certFetcher).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("LTV diagnostic URL redaction (T12 log audit)", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("redacts credential-bearing CRL URLs in collection diagnostics", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([
+            "https://user:pass@crl.example.test/x?token=MARKER",
+        ]);
+
+        const result = await completeLTVData(
+            { certificates: await certificatePair(), crls: [], ocspResponses: [] },
+            {
+                fetchers: {
+                    crlFetcher: async () => {
+                        throw new Error("responder down");
+                    },
+                },
+            }
+        );
+
+        const joined = result.errors.join("\n");
+        expect(joined).toContain("https://crl.example.test/x");
+        expect(joined).not.toContain("MARKER");
+        expect(joined).not.toContain("user:pass@");
+    });
+
+    it("redacts credential-bearing AIA URLs in collection diagnostics", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Redact Leaf",
+            issuerName: "Missing CA",
+            serial: 701,
+            keys: leafKeys,
+            signerKeys: caKeys,
+            caIssuersUrl: "https://user:pass@aia.example.test/ca?token=MARKER",
+        });
+
+        const result = await completeLTVData(
+            { certificates: [leaf], crls: [], ocspResponses: [] },
+            {
+                fetchers: {
+                    certFetcher: async () => {
+                        throw new Error("aia down");
+                    },
+                },
+            }
+        );
+
+        const joined = result.errors.join("\n");
+        expect(joined).toContain("https://aia.example.test/ca");
+        expect(joined).not.toContain("MARKER");
+        expect(joined).not.toContain("user:pass@");
+    });
+
+    it("redacts credential-bearing AIA URLs in non-issuance diagnostics", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const evilKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Gated Leaf",
+            issuerName: "Gated CA",
+            serial: 702,
+            keys: leafKeys,
+            signerKeys: caKeys,
+            caIssuersUrl: "https://user:pass@aia.example.test/gated?token=MARKER",
+        });
+        const evil = await chainCertificateBytes({
+            subject: "Gated CA",
+            serial: 703,
+            keys: evilKeys,
+        });
+
+        const result = await completeLTVData(
+            { certificates: [leaf], crls: [], ocspResponses: [] },
+            { fetchers: { certFetcher: async () => evil } }
+        );
+
+        const joined = result.errors.join("\n");
+        expect(joined).toMatch(/did not issue/i);
+        expect(joined).toContain("https://aia.example.test/gated");
+        expect(joined).not.toContain("MARKER");
+        expect(joined).not.toContain("user:pass@");
+    });
+
+    it("redacts credential-bearing AIA URLs in debug logging", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue(null);
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Redact Leaf",
+            issuerName: "Missing CA",
+            serial: 704,
+            keys: leafKeys,
+            signerKeys: caKeys,
+            caIssuersUrl: "https://user:pass@aia.example.test/ca?token=MARKER",
+        });
+        const debugMessages: string[] = [];
+        const originalLogger = getLogger();
+        setLogger({
+            debug: (message: string) => void debugMessages.push(message),
+            info: () => undefined,
+            warn: () => undefined,
+            error: () => undefined,
+        });
+
+        try {
+            await completeLTVData(
+                { certificates: [leaf], crls: [], ocspResponses: [] },
+                {
+                    fetchers: {
+                        certFetcher: async () => {
+                            throw new Error("aia down");
+                        },
+                    },
+                }
+            );
+        } finally {
+            setLogger(originalLogger);
+        }
+
+        const joined = debugMessages.join("\n");
+        expect(joined).toContain("https://aia.example.test/ca");
+        expect(joined).not.toContain("MARKER");
+        expect(joined).not.toContain("user:pass@");
+    });
+});
+
+describe("README fetcher wiring (runnable)", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("wires a MockFetcher into completeLTVData through the documented adapters", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const ocsp = createOcspResponseCandidate("good");
+        const mockFetcher = new MockFetcher();
+        mockFetcher.setOCSPResponse("https://ocsp.example.test", ocsp);
+
+        const completed = await completeLTVData(
+            { certificates: await certificatePair(), crls: [], ocspResponses: [] },
+            {
+                fetchers: {
+                    ocspFetcher: (url, request) => mockFetcher.fetchOCSP(url, request),
+                    crlFetcher: (url) => mockFetcher.fetchCRL(url),
+                },
+            }
+        );
+
+        expect(completed.data.ocspResponses).toEqual([ocsp]);
+        expect(completed.errors).toEqual([]);
+    });
+
+    it("wires a DefaultFetcher into completeLTVData through the documented adapters", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const ocsp = createOcspResponseCandidate("good");
+        const fetchMock = vi.fn(async () => new Response(ocsp as BodyInit, { status: 200 }));
+        vi.stubGlobal("fetch", fetchMock);
+        try {
+            const customFetcher = new DefaultFetcher({ timeout: 10000 });
+            const completed = await completeLTVData(
+                { certificates: await certificatePair(), crls: [], ocspResponses: [] },
+                {
+                    fetchers: {
+                        ocspFetcher: (url, request, context) =>
+                            customFetcher.fetchOCSP(url, request, context),
+                        crlFetcher: (url, context) => customFetcher.fetchCRL(url, context),
+                    },
+                }
+            );
+
+            expect(fetchMock).toHaveBeenCalled();
+            expect(completed.data.ocspResponses).toEqual([ocsp]);
+            expect(completed.errors).toEqual([]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });

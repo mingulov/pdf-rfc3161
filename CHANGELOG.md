@@ -252,6 +252,46 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   coercing. DER-budget exhaustion now cites the enforced allowance
   instead of always citing the 1M default. See MIGRATION.md.
 
+- **Preserve LTV collection diagnostics (item 1):** the one-call
+  `timestampPdf` result now carries `ltvErrors?: string[]`, present
+  only when collection ran and reported errors;
+  `TimestampSession.getLTVErrors()` returns a copy of the latest
+  embed's diagnostics (reset on every new embed attempt and on
+  dispose); `archiveTimestamp` combines its own and the final
+  timestamp's `ltvErrors`. Collection stays best-effort. Caller
+  `revocationData` remains silently ignored when `enableLTV` is
+  `false` (now documented).
+- **Machine-readable verification codes (item 5):** every
+  `verified: false` result now sets the adopted
+  `verificationErrorCode` (`VERIFICATION_FAILED` for token, trust,
+  profile, hash, and budget failures; `INVALID_ARGUMENT` for
+  unsupported `verifyChainAtTime`/non-finite dates; `PDF_ERROR` for
+  unbuildable signature indexes; escaping `TimestampError`s keep
+  their code). A store that throws `INVALID_ARGUMENT` from
+  `verifyChain` now escapes archive renewal instead of degrading to
+  a warning. See MIGRATION.md.
+- **Cause redaction completion (item 4):** error-cause URL redaction
+  is now case-insensitive, consumes complete URL spans, removes
+  quoted query tails, and resolves cyclic causes to sanitized
+  copies. LTV diagnostics and debug logs that echo AIA/OCSP/CRL
+  URLs, and the verbose CLI `TSA:` line, now render origin plus
+  path only.
+- **Plain-HTTP warning (S18):** `sendTimestampRequest` logs one
+  warning per operation when the TSA URL uses plain HTTP, with the
+  URL redacted to origin plus path. Loopback targets (`localhost`,
+  `*.localhost`, 127.0.0.0/8, `::1`) are exempt; private-network
+  addresses still warn.
+- **Await CLI actions (R5):** the CLI entry now awaits async
+  actions via `program.parseAsync().catch(...)`, so an action
+  rejection that escapes every command catch exits 1 with a clean
+  `Error:` line instead of crashing with an unhandled rejection.
+- **Docs/examples:** README verify examples note the secure verify
+  defaults and `verificationErrorCode`; the LTV fetcher example
+  shows the runnable adapters wiring (exercised by the test suite);
+  encrypted-PDF handling documents the `PDF_ERROR` default and the
+  `ignoreEncryption` opt-in; `timestampPdf` `@throws` and
+  `revocationData`-when-disabled behavior are documented.
+
 ### Fixed
 
 - **Reliability (transport cleanup and deadlines):** rejected-body

@@ -71,10 +71,13 @@ export interface ExtractedTimestamp {
     /** Verification error message if verification failed */
     verificationError?: string;
     /**
-     * Machine-readable verification failure code, present when the
-     * failure classifies as a `TimestampErrorCode` (currently the
-     * historical chain-validation request failures; other failures
-     * still surface through `verificationError` alone).
+     * Machine-readable verification failure code. Every verification-failure
+     * result sets it: `INVALID_ARGUMENT` for unsatisfiable
+     * chain-validation-time requests, `PDF_ERROR` when the shared
+     * signature index cannot be built, `VERIFICATION_FAILED` for every
+     * other token, trust, profile, and document-hash failure. A
+     * `TimestampError` escaping verification keeps its own code.
+     * See MIGRATION.md for the per-path table.
      */
     verificationErrorCode?: TimestampErrorCode;
     /**
@@ -838,6 +841,26 @@ async function discoverTimestamps(
  * });
  * ```
  */
+/**
+ * Builds a `verified: false` result that always carries the adopted
+ * machine-readable `verificationErrorCode`. `certificates` stays absent
+ * (not undefined) when the failure precedes signer selection.
+ */
+function failVerify(
+    timestamp: ExtractedTimestamp,
+    verificationError: string,
+    verificationErrorCode: TimestampErrorCode,
+    certificates?: pkijs.Certificate[]
+): ExtractedTimestamp {
+    return {
+        ...timestamp,
+        verified: false,
+        verificationError,
+        verificationErrorCode,
+        ...(certificates !== undefined && { certificates }),
+    };
+}
+
 async function verifyTimestampWithIndex(
     timestamp: ExtractedTimestamp,
     options: VerificationOptions = {},
@@ -885,12 +908,12 @@ async function verifyTimestampWithIndex(
             const actualHash = bytesToHex(hashBuffer);
 
             if (actualHash.toLowerCase() !== parsed.info.messageDigest.toLowerCase()) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError: `Document hash mismatch. Expected ${parsed.info.messageDigest}, found ${actualHash}`,
-                    certificates,
-                };
+                return failVerify(
+                    timestamp,
+                    `Document hash mismatch. Expected ${parsed.info.messageDigest}, found ${actualHash}`,
+                    TimestampErrorCode.VERIFICATION_FAILED,
+                    certificates
+                );
             }
         }
 
@@ -920,34 +943,32 @@ async function verifyTimestampWithIndex(
                 const checkDate =
                     validationTime === "genTime" ? parsed.info.genTime : validationTime;
                 if (typeof options.trustStore.verifyChainAtTime !== "function") {
-                    return {
-                        ...timestamp,
-                        verified: false,
-                        verificationError: "trust store does not support verifyChainAtTime",
-                        verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
-                        certificates,
-                    };
+                    return failVerify(
+                        timestamp,
+                        "trust store does not support verifyChainAtTime",
+                        TimestampErrorCode.INVALID_ARGUMENT,
+                        certificates
+                    );
                 }
                 // Snapshot before the store await; the store gets a fresh Date.
                 const checkMs = snapshotDateMs(checkDate);
                 if (!Number.isFinite(checkMs)) {
-                    return {
-                        ...timestamp,
-                        verified: false,
-                        verificationError: "chainValidationTime must be a finite date",
-                        verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
-                        certificates,
-                    };
+                    return failVerify(
+                        timestamp,
+                        "chainValidationTime must be a finite date",
+                        TimestampErrorCode.INVALID_ARGUMENT,
+                        certificates
+                    );
                 }
                 isTrusted = await options.trustStore.verifyChainAtTime(chain, new Date(checkMs));
             }
             if (!isTrusted) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError: "Certificate chain not trusted",
-                    certificates,
-                };
+                return failVerify(
+                    timestamp,
+                    "Certificate chain not trusted",
+                    TimestampErrorCode.VERIFICATION_FAILED,
+                    certificates
+                );
             }
         }
 
@@ -956,13 +977,12 @@ async function verifyTimestampWithIndex(
         const requireEKU = options.requireTimestampingEKU ?? true;
         if (requireEKU) {
             if (!hasTimestampingEKU(signingCertificate)) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError:
-                        "Signing certificate must have one critical exclusive id-kp-timeStamping ExtendedKeyUsage required by RFC 3161 Sec. 2.3",
-                    certificates,
-                };
+                return failVerify(
+                    timestamp,
+                    "Signing certificate must have one critical exclusive id-kp-timeStamping ExtendedKeyUsage required by RFC 3161 Sec. 2.3",
+                    TimestampErrorCode.VERIFICATION_FAILED,
+                    certificates
+                );
             }
         }
 
@@ -974,24 +994,23 @@ async function verifyTimestampWithIndex(
         if (requireValidity) {
             const genTime = parsed.info.genTime;
             if (!(genTime instanceof Date)) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError:
-                        "requireCertValidAtGenTime: token has no genTime to compare against",
-                    certificates,
-                };
+                return failVerify(
+                    timestamp,
+                    "requireCertValidAtGenTime: token has no genTime to compare against",
+                    TimestampErrorCode.VERIFICATION_FAILED,
+                    certificates
+                );
             }
             if (
                 !validityOk(signingCertificate) ||
                 !isCertValidAtTime(signingCertificate, genTime)
             ) {
-                return {
-                    ...timestamp,
-                    verified: false,
-                    verificationError: `Signing certificate was not valid at genTime ${genTime.toISOString()} (notBefore=${signingCertificate.notBefore.value instanceof Date ? signingCertificate.notBefore.value.toISOString() : "unknown"}, notAfter=${signingCertificate.notAfter.value instanceof Date ? signingCertificate.notAfter.value.toISOString() : "unknown"})`,
-                    certificates,
-                };
+                return failVerify(
+                    timestamp,
+                    `Signing certificate was not valid at genTime ${genTime.toISOString()} (notBefore=${signingCertificate.notBefore.value instanceof Date ? signingCertificate.notBefore.value.toISOString() : "unknown"}, notAfter=${signingCertificate.notAfter.value instanceof Date ? signingCertificate.notAfter.value.toISOString() : "unknown"})`,
+                    TimestampErrorCode.VERIFICATION_FAILED,
+                    certificates
+                );
             }
         }
 
@@ -1009,11 +1028,11 @@ async function verifyTimestampWithIndex(
             ocspCount,
         };
     } catch (error) {
-        return {
-            ...timestamp,
-            verified: false,
-            verificationError: error instanceof Error ? error.message : String(error),
-        };
+        return failVerify(
+            timestamp,
+            error instanceof Error ? error.message : String(error),
+            error instanceof TimestampError ? error.code : TimestampErrorCode.VERIFICATION_FAILED
+        );
     }
 }
 
@@ -1060,11 +1079,11 @@ function coveredByteLength(timestamp: ExtractedTimestamp): number | undefined {
 }
 
 function verificationWorkBudgetFailure(timestamp: ExtractedTimestamp): ExtractedTimestamp {
-    return {
-        ...timestamp,
-        verified: false,
-        verificationError: "Timestamp verification work budget exhausted",
-    };
+    return failVerify(
+        timestamp,
+        "Timestamp verification work budget exhausted",
+        TimestampErrorCode.VERIFICATION_FAILED
+    );
 }
 
 function cloneSharedVerification(
@@ -1192,11 +1211,9 @@ export async function verifyPdfTimestamps(
             );
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return timestamps.map((timestamp) => ({
-            ...timestamp,
-            verified: false,
-            verificationError: message,
-        }));
+        return timestamps.map((timestamp) =>
+            failVerify(timestamp, message, TimestampErrorCode.PDF_ERROR)
+        );
     }
     return verifyTimestampsWithSharedIndex(
         timestamps,

@@ -108,12 +108,35 @@ jobs:
       # shared helpers); realistic remainder under 200 bytes, an order
       # of magnitude short. Per-breach ruling; T19 still owns bundle
       # efficiency.
-      - name: Enforce ESM bundle size budget (<= 255 KiB)
+      # R24 (T12): 257 KiB. The T12 diagnostics/CLI contracts
+      # (verificationErrorCode on every failure path, session
+      # getLTVErrors, one-call/archive ltvErrors, completed cause
+      # sanitizer + diagnostic-URL audit, plain-HTTP warning with
+      # loopback exemption) grew the main entry by +2391 bytes
+      # (260619 -> 263010). 256 KiB (262144) is insufficient, so
+      # 257 KiB (263168, headroom 158) is the minimal integer-KiB
+      # fit. BASE rebuilt byte-identical; no new modules or imports
+      # (240 added / 94 removed lines); per-commit attribution
+      # +292/+197/+309/+0/+995/+133/+465. Compaction attempted on
+      # the one-call wiring with no material effect; the breach is
+      # structural mandated runtime. Per-breach ruling; T19 still
+      # owns bundle efficiency.
+      # R25 (T12 fix round 2): 258 KiB. The sol P1/P2 fixes (uncapped
+      # quoted-value + tail consumption in the transport sanitizer,
+      # parsed-protocol plain-HTTP detection) grew the main entry by
+      # +181 bytes (263107 -> 263288). 257 KiB (263168) is exceeded
+      # by 120, so 258 KiB (264192, headroom 904) is the minimal
+      # integer-KiB fit. Per-commit attribution +59/+122, both hunks
+      # code-only; compaction applied (end++), further golf rejected
+      # as immaterial vs a 120-byte breach; no new modules. The
+      # headroom jump is an artifact of integer-KiB granularity, not
+      # slack. Per-breach ruling; T19 still owns bundle efficiency.
+      - name: Enforce ESM bundle size budget (<= 258 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=261120
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 255 KiB)"
+          MAX=264192
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 258 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 255 KiB (261120 bytes) budget"
+            echo "::error::ESM bundle exceeds 258 KiB (264192 bytes) budget"
             exit 1
           fi

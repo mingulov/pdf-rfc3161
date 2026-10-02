@@ -15,6 +15,101 @@ vi.mock("../../../core/src/pdf/embed.js", async (importOriginal: <T = unknown>()
     };
 });
 
+// Partial mocks with production defaults: every call delegates to the real
+// implementation unless a diagnostics test overrides it once. Existing
+// tests in this file keep exercising the production pipeline.
+const validateHolder = vi.hoisted(() => ({
+    real: undefined as unknown as (
+        ...args: [Uint8Array, ...unknown[]]
+    ) => Promise<{ token: Uint8Array }>,
+}));
+const validateSpy = vi.hoisted(() =>
+    vi.fn((...args: [Uint8Array, ...unknown[]]) => validateHolder.real(...args))
+);
+
+vi.mock(
+    "../../../core/src/tsa/token-validation.js",
+    async (importOriginal: <T = unknown>() => Promise<T>) => {
+        const original =
+            await importOriginal<typeof import("../../../core/src/tsa/token-validation.js")>();
+        validateHolder.real = original.validateTimestampToken as (
+            ...args: [Uint8Array, ...unknown[]]
+        ) => Promise<{ token: Uint8Array }>;
+        return { ...original, validateTimestampToken: validateSpy };
+    }
+);
+
+const ltvHolder = vi.hoisted(() => ({
+    extract: undefined as unknown as (token: Uint8Array) => {
+        certificates: Uint8Array[];
+        crls: Uint8Array[];
+        ocspResponses: Uint8Array[];
+    },
+    complete: undefined as unknown as (data: {
+        certificates: Uint8Array[];
+        crls: Uint8Array[];
+        ocspResponses: Uint8Array[];
+    }) => Promise<{
+        data: {
+            certificates: Uint8Array[];
+            crls: Uint8Array[];
+            ocspResponses: Uint8Array[];
+        };
+        errors: string[];
+    }>,
+    addDSS: undefined as unknown as (
+        pdf: Uint8Array,
+        data: {
+            certificates: Uint8Array[];
+            crls: Uint8Array[];
+            ocspResponses: Uint8Array[];
+        }
+    ) => Promise<Uint8Array>,
+}));
+const extractSpy = vi.hoisted(() =>
+    vi.fn((...args: [Uint8Array]) => ltvHolder.extract(args[0]))
+);
+const completeSpy = vi.hoisted(() =>
+    vi.fn(
+        (
+            ...args: [
+                {
+                    certificates: Uint8Array[];
+                    crls: Uint8Array[];
+                    ocspResponses: Uint8Array[];
+                },
+            ]
+        ) => ltvHolder.complete(args[0])
+    )
+);
+const addDssSpy = vi.hoisted(() =>
+    vi.fn(
+        (
+            ...args: [
+                Uint8Array,
+                {
+                    certificates: Uint8Array[];
+                    crls: Uint8Array[];
+                    ocspResponses: Uint8Array[];
+                },
+            ]
+        ) => ltvHolder.addDSS(args[0], args[1])
+    )
+);
+
+vi.mock("../../../core/src/pdf/ltv.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
+    const original = await importOriginal<typeof import("../../../core/src/pdf/ltv.js")>();
+    ltvHolder.extract = original.extractLTVData as typeof ltvHolder.extract;
+    ltvHolder.complete = original.completeLTVData as unknown as typeof ltvHolder.complete;
+    ltvHolder.addDSS = original.addDSS as unknown as typeof ltvHolder.addDSS;
+    return {
+        ...original,
+        extractLTVData: extractSpy,
+        completeLTVData: completeSpy,
+        addDSS: addDssSpy,
+    };
+});
+
 const { TimestampSession } = await import("../../../core/src/session.js");
 
 // Minimal valid single-page PDF, exactly 345 bytes. The xref offsets match
@@ -626,6 +721,100 @@ describe("TimestampSession", () => {
                 expect(tsError.message).toContain("disposed");
             }
             expect(threw).toBe(true);
+        });
+    });
+
+    describe("LTV diagnostics (getLTVErrors)", () => {
+        const FAKE_TOKEN = new Uint8Array([0x30, 0x03, 0x02, 0x01, 0x00]);
+        const DSS_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x44, 0x53, 0x53]);
+        const EMPTY_LTV = { certificates: [], crls: [], ocspResponses: [] };
+
+        beforeEach(() => {
+            validateSpy.mockClear();
+            extractSpy.mockClear();
+            completeSpy.mockClear();
+            addDssSpy.mockClear();
+        });
+
+        function mockSuccessfulCollection(errors: string[]): void {
+            validateSpy.mockResolvedValueOnce({ token: FAKE_TOKEN });
+            extractSpy.mockReturnValueOnce({ ...EMPTY_LTV });
+            completeSpy.mockResolvedValueOnce({ data: { ...EMPTY_LTV }, errors });
+            addDssSpy.mockResolvedValueOnce(DSS_BYTES);
+        }
+
+        it("returns collection errors alongside successful bytes", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: true });
+            await session.createTimestampRequest();
+            mockSuccessfulCollection(["OCSP fetch failed: boom"]);
+
+            const out = await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+
+            expect(out).toEqual(DSS_BYTES);
+            expect(session.getLTVErrors()).toEqual(["OCSP fetch failed: boom"]);
+        });
+
+        it("returns a copy the caller cannot mutate", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: true });
+            await session.createTimestampRequest();
+            mockSuccessfulCollection(["OCSP fetch failed: boom"]);
+            await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+
+            const exposed = session.getLTVErrors();
+            (exposed as string[]).push("evil");
+            (exposed as string[]).length = 0;
+
+            expect(session.getLTVErrors()).toEqual(["OCSP fetch failed: boom"]);
+        });
+
+        it("resets diagnostics on a new embed", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: true });
+            await session.createTimestampRequest();
+            mockSuccessfulCollection(["OCSP fetch failed: boom"]);
+            await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+            expect(session.getLTVErrors()).toEqual(["OCSP fetch failed: boom"]);
+
+            await session.createTimestampRequest();
+            mockSuccessfulCollection([]);
+            await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+
+            expect(session.getLTVErrors()).toEqual([]);
+        });
+
+        it("resets diagnostics when the new embed fails validation", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: true });
+            await session.createTimestampRequest();
+            mockSuccessfulCollection(["OCSP fetch failed: boom"]);
+            await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+            expect(session.getLTVErrors()).toEqual(["OCSP fetch failed: boom"]);
+
+            // No validate override: the production validator rejects garbage.
+            await expect(session.embedTimestampToken(new Uint8Array([0x00]))).rejects.toThrow();
+            expect(session.getLTVErrors()).toEqual([]);
+        });
+
+        it("resets diagnostics on dispose", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: true });
+            await session.createTimestampRequest();
+            mockSuccessfulCollection(["OCSP fetch failed: boom"]);
+            await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+            expect(session.getLTVErrors()).toEqual(["OCSP fetch failed: boom"]);
+
+            session.dispose();
+
+            expect(session.getLTVErrors()).toEqual([]);
+        });
+
+        it("returns empty diagnostics when LTV is disabled", async () => {
+            const session = new TimestampSession(pdfBytes, { enableLTV: false });
+            await session.createTimestampRequest();
+            validateSpy.mockResolvedValueOnce({ token: FAKE_TOKEN });
+
+            const out = await session.embedTimestampToken(new Uint8Array([0x30, 0x00]));
+
+            expect(out).toEqual(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+            expect(completeSpy).not.toHaveBeenCalled();
+            expect(session.getLTVErrors()).toEqual([]);
         });
     });
 });

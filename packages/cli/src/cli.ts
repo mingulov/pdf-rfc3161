@@ -13,7 +13,7 @@ import {
     type TrustStore,
     setLogger,
 } from "pdf-rfc3161";
-import { getDSSInfo } from "pdf-rfc3161/internals";
+import { formatDiagnosticUrl, getDSSInfo } from "pdf-rfc3161/internals";
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 
@@ -108,7 +108,7 @@ program
                 if (options.verbose) {
                     console.log(`Input:     ${inputFile}`);
                     console.log(`Output:    ${outputFile}`);
-                    console.log(`TSA:       ${tsaUrl}`);
+                    console.log(`TSA:       ${formatDiagnosticUrl(tsaUrl)}`);
                     console.log(`Algorithm: ${options.algorithm}`);
                     console.log(`LTV:       ${options.ltv ? "enabled" : "disabled"}`);
                     if (options.reason) console.log(`Reason:    ${options.reason}`);
@@ -245,7 +245,7 @@ program
                     console.log(`RFC 3161 document-timestamp renewal`);
                     console.log(`Input:     ${inputFile}`);
                     console.log(`Output:    ${outputFile}`);
-                    console.log(`TSA:       ${tsaUrl}`);
+                    console.log(`TSA:       ${formatDiagnosticUrl(tsaUrl)}`);
                     console.log(
                         `Update:    ${cmdOptions.update ? "Collect candidate revocation material" : "Skip embedded OCSP/CRL candidates; timestamp certificates remain and fresh candidates may still be fetched"}`
                     );
@@ -586,5 +586,15 @@ export { handleError, generateOutputFilename, program };
 // Only parse command line arguments if not in test mode
 // This allows unit tests to import the CLI module without triggering argument parsing
 if (process.env.CLI_TEST_MODE !== "true") {
-    program.parse();
+    // Await async actions without CJS top-level await. The last-resort
+    // catch reports an escaping rejection through the standard error path
+    // (exit 1, clean stderr) instead of crashing unhandled; it never throws
+    // itself, so error reporting cannot produce a second rejection.
+    void program.parseAsync().catch((error: unknown) => {
+        try {
+            handleError(error, process.argv.includes("--verbose") || process.argv.includes("-v"));
+        } catch {
+            process.exitCode = 1;
+        }
+    });
 }

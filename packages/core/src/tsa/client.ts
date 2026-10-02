@@ -5,6 +5,7 @@ import {
 } from "../constants.js";
 import { type TSAConfig } from "../types.js";
 import { getLogger } from "../utils/logger.js";
+import { formatDiagnosticUrl } from "../utils/url.js";
 import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
 
 /**
@@ -22,10 +23,45 @@ import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
  * @returns The DER-encoded TimeStampResp
  * @throws TimestampError on network or protocol errors
  */
+/**
+ * Loopback check for the plain-HTTP warning only: loopback traffic never
+ * leaves the host, so there is nothing network-visible to warn about.
+ * `*.localhost` resolves to loopback (RFC 6761, secure-context
+ * treatment); private-network addresses (RFC 1918 etc.) still warn.
+ * Unparseable input is not loopback.
+ */
+function isLoopbackHttpTarget(urlString: string): boolean {
+    let hostname: string;
+    try {
+        hostname = new URL(urlString).hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    if (hostname.endsWith(".")) hostname = hostname.slice(0, -1);
+    if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
+    if (hostname === "::1" || hostname === "[::1]") return true;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
+}
+
+function isPlainHttp(urlString: string): boolean {
+    try {
+        return new URL(urlString).protocol === "http:";
+    } catch {
+        return true;
+    }
+}
+
 export async function sendTimestampRequest(
     request: Uint8Array,
     config: TSAConfig
 ): Promise<Uint8Array> {
+    // Plain-HTTP requests are readable on the network; warn once per
+    // operation (retries do not re-warn), except for loopback targets.
+    // This says nothing about token authentication, which verification
+    // handles independently.
+    if (isPlainHttp(config.url) && !isLoopbackHttpTarget(config.url)) {
+        getLogger().warn(`TSA request uses plain HTTP: ${formatDiagnosticUrl(config.url)}`);
+    }
     return fetchBytesWithRetry({
         url: config.url,
         method: "POST",

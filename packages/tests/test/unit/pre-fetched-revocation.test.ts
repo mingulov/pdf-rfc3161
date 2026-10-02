@@ -5,6 +5,67 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { InMemoryValidationCache } from "../../../core/src/pki/fetchers/memory-cache.js";
 import { ValidationSession } from "../../../core/src/pki/index.js";
+import { TSAStatus } from "../../../core/src/types.js";
+
+const oneCallState = vi.hoisted(() => ({
+    createRequest: vi.fn(async (_options: unknown) => new Uint8Array([0x30, 0x00])),
+    embed: vi.fn(async (_response: Uint8Array) => new Uint8Array([0x25, 0x50, 0x44, 0x46])),
+    send: vi.fn(async () => new Uint8Array([0x30, 0x03, 0x30, 0x01, 0x00])),
+    parse: vi.fn(() => ({
+        status: TSAStatus.GRANTED,
+        token: new Uint8Array([1, 2, 3]),
+        info: {
+            genTime: new Date("2026-08-24T00:00:00Z"),
+            policy: "1.2.3.4.5",
+            serialNumber: "1",
+            hashAlgorithm: "SHA-256",
+            hashAlgorithmOID: "2.16.840.1.101.3.4.2.1",
+            messageDigest: "00",
+            hasCertificate: true,
+        },
+    })),
+    extract: vi.fn(() => ({ certificates: [], crls: [], ocspResponses: [] })),
+    complete: vi.fn(async (data: unknown) => ({ data, errors: [] as string[] })),
+    addDSS: vi.fn(async (pdf: Uint8Array) => pdf),
+}));
+
+vi.mock("../../../core/src/session.js", () => {
+    class FakeSession {
+        async createTimestampRequest(options: unknown): Promise<Uint8Array> {
+            return oneCallState.createRequest(options);
+        }
+
+        async embedTimestampToken(response: Uint8Array): Promise<Uint8Array> {
+            return oneCallState.embed(response);
+        }
+
+        static calculateOptimalSize(_token: Uint8Array): number {
+            return 8192;
+        }
+    }
+    return { TimestampSession: FakeSession };
+});
+
+vi.mock("../../../core/src/tsa/index.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
+    const original = await importOriginal<typeof import("../../../core/src/tsa/index.js")>();
+    return {
+        ...original,
+        sendTimestampRequest: oneCallState.send,
+        parseTimestampResponse: oneCallState.parse,
+    };
+});
+
+vi.mock("../../../core/src/pdf/ltv.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
+    const original = await importOriginal<typeof import("../../../core/src/pdf/ltv.js")>();
+    return {
+        ...original,
+        extractLTVData: oneCallState.extract,
+        completeLTVData: oneCallState.complete,
+        addDSS: oneCallState.addDSS,
+    };
+});
+
+const { timestampPdf } = await import("../../../core/src/index.js");
 
 describe("InMemoryValidationCache", () => {
     let cache: InMemoryValidationCache;
@@ -175,5 +236,87 @@ describe("ValidationSession Cache Integration", () => {
         // Verify we can access the cache
         expect(cache.getCRL("http://crl1.com")).toEqual(new Uint8Array([1]));
         expect(cache.getCRL("http://crl2.com")).toEqual(new Uint8Array([2]));
+    });
+});
+
+describe("One-call LTV diagnostics (ltvErrors)", () => {
+    const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+
+    beforeEach(() => {
+        oneCallState.createRequest.mockClear();
+        oneCallState.embed.mockClear();
+        oneCallState.send.mockClear();
+        oneCallState.parse.mockClear();
+        oneCallState.extract.mockClear();
+        oneCallState.complete.mockClear();
+        oneCallState.addDSS.mockClear();
+    });
+
+    it("surfaces collection errors as ltvErrors alongside successful bytes", async () => {
+        const collected = {
+            certificates: [new Uint8Array([0x30, 0x01])],
+            crls: [] as Uint8Array[],
+            ocspResponses: [] as Uint8Array[],
+        };
+        oneCallState.complete.mockResolvedValueOnce({
+            data: collected,
+            errors: ["OCSP fetch failed: boom"],
+        });
+
+        const result = await timestampPdf({
+            pdf: PDF_BYTES,
+            tsa: { url: "http://timestamp.mock.test" },
+            enableLTV: true,
+        });
+
+        expect(result.pdf).toEqual(PDF_BYTES);
+        expect(result.ltvData).toEqual(collected);
+        expect(result.ltvErrors).toEqual(["OCSP fetch failed: boom"]);
+    });
+
+    it("omits ltvErrors when collection reports no errors", async () => {
+        oneCallState.complete.mockResolvedValueOnce({
+            data: { certificates: [], crls: [], ocspResponses: [] },
+            errors: [],
+        });
+
+        const result = await timestampPdf({
+            pdf: PDF_BYTES,
+            tsa: { url: "http://timestamp.mock.test" },
+            enableLTV: true,
+        });
+
+        expect(result.pdf).toEqual(PDF_BYTES);
+        expect("ltvErrors" in result).toBe(false);
+    });
+
+    it("reports no collection errors when revocationData replaces network fetching", async () => {
+        const prefetched = [new Uint8Array([0x30, 0x09])];
+
+        const result = await timestampPdf({
+            pdf: PDF_BYTES,
+            tsa: { url: "http://timestamp.mock.test" },
+            enableLTV: true,
+            revocationData: { ocspResponses: prefetched },
+        });
+
+        expect(result.pdf).toEqual(PDF_BYTES);
+        expect(oneCallState.complete).not.toHaveBeenCalled();
+        expect(result.ltvData?.ocspResponses).toEqual(prefetched);
+        expect("ltvErrors" in result).toBe(false);
+    });
+
+    it("ignores revocationData without rejection when enableLTV is false", async () => {
+        const result = await timestampPdf({
+            pdf: PDF_BYTES,
+            tsa: { url: "http://timestamp.mock.test" },
+            enableLTV: false,
+            revocationData: { ocspResponses: [new Uint8Array([0x30, 0x09])] },
+        });
+
+        expect(result.pdf).toEqual(PDF_BYTES);
+        expect(result.ltvData).toBeUndefined();
+        expect(oneCallState.complete).not.toHaveBeenCalled();
+        expect("ltvErrors" in result).toBe(false);
     });
 });

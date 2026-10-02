@@ -950,3 +950,71 @@ describe("ValidationSession operation budget (T08)", () => {
         });
     });
 });
+
+describe("ValidationSession CRL diagnostic URL redaction (T12 I1)", () => {
+    const CREDENTIALED_CRL_URL = "https://user:pass@crl.example.test/x?token=MARKER";
+    const REDACTED_CRL_URL = "https://crl.example.test/x";
+
+    let issuer: pkijs.Certificate;
+    let issuerKeys: { publicKey: CryptoKey; privateKey: CryptoKey };
+
+    function signedByIssuer(): { issuer: pkijs.Certificate; privateKey: CryptoKey } {
+        return { issuer, privateKey: issuerKeys.privateKey };
+    }
+
+    beforeAll(async () => {
+        issuerKeys = await generateRSAKeyPair();
+        issuer = await createIssuerCertificate(issuerKeys.publicKey);
+    });
+
+    it("redacts credential-bearing CRL URLs in fetch-failure diagnostics", async () => {
+        const leaf = await createLeafCertificate({ crlUrl: CREDENTIALED_CRL_URL });
+        const session = new ValidationSession({ fetcher: throwingFetcher() });
+        session.queueCertificate(leaf);
+
+        const [result] = await session.validateAll();
+        const joined = (result?.errors ?? []).join("\n");
+        expect(joined).toMatch(/failed/i);
+        expect(joined).toContain(REDACTED_CRL_URL);
+        expect(joined).not.toContain("user:pass@");
+        expect(joined).not.toContain("MARKER");
+    });
+
+    it("redacts credential-bearing CRL URLs in validation-failure diagnostics", async () => {
+        const leaf = await createLeafCertificate({
+            crlUrl: CREDENTIALED_CRL_URL,
+            signedBy: signedByIssuer(),
+        });
+        const fetcher = new MockFetcher();
+        fetcher.setCRLResponse(CREDENTIALED_CRL_URL, new Uint8Array([0xff, 0xff, 0xff]));
+        const session = new ValidationSession({ fetcher });
+        session.queueCertificate(leaf, { issuer });
+
+        const [result] = await session.validateAll();
+        const joined = (result?.errors ?? []).join("\n");
+        expect(joined).toContain(REDACTED_CRL_URL);
+        expect(joined).not.toContain("user:pass@");
+        expect(joined).not.toContain("MARKER");
+    });
+
+    it("redacts credential-bearing CRL URLs in unknown-evidence diagnostics", async () => {
+        const leaf = await createLeafCertificate({
+            crlUrl: CREDENTIALED_CRL_URL,
+            signedBy: signedByIssuer(),
+        });
+        const fetcher = new MockFetcher();
+        fetcher.setCRLResponse(
+            CREDENTIALED_CRL_URL,
+            createCrlFixture({ crlNumber: 7, deltaBaseNumber: 6 })
+        );
+        const session = new ValidationSession({ fetcher });
+        session.queueCertificate(leaf, { issuer });
+
+        const [result] = await session.validateAll();
+        const joined = (result?.errors ?? []).join("\n");
+        expect(joined).toMatch(/delta CRL/);
+        expect(joined).toContain(REDACTED_CRL_URL);
+        expect(joined).not.toContain("user:pass@");
+        expect(joined).not.toContain("MARKER");
+    });
+});

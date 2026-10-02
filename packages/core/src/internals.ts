@@ -38,3 +38,6 @@ export { fetchOCSPResponse, getOCSPCircuitState } from "./pki/ocsp-client.js";
 // `globalThis.crypto` may want to invoke this once at startup. See the JSDoc
 // on `createTimestampRequestFromHash` in `tsa/request.ts` for context.
 export { ensureWebCrypto } from "./utils/web-crypto.js";
+// Diagnostic URL rendering (origin plus path; credentials, query, and
+// fragment removed) for CLI output and other log paths that echo URLs.
+export { formatDiagnosticUrl } from "./utils/url.js";

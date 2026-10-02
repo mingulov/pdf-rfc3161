@@ -11,7 +11,7 @@ import {
 import { timestampPdf } from "pdf-rfc3161";
 import { extractTimestamps, verifyPdfTimestamps } from "../../../core/src/pdf/extract.js";
 import { preparePdfForTimestamp } from "../../../core/src/pdf/prepare.js";
-import { TimestampError } from "../../../core/src/types.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 import { stubTsaFetch, makeInput } from "../utils/timestamp-fixtures.js";
 
@@ -413,6 +413,9 @@ describe("earlier signature downstream verification (T10 C04)", () => {
             const tamperedVerified = await verifyPdfTimestamps(tampered);
             expect(tamperedVerified.map((value) => value.verified)).toEqual([false, false]);
             expect(tamperedVerified[0]?.verificationError).toContain("Document hash mismatch");
+            expect(tamperedVerified[0]?.verificationErrorCode).toBe(
+                TimestampErrorCode.VERIFICATION_FAILED
+            );
         }
     );
 });

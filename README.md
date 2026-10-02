@@ -115,11 +115,18 @@ round trip, use `TimestampSession.createTimestampRequest()` followed by
 const verified = await verifyTimestamp(ts, {
     trustStore, // your SimpleTrustStore
     pdf, // enables PDF-level checks
-    requireTimestampingEKU: true, // RFC 3161 EKU 1.3.6.1.5.5.7.3.8
-    requireCertValidAtGenTime: true, // cert valid at signing instant
+    // requireTimestampingEKU and requireCertValidAtGenTime already default
+    // to true since 0.2.0 (RFC 3161 EKU 1.3.6.1.5.5.7.3.8; cert valid at
+    // the signing instant).
     strictESSValidation: true, // ESS cert identifier must match
 });
 ```
+
+Every failure carries both a human-readable `verificationError` and a
+machine-readable `verificationErrorCode` (`VERIFICATION_FAILED` for token,
+trust, profile, and document-hash failures; `INVALID_ARGUMENT` for
+unsatisfiable `chainValidationTime` requests; `PDF_ERROR` when the shared
+signature index cannot be built).
 
 ### Flag reference
 
@@ -438,14 +445,31 @@ All network operations use the Fetcher pattern. The fetcher classes live on
 the `/advanced` subpath, available via tree-shakable deep import:
 
 ```typescript
+import { completeLTVData } from "pdf-rfc3161/internals";
 import { MockFetcher, DefaultFetcher } from "pdf-rfc3161/advanced";
 
-// Use custom fetcher for testing
+// Use a mock fetcher for testing: wire it into LTV collection through
+// the fetchers adapters (this pattern is executed by the test suite).
 const mockFetcher = new MockFetcher();
 mockFetcher.setOCSPResponse("http://ocsp.example.com", mockResponse);
 
-// Use DefaultFetcher with custom settings
+const mocked = await completeLTVData(ltvData, {
+    fetchers: {
+        ocspFetcher: (url, request) => mockFetcher.fetchOCSP(url, request),
+        crlFetcher: (url) => mockFetcher.fetchCRL(url),
+    },
+});
+
+// Use DefaultFetcher with custom settings, wired the same way.
 const customFetcher = new DefaultFetcher({ timeout: 10000 });
+
+const collected = await completeLTVData(ltvData, {
+    fetchers: {
+        ocspFetcher: (url, request, context) =>
+            customFetcher.fetchOCSP(url, request, context),
+        crlFetcher: (url, context) => customFetcher.fetchCRL(url, context),
+    },
+});
 
 // Supply pre-fetched LTV data (no network needed)
 const result = await timestampPdf({
@@ -460,6 +484,14 @@ const result = await timestampPdf({
     },
 });
 ```
+
+Collection is best-effort: failures never fail signing. The one-call
+result carries them in `ltvErrors` (present only when collection ran and
+reported errors), `TimestampSession.getLTVErrors()` returns a copy of the
+latest embed's diagnostics (reset on every new embed and on dispose), and
+`archiveTimestamp` combines its own collection diagnostics with the final
+timestamp's. Caller `revocationData` is silently ignored when `enableLTV`
+is `false`.
 
 **Session Pattern for Complex Workflows:**
 
@@ -520,13 +552,20 @@ trustStore.addCertificate(rootCaCert);
 
 const verified = await verifyTimestamp(ts, {
     trustStore,
+    pdf: pdfBytes, // enables the document-hash check
+    // requireTimestampingEKU and requireCertValidAtGenTime default to
+    // true since 0.2.0; strictESSValidation stays opt-in.
     strictESSValidation: true,
 });
 ```
 
 ## Limitations
 
-- Encrypted/password-protected PDFs are not supported (pdf-lib limitation)
+- Encrypted/password-protected PDFs are rejected by default (`PDF_ERROR`).
+  Pass `ignoreEncryption: true` (or the CLI `--ignore-encryption` flag on
+  the timestamp and verify commands) as an explicit opt-in to load them
+  without decrypting, e.g. for diagnostic tooling. Password-based
+  decryption is not supported.
 - The library creates document timestamps, not signature timestamps on existing signatures
 - The signer expects a clean, structurally valid input PDF. It preserves existing bytes and
   is not a PDF sanitizer, repair tool, or hostile-file validation gateway.

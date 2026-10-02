@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { validateUrl } from "../../../core/src/utils/url.js";
+import {
+    sanitizeTransportCause,
+    sanitizeTransportMessage,
+    validateUrl,
+} from "../../../core/src/utils/url.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 
 function expectsRejection(url: string): void {
@@ -100,5 +104,204 @@ describe("validateUrl (H4 SSRF guard)", () => {
                 validateUrl("file:///etc/passwd", { allowPrivateUrls: true })
             ).toThrow(TimestampError);
         });
+    });
+});
+
+describe("sanitizeTransportMessage (M1-cause completion)", () => {
+    it("matches full URL spans case-insensitively", () => {
+        const cleaned = sanitizeTransportMessage(
+            "fetch failed for HTTPS://u:p@tsa.example.com/ts?token=MARKER done"
+        );
+
+        expect(cleaned).toContain("https://tsa.example.com/ts");
+        expect(cleaned).not.toContain("MARKER");
+        expect(cleaned).not.toContain("u:p@");
+    });
+
+    it("removes query tails beyond the old match limit", () => {
+        const longQuery = `${"a".repeat(2100)}&token=MARKER`;
+        const cleaned = sanitizeTransportMessage(
+            `fetch failed for https://tsa.example.com/ts?${longQuery} done`
+        );
+
+        expect(cleaned).toContain("https://tsa.example.com/ts");
+        expect(cleaned).not.toContain("MARKER");
+        expect(cleaned).toContain("done");
+    });
+
+    it("removes quoted query values after the URL span", () => {
+        const cleaned = sanitizeTransportMessage(
+            'request to https://h.example/p?token="abc MARKER" failed'
+        );
+
+        expect(cleaned).toContain("https://h.example/p");
+        expect(cleaned).not.toContain("MARKER");
+        expect(cleaned).toContain("failed");
+    });
+
+    it("keeps quoted URLs without query values intact", () => {
+        const cleaned = sanitizeTransportMessage('see "https://h.example/p" now');
+
+        expect(cleaned).toContain('"https://h.example/p"');
+        expect(cleaned).toContain("now");
+    });
+
+    it("keeps messages without URLs intact", () => {
+        expect(sanitizeTransportMessage("plain failure, no url")).toBe("plain failure, no url");
+    });
+});
+
+describe("sanitizeTransportMessage quoted tails round 2 (T12 P1)", () => {
+    const ORIGIN = "https://tsa.example.test/ts";
+
+    it("F1-long-quoted-tail: redacts quoted values longer than 512 chars", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?token="${"a".repeat(600)}${marker}"`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+    });
+
+    it("F1-query-after-quoted-value: redacts the query tail after a closing quote", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first="short"&token=${marker}`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+    });
+
+    it("variant: redacts single-quoted values with spaces plus an &tail", () => {
+        const marker = "T12_VARIANT_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first='a b'&token=${marker}`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+    });
+
+    it("unbalanced quote fails closed: redacts the rest of the message", () => {
+        const marker = "T12_UNBALANCED_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?token="${"a".repeat(600)}${marker}`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+    });
+
+    it("cause path: redacts long quoted tails from message and stack", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const failure = new Error(
+            `request failed for https://tsa.example.test/ts?token="${"a".repeat(600)}${marker}"`
+        );
+
+        const cleaned = sanitizeTransportCause(failure) as Error;
+
+        expect(cleaned.message).not.toContain(marker);
+        expect(cleaned.stack ?? "").not.toContain(marker);
+    });
+});
+
+describe("sanitizeTransportMessage second quoted values round 3 (T12 N1)", () => {
+    const ORIGIN = "https://tsa.example.test/ts";
+
+    it("N1-second-quoted-tail-spaces: redacts spaces inside a second quoted value", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first="short"&token="first ${marker}" failed`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+        expect(cleaned.endsWith(" failed")).toBe(true);
+    });
+
+    it("variant: redacts spaces inside a second single-quoted value", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first='short'&token='first ${marker}' failed`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+        expect(cleaned.endsWith(" failed")).toBe(true);
+    });
+
+    it("variant: redacts spaces inside a second backtick-quoted value", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first=\`short\`&token=\`first ${marker}\` failed`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+        expect(cleaned.endsWith(" failed")).toBe(true);
+    });
+
+    it("N1-unbalanced-second-quoted-tail: fails closed on an unterminated second quote", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const cleaned = sanitizeTransportMessage(
+            `request failed for https://tsa.example.test/ts?first="short"&token="first ${marker} failed`
+        );
+
+        expect(cleaned).toContain(ORIGIN);
+        expect(cleaned).not.toContain(marker);
+    });
+
+    it("cause path: redacts second quoted values from message and stack", () => {
+        const marker = "T12_FIXTURE_SECRET";
+        const failure = new Error(
+            `request failed for https://tsa.example.test/ts?first="short"&token="first ${marker}" failed`
+        );
+
+        const cleaned = sanitizeTransportCause(failure) as Error;
+
+        expect(cleaned.message).not.toContain(marker);
+        expect(cleaned.stack ?? "").not.toContain(marker);
+        expect(cleaned.message.endsWith(" failed")).toBe(true);
+    });
+});
+
+describe("sanitizeTransportCause (M1-cause completion)", () => {
+    it("sanitizes cyclic causes instead of returning the unsanitized original", () => {
+        const outer = new Error("outer https://u:p@h.example/?t=MARKERA");
+        const inner = new Error("inner failure", { cause: outer });
+        outer.cause = inner;
+
+        const cleaned = sanitizeTransportCause(outer) as Error;
+
+        expect(cleaned.message).not.toContain("MARKERA");
+        const cleanedInner = cleaned.cause as Error;
+        expect(cleanedInner.message).toBe("inner failure");
+        expect((cleanedInner.cause as Error).message).not.toContain("MARKERA");
+        expect(cleanedInner.cause).toBe(cleaned);
+    });
+
+    it("sanitizes stack-only secrets instead of taking the identity shortcut", () => {
+        const failure = new Error("clean message");
+        failure.stack =
+            "Error: clean message\n    at fetch (https://u:p@h.example/?t=MARKERS)";
+
+        const cleaned = sanitizeTransportCause(failure) as Error;
+
+        expect(cleaned).not.toBe(failure);
+        expect(cleaned.message).toBe("clean message");
+        expect(cleaned.stack ?? "").not.toContain("MARKERS");
+    });
+
+    it("preserves non-leaking causes by identity", () => {
+        const failure = new Error("down", { cause: new Error("nested down") });
+
+        expect(sanitizeTransportCause(failure)).toBe(failure);
+    });
+
+    it("passes non-Error causes through", () => {
+        expect(sanitizeTransportCause(undefined)).toBeUndefined();
+        expect(sanitizeTransportCause(42)).toBe(42);
     });
 });
