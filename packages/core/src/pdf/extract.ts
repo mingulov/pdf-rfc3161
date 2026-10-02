@@ -7,6 +7,7 @@ import {
     PDFHexString,
     PDFNumber,
     PDFRef,
+    PDFString,
 } from "pdf-lib-incremental-save";
 import {
     TimestampError,
@@ -20,6 +21,7 @@ import { snapshotDateMs } from "../utils/date.js";
 import { MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES, assertPdfWithinSize } from "../constants.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import { parsePdfDate } from "../utils/pdf-date.js";
+import { getLogger } from "../utils/logger.js";
 import {
     parseTimestampToken as extractTimestampInfo,
     isCertValidAtTime,
@@ -276,7 +278,7 @@ function collectTimestampFieldDescriptors(
 
             const inheritedValue = fieldEntry.inheritedValue("V");
             if (inheritedValue === undefined) {
-                if (archiveDetailed && (fieldMarksRfc3161 || fieldMarksDocumentTimestamp)) {
+                if (fieldMarksRfc3161 || fieldMarksDocumentTimestamp) {
                     recordMalformedField(fieldName);
                 }
                 continue;
@@ -291,7 +293,7 @@ function collectTimestampFieldDescriptors(
                     ? pdfDoc.context.lookup(sigValueRef)
                     : sigValueRef;
             if (!(sigValue instanceof PDFDict) || sigValueRef === undefined) {
-                if (archiveDetailed && (fieldMarksRfc3161 || fieldMarksDocumentTimestamp)) {
+                if (fieldMarksRfc3161 || fieldMarksDocumentTimestamp) {
                     recordMalformedField(fieldName);
                 }
                 continue;
@@ -372,21 +374,21 @@ function assertTimestampByteRangeGeometry(
 function optionalSignatureText(sigValue: PDFDict, name: string): string | undefined {
     const value = sigValue.get(PDFName.of(name));
     if (value === undefined) return undefined;
-    return value instanceof PDFHexString
-        ? value.asString()
-        : value.toString().replace(/^\(/, "").replace(/\)$/, "");
+    return value instanceof PDFString || value instanceof PDFHexString
+        ? value.decodeText()
+        : value.toString();
 }
 
 function timestampSignatureMetadata(sigValue: PDFDict): TimestampSignatureMetadata {
     const reason = optionalSignatureText(sigValue, "Reason");
     const location = optionalSignatureText(sigValue, "Location");
     const contactInfo = optionalSignatureText(sigValue, "ContactInfo");
-    const mValue = sigValue.get(PDFName.of("M"));
+    const mText = optionalSignatureText(sigValue, "M");
     return {
         ...(reason === undefined ? {} : { reason }),
         ...(location === undefined ? {} : { location }),
         ...(contactInfo === undefined ? {} : { contactInfo }),
-        ...(mValue === undefined ? {} : { m: parsePdfDate(mValue.toString()) }),
+        ...(mText === undefined ? {} : { m: parsePdfDate(mText) }),
     };
 }
 
@@ -622,9 +624,12 @@ async function discoverTimestamps(
     const timestamps: ExtractedTimestamp[] = [];
     const malformedFieldNames: string[] = [];
     const recordMalformedField = (fieldName: string | undefined): void => {
-        if (!archiveDetailed) return;
         const name = fieldName ?? "<AcroForm>";
-        if (!malformedFieldNames.includes(name)) malformedFieldNames.push(name);
+        if (malformedFieldNames.includes(name)) return;
+        malformedFieldNames.push(name);
+        if (!archiveDetailed) {
+            getLogger().warn(`Skipping malformed RFC 3161 document timestamp '${name}'.`);
+        }
     };
 
     let fields: ReturnType<typeof collectAcroFormFields>;

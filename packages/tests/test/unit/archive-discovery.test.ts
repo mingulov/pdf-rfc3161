@@ -5,6 +5,7 @@ import {
     PDFDocument,
     PDFHexString,
     PDFName,
+    PDFRef,
     PDFString,
 } from "pdf-lib-incremental-save";
 import { archiveTimestamp } from "../../../core/src/pdf/archive.js";
@@ -499,6 +500,32 @@ describe("archive malformed document-timestamp discovery", () => {
         }
     );
 
+    it("reports a dangling document-timestamp /V through archive discovery and the public warning", async () => {
+        const document = await PDFDocument.create();
+        document.addPage([100, 100]);
+        const context = document.context;
+        const field = PDFDict.withContext(context);
+        field.set(PDFName.of("FT"), PDFName.of("Sig"));
+        field.set(PDFName.of("T"), PDFString.of("NamedBroken"));
+        field.set(PDFName.of("Type"), PDFName.of("DocTimeStamp"));
+        field.set(PDFName.of("SubFilter"), PDFName.of("ETSI.RFC3161"));
+        // Object 700 is never registered: a dangling indirect /V.
+        field.set(PDFName.of("V"), PDFRef.of(700, 0));
+        const fields = PDFArray.withContext(context);
+        fields.push(context.register(field));
+        document.catalog.set(PDFName.of("AcroForm"), context.obj({ Fields: fields }));
+        const pdf = await document.save({ useObjectStreams: false });
+
+        await expect(extractTimestamps(pdf)).resolves.toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("NamedBroken"));
+        await expect(discoverArchiveTimestamps(pdf)).resolves.toMatchObject({
+            timestamps: [],
+            malformedFieldNames: ["NamedBroken"],
+        });
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
     it.each(malformedDocumentTimestampCases)(
         "warns exactly once and collects no $label material by default",
         async ({ shape }: { shape: MalformedDocumentTimestampShape }) => {
@@ -815,6 +842,48 @@ describe("timestamp discovery prefiltering", () => {
         await expect(extractTimestamps(pdf)).resolves.toEqual([]);
         await expect(discoverArchiveTimestamps(pdf)).resolves.toEqual({
             timestamps: [],
+            malformedFieldNames: [],
+        });
+    });
+
+    it("discovers a timestamp despite a direct (non-indirect) /Parent dictionary (S4 retained)", async () => {
+        // S4 stays unresolved: strictParentLinks still requires the exact
+        // indirect /Parent for VRI mutation (pinned in vri.test.ts), because
+        // mutation needs a stable reference. Discovery never enforces it, so
+        // a by-value /Parent dictionary must not hide a timestamp.
+        const document = await PDFDocument.create();
+        document.addPage([100, 100]);
+        const context = document.context;
+        const signatureRef = context.register(
+            context.obj({
+                Type: PDFName.of("DocTimeStamp"),
+                SubFilter: PDFName.of("ETSI.RFC3161"),
+                Contents: PDFHexString.of(await validTimestampContents()),
+                ByteRange: context.obj([0, 111111111111, 111111111111, 111111111111]),
+            })
+        );
+        const child = PDFDict.withContext(context);
+        child.set(PDFName.of("Parent"), context.obj({ T: PDFString.of("Parent") }));
+        child.set(PDFName.of("T"), PDFString.of("Timestamp"));
+        child.set(PDFName.of("V"), signatureRef);
+        const kids = PDFArray.withContext(context);
+        kids.push(context.register(child));
+        const parent = context.obj({
+            FT: PDFName.of("Sig"),
+            T: PDFString.of("Parent"),
+            Kids: kids,
+        });
+        document.catalog.set(
+            PDFName.of("AcroForm"),
+            context.obj({ Fields: context.obj([context.register(parent)]) })
+        );
+        const pdf = withByteRangeCoveringContents(await document.save({ useObjectStreams: false }));
+
+        await expect(extractTimestamps(pdf)).resolves.toMatchObject([
+            { fieldName: "Parent.Timestamp" },
+        ]);
+        await expect(discoverArchiveTimestamps(pdf)).resolves.toMatchObject({
+            timestamps: [expect.objectContaining({ fieldName: "Parent.Timestamp" })],
             malformedFieldNames: [],
         });
     });
