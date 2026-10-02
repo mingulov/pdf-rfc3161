@@ -57,6 +57,16 @@ async function typecheckMigrationExamples(
     await verifyTimestamp(timestamp, { trustStore });
     await verifyTimestamp(timestamp);
 
+    const historicalOptions = {
+        trustStore,
+        chainValidationTime: "genTime",
+    } satisfies VerificationOptions;
+    await verifyTimestamp(timestamp, historicalOptions);
+    await verifyTimestamp(timestamp, { trustStore, chainValidationTime: new Date() });
+    await verifyTimestamp(timestamp, { trustStore, chainValidationTime: "current" });
+    await trustStore.verifyChain([rootCertificate]);
+    await trustStore.verifyChainAtTime([rootCertificate], new Date());
+
     await timestampPdfMultiple({
         pdf,
         tsaList: [tsa],

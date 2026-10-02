@@ -286,6 +286,26 @@ export interface VerificationOptions {
     trustStore?: TrustStore | null;
 
     /**
+     * Moment the signer's chain must have been valid at. `"current"`
+     * (default) validates at a fresh wall-clock capture per distinct
+     * signature value -- batch calls do not share one capture across
+     * values -- and works with any store; `"genTime"` validates at the
+     * token's own genTime; a `Date` validates at that instant (must be
+     * finite; the intrinsic instant is snapshotted synchronously at
+     * entry, so neither an overridden getTime nor later caller mutation
+     * can change the verdict). Historical requests
+     * require a store with the `verifyChainAtTime` capability and fail
+     * with `INVALID_ARGUMENT` otherwise -- they never silently validate
+     * at the wrong date. Historical path validity alone establishes
+     * neither historical revocation nor archival qualification.
+     * Revocation/network cache and breaker TTL clocks stay wall-clock
+     * by design; only path validity is historical. The pkijs engine
+     * additionally takes a discarded default-date reading per chain on
+     * construction; verdicts follow only the captured or supplied date.
+     */
+    chainValidationTime?: "current" | "genTime" | Date;
+
+    /**
      * Enforce strict PAdES ESS validation. If true, verifies the complete
      * signed SigningCertificate and/or SigningCertificateV2 binding to the
      * SID-selected signer certificate.

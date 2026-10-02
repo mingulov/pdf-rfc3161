@@ -68,12 +68,40 @@ jobs:
       # accidental heavy imports); realistic compaction is ~2 KiB at
       # most, an order of magnitude short. Per-breach ruling;
       # T19 still owns bundle efficiency.
-      - name: Enforce ESM bundle size budget (<= 249 KiB)
+      # R20 (T09b): 251 KiB. The T09b historical chain validation
+      # (verifyChainAtTime capability + chainValidationTime dispatch +
+      # finite-date/full-consumption gates) grew the main entry by
+      # +1877 bytes (254924 -> 256801). Bundle-diff verified exactly
+      # 4 hunks (extract dispatch, delegation, gates, checkDate
+      # param), no new modules, no duplication; the OCSP/CRL
+      # revocation-date work is advanced-only (main unmoved).
+      # Realistic compaction (~400 bytes: failure-return dedupe +
+      # comment trimming) is an order of magnitude short. Per-breach
+      # ruling; T19 still owns bundle efficiency.
+      # R21 (T09b fix round 2): 252 KiB. The Astra P2 fixes (F1 date
+      # snapshot helper + 2 call sites, F2 INVALID_ARGUMENT escape,
+      # F3 code copy, F4 doc corrections) grew the main entry by
+      # +536 bytes (256801 -> 257337). Bundle-diff verified 31
+      # changed lines, all mandated review findings (plus a tiny
+      # date.ts helper); the Feb-30 stretch is advanced-only (main
+      # unmoved). Compaction already applied by the fixer (shared
+      # helper, inlined construction, minimal JSDoc); further savings
+      # under 100 bytes. Per-breach ruling; T19 still owns bundle
+      # efficiency.
+      # R22 (T09b fix round 5): 253 KiB. The Astra N2/N3 fixes
+      # (defineProperty overrides + eager original-receiver policy
+      # reads in withOwn) grew the main entry by +580 bytes
+      # (258032 -> 258612). Bundle-diff verified a single withOwn
+      # hunk (field table + defineProperty/eager logic), no new
+      # modules, no duplication. Fixer compacted 258739 -> 258612
+      # first; the remainder is irreducible mandated runtime.
+      # Per-breach ruling; T19 still owns bundle efficiency.
+      - name: Enforce ESM bundle size budget (<= 253 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=254976
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 249 KiB)"
+          MAX=259072
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 253 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 249 KiB (254976 bytes) budget"
+            echo "::error::ESM bundle exceeds 253 KiB (259072 bytes) budget"
             exit 1
           fi

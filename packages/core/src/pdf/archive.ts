@@ -2,7 +2,9 @@ import { timestampPdf } from "../index.js";
 import { assertPdfWithinSize, assertValidSignatureSize } from "../constants.js";
 import {
     discoverArchiveTimestamps,
+    freezeValidationTime,
     verifyTimestampsWithSharedIndex,
+    withOwn,
     type ExtractedTimestamp,
 } from "./extract.js";
 import { addDSS, extractLTVData, completeLTVData, type LTVData } from "./ltv.js";
@@ -109,6 +111,9 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
         existingTimestampVerifyOptions,
     } = options;
 
+    // Freeze the caller-owned validation instant before discovery awaits.
+    const frozenExisting = freezeValidationTime(existingTimestampVerifyOptions ?? {});
+
     assertPdfWithinSize(pdf, options.maxSize);
     assertValidSignatureSize(options.signatureSize);
 
@@ -134,10 +139,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
     // still reports `verified: true`, undermining the H1 surfacing. The
     // caller's `existingTimestampVerifyOptions` (trustStore, opt-outs)
     // override / augment as needed.
-    const verifyOpts: VerificationOptions = {
-        ...existingTimestampVerifyOptions,
-        pdf,
-    };
+    const verifyOpts: VerificationOptions = withOwn(frozenExisting, "pdf", pdf);
     const verifiedTimestamps = await verifyTimestampsWithSharedIndex(
         existingTimestamps,
         verifyOpts,
@@ -164,6 +166,10 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
             const message = `Existing timestamp '${verified.fieldName}' failed verification: ${
                 verified.verificationError ?? "no error message"
             }`;
+            // Coded request failures escape the permissive policy in every mode.
+            if (verified.verificationErrorCode === TimestampErrorCode.INVALID_ARGUMENT) {
+                throw new TimestampError(verified.verificationErrorCode, message);
+            }
             if (strictExistingVerification) {
                 throw new TimestampError(TimestampErrorCode.VERIFICATION_FAILED, message);
             }

@@ -12,6 +12,8 @@ import { PdfSignatureOccurrenceIndex } from "../../../core/src/pdf/signature-occ
 import * as pkiUtils from "../../../core/src/pki/pki-utils.js";
 import { createTimestampRequest } from "../../../core/src/tsa/index.js";
 import * as tokenValidation from "../../../core/src/tsa/token-validation.js";
+import type { TrustStore } from "../../../core/src/pki/trust-store.js";
+import { TimestampErrorCode } from "../../../core/src/types.js";
 import { createRFC3161TokenFixtureFromRequest } from "../fixtures/rfc3161-token.js";
 import { qpdfLinearizedBasePdf } from "../fixtures/qpdf-linearized-base.js";
 
@@ -798,6 +800,26 @@ describe("lexical signature /Contents occurrence binding", () => {
             expect(verifyCms).toHaveBeenCalledTimes(1);
         } finally {
             verifyCms.mockRestore();
+        }
+    });
+
+    it("carries verificationErrorCode to aliased fields sharing one value (T09b-F3)", async () => {
+        const pdf = await manyFieldsSharingOneSignaturePdf(2);
+        // Legacy-shaped store (no verifyChainAtTime): the "genTime"
+        // request fails with coded INVALID_ARGUMENT on the original, and
+        // the alias must carry the same machine-readable code.
+        const legacyStore: TrustStore = {
+            addCertificate(): void {},
+            verifyChain: () => Promise.resolve(true),
+        };
+        const verified = await verifyPdfTimestamps(pdf, {
+            trustStore: legacyStore,
+            chainValidationTime: "genTime",
+        });
+        expect(verified).toHaveLength(2);
+        for (const result of verified) {
+            expect(result.verified).toBe(false);
+            expect(result.verificationErrorCode).toBe(TimestampErrorCode.INVALID_ARGUMENT);
         }
     });
 

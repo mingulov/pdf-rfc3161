@@ -852,6 +852,39 @@ function checkCrlFreshness(
 }
 
 /**
+ * Revocation instant of the serial-matching entry against thisUpdate.
+ * Returns a full unknown diagnostic, or null when the revocationDate
+ * is a finite date no later than thisUpdate plus skew (inclusive).
+ * Non-Date shapes are unknown, mirroring checkRevocationTime.
+ *
+ * @internal Exported for direct unit tests of unreachable-via-DER
+ * shapes; not part of any public entry.
+ */
+export function checkRevocationDate(
+    revocationDate: unknown,
+    thisUpdateMs: number,
+    skewMs: number
+): string | null {
+    if (!(revocationDate instanceof Date)) {
+        return (
+            "CRL: matching revoked entry carries a revocationDate with an " +
+            "unsupported shape; revocation status unknown"
+        );
+    }
+    const revMs = revocationDate.getTime();
+    if (!Number.isFinite(revMs)) {
+        return (
+            "CRL: matching revoked entry carries a non-finite revocationDate; " +
+            "revocation status unknown"
+        );
+    }
+    if (revMs > thisUpdateMs + skewMs) {
+        return "CRL: revocationDate is after thisUpdate; revocation status unknown";
+    }
+    return null;
+}
+
+/**
  * Processes one entry reason code (RFC 5280 5.3.1): canonical
  * ENUMERATED with complete consumption, then the value against the
  * supported enumeration. removeFromCRL (8) may only appear in delta
@@ -1523,6 +1556,12 @@ async function evaluateCRLEvidence(
     }
     const matchFailure = checkMatchingEntryExtensions(match, budget);
     if (matchFailure !== null) return unknownEvidence(matchFailure);
+    const dateFailure = checkRevocationDate(
+        match.revocationDate.value,
+        crl.thisUpdate.value.getTime(),
+        options.clockSkewMs
+    );
+    if (dateFailure !== null) return unknownEvidence(dateFailure);
     const status: RevocationStatus = "revoked";
     return { status, source: "CRL", errors: [] };
 }
