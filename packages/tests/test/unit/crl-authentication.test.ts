@@ -420,18 +420,19 @@ describe("CRL authentication (T07)", () => {
             expect(result.errors).toEqual([]);
         });
 
-        it("reports revoked for a listed serial with a future revocationDate (T09b)", async () => {
-            // The revocation instant feeds no verdict: revoked means
-            // revoked whatever instant the entry names (MIGRATION
-            // "Revoked means revoked regardless of revocationDate").
-            // Historical was-revoked-at-date semantics belong to T09b.
+        it("reports unknown for a listed serial with a future revocationDate (T09b)", async () => {
+            // T09b closes the documented deferral: a matching revoked
+            // entry now requires a finite revocationDate no later than
+            // thisUpdate plus skew (MIGRATION "revocationDate is now
+            // evaluated"). A 2027 revocation instant against a 2026
+            // thisUpdate fails that bound.
             const crl = await freshCRL(ca, {
                 entries: [{ serial: 2001, revocationDate: new Date("2027-01-01T00:00:00Z") }],
             });
             const result = await validateDirect(crl);
-            expect(result.status).toBe("revoked");
+            expect(result.status).toBe("unknown");
             expect(result.source).toBe("CRL");
-            expect(result.errors).toEqual([]);
+            expect(result.errors.join("\n")).toMatch(/revocationDate/);
         });
 
         it("reports good for an unlisted serial", async () => {
@@ -4495,5 +4496,86 @@ describe("CRL authentication (T07)", () => {
                 }
             }
         );
+    });
+
+    describe("T09b revocationDate evaluation (item 5)", () => {
+        // RevocationDate rides UTCTime (whole seconds), so the +/-1 ms
+        // boundary is pinned by shifting the skew knob against fixed
+        // bytes instead of shifting the date (the T06 F6 technique).
+        const REVOCATION_BOUNDARY = new Date(THIS_UPDATE.getTime() + CLOCK_SKEW_MS);
+
+        it("reports revoked when revocationDate exactly equals thisUpdate plus skew", async () => {
+            const crl = await freshCRL(ca, {
+                entries: [{ serial: 2001, revocationDate: REVOCATION_BOUNDARY }],
+            });
+            const result = await validateDirect(crl);
+            expect(result.status).toBe("revoked");
+            expect(result.errors).toEqual([]);
+        });
+
+        it("reports revoked when revocationDate predates thisUpdate plus skew", async () => {
+            const crl = await freshCRL(ca, {
+                entries: [
+                    {
+                        serial: 2001,
+                        revocationDate: new Date("2026-05-01T11:04:59Z"),
+                    },
+                ],
+            });
+            const result = await validateDirect(crl);
+            expect(result.status).toBe("revoked");
+            expect(result.errors).toEqual([]);
+        });
+
+        it("reports unknown when the skew shrinks one millisecond below the boundary", async () => {
+            const crl = await freshCRL(ca, {
+                entries: [{ serial: 2001, revocationDate: REVOCATION_BOUNDARY }],
+            });
+            const result = await validateDirect(crl, { clockSkewMs: CLOCK_SKEW_MS - 1 });
+            expect(result.status).toBe("unknown");
+            expect(result.errors.join("\n")).toMatch(/revocationDate/);
+        });
+
+        it("reports revoked when the skew grows one millisecond above the boundary", async () => {
+            const crl = await freshCRL(ca, {
+                entries: [{ serial: 2001, revocationDate: REVOCATION_BOUNDARY }],
+            });
+            const result = await validateDirect(crl, { clockSkewMs: CLOCK_SKEW_MS + 1 });
+            expect(result.status).toBe("revoked");
+            expect(result.errors).toEqual([]);
+        });
+
+        it("reports unknown when revocationDate is past thisUpdate plus skew", async () => {
+            const crl = await freshCRL(ca, {
+                entries: [
+                    {
+                        serial: 2001,
+                        revocationDate: new Date("2026-05-01T11:05:01Z"),
+                    },
+                ],
+            });
+            const result = await validateDirect(crl);
+            expect(result.status).toBe("unknown");
+            expect(result.errors.join("\n")).toMatch(/revocationDate/);
+        });
+
+        it("treats non-finite and non-Date revocationDate as unknown (direct unit)", async () => {
+            // Unreachable via DER (UTCTime garbage rolls over to a
+            // finite instant or throws at parse; pkijs Time.value is
+            // always a Date), pinned directly as defense-in-depth.
+            const { checkRevocationDate } = await import("../../../core/src/pki/crl-validation.js");
+            expect(
+                checkRevocationDate(new Date(NaN), THIS_UPDATE.getTime(), CLOCK_SKEW_MS)
+            ).toMatch(/non-finite revocationDate/);
+            expect(
+                checkRevocationDate("2026-05-01T11:00:00Z", THIS_UPDATE.getTime(), CLOCK_SKEW_MS)
+            ).toMatch(/unsupported shape/);
+            expect(checkRevocationDate(null, THIS_UPDATE.getTime(), CLOCK_SKEW_MS)).toMatch(
+                /unsupported shape/
+            );
+            expect(
+                checkRevocationDate(REVOCATION_BOUNDARY, THIS_UPDATE.getTime(), CLOCK_SKEW_MS)
+            ).toBeNull();
+        });
     });
 });

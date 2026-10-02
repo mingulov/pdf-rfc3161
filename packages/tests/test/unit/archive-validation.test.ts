@@ -7,21 +7,35 @@ import {
     PDFRawStream,
 } from "pdf-lib-incremental-save";
 
-vi.mock("../../../core/src/pdf/extract.js", () => {
-    const extractTimestamps = vi.fn();
-    const verifyTimestamp = vi.fn();
-    return {
-        extractTimestamps,
-        discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
-            timestamps: await extractTimestamps(pdf, options),
-            malformedFieldNames: [],
-        })),
-        verifyTimestamp,
-        verifyTimestampsWithSharedIndex: vi.fn(async (timestamps: unknown[], options: unknown) =>
-            Promise.all(timestamps.map((timestamp) => verifyTimestamp(timestamp, options)))
-        ),
-    };
-});
+vi.mock(
+    "../../../core/src/pdf/extract.js",
+    async (importOriginal: <T = unknown>() => Promise<T>) => {
+        const actual =
+            await importOriginal<typeof import("../../../core/src/pdf/extract.js")>();
+        const extractTimestamps = vi.fn();
+        const verifyTimestamp = vi.fn();
+        return {
+            extractTimestamps,
+            discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
+                timestamps: await extractTimestamps(pdf, options),
+                malformedFieldNames: [],
+            })),
+            verifyTimestamp,
+            // The real entry freeze: archive wiring tests must exercise the
+            // production snapshot, not a stub.
+            freezeValidationTime: actual.freezeValidationTime,
+            // The real preserving clone: archive wiring tests must forward
+            // the production options object, not a stub.
+            withOwn: actual.withOwn,
+            verifyTimestampsWithSharedIndex: vi.fn(
+                async (timestamps: unknown[], options: unknown) =>
+                    Promise.all(
+                        timestamps.map((timestamp) => verifyTimestamp(timestamp, options))
+                    )
+            ),
+        };
+    }
+);
 
 vi.mock("../../../core/src/index.js", () => ({
     timestampPdf: vi.fn(),

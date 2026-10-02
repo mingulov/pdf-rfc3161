@@ -231,12 +231,15 @@ OCSP bytes are still collected into
 evaluation stays unknown, so LTV embedding never loses candidate
 material to a strict verdict.
 
-Revoked means revoked regardless of `revocationTime`: the session
-does not compare the revocation instant against `thisUpdate`, so an
-authenticated, bound, and fresh response that says revoked yields
-"revoked" whatever instant it names. Historical questions -- whether
-the certificate was already revoked at some past date -- are owned by
-a later task (T09b) and are not answered here.
+A revoked verdict additionally requires a finite `revocationTime`
+no later than `thisUpdate` plus skew (inclusive boundary): an
+authenticated, bound, and fresh response that names a later instant
+yields "unknown" with a `revocationTime` diagnostic instead of
+"revoked". Every matching SingleResponse is evaluated, so one
+out-of-bound instant fails the response even when its siblings are
+in bound. Unparseable or misshapen revocation instants stay
+"unknown" as well. This closes the T06 deferral ("revoked means
+revoked regardless of revocationTime").
 
 OCSP requests now carry a fresh random 32-byte nonce inside
 `requestExtensions` (previously the nonce never reached the wire), and
@@ -327,12 +330,13 @@ strict verdict; fetching needs only the leaf distribution point, so a
 CRL is fetched and preserved even when no issuer can validate it
 (only the verdict needs the verified issuer).
 
-Revoked means revoked regardless of `revocationDate`: the session
-does not compare the revocation instant against anything, so an
-authenticated, in-scope, fresh CRL that lists the serial yields
-"revoked" whatever instant the entry names. Historical questions --
-whether the certificate was already revoked at some past date -- are
-owned by a later task (T09b) and are not answered here.
+A revoked verdict additionally requires a finite `revocationDate`
+on the matching entry no later than `thisUpdate` plus skew
+(inclusive boundary): an authenticated, in-scope, fresh CRL that
+lists the serial with a later instant yields "unknown" with a
+`revocationDate` diagnostic instead of "revoked". This closes the
+T07 deferral ("revoked means revoked regardless of
+revocationDate").
 
 Delta CRLs are explicitly deferred, never treated as complete: a CRL
 carrying a DeltaCRLIndicator extension (detected by OID before value
@@ -436,6 +440,38 @@ authentication yields "unknown" with no refetch; and issuer
 resolution for CRL validation happens after the first fetch, so a
 certificate whose issuer cannot be resolved records one issuer
 diagnostic and stops instead of fetching every remaining URL.
+
+### Historical chain validation via `chainValidationTime`
+
+`verifyTimestamp` and `verifyPdfTimestamps` accept an optional
+`VerificationOptions.chainValidationTime`: `"current"` (the default,
+one wall-clock capture per call, works with any store), `"genTime"`
+(the token's own genTime), or an explicit finite `Date`. Historical
+requests validate `chain[0]` -- the same target the default call
+verifies -- as of the carried date, and require a trust store with
+the optional `TrustStore.verifyChainAtTime(chain, checkDate)`
+capability (implemented by `SimpleTrustStore`). A historical request
+against a store without the capability, or with a non-finite date,
+fails as `verified: false` with `verificationErrorCode:
+"INVALID_ARGUMENT"` and a diagnostic message; it never silently
+validates at the wrong date. Custom `TrustStore` implementations
+without the new method keep working for default current-time calls.
+
+Historical path validity alone establishes neither historical
+revocation nor archival qualification: a chain that was valid at
+genTime says nothing about whether the signer was already revoked
+then, and nothing about long-term archival policy. Revocation and
+network cache retention plus circuit-breaker TTL clocks stay
+wall-clock by design; only path validity is evaluated historically.
+
+`SimpleTrustStore` inputs are now fully consumed:
+`addCertificate` and `verifyChain` / `verifyChainAtTime` reject
+DER-encoded anchors and chain entries with trailing garbage (or
+unparseable framing) with `INVALID_RESPONSE`. Anchors with trailing
+bytes were previously pinned silently, and malformed chain inputs
+surfaced a raw schema error; `pkijs.Certificate` objects are
+unaffected, and CRLs are still never consulted during path
+validation.
 
 ## 0.2.1 -> 0.2.2
 

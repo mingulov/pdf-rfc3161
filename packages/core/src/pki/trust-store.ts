@@ -2,6 +2,7 @@ import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer } from "../utils.js";
+import { snapshotDateMs } from "../utils/date.js";
 
 /**
  * Trust Store for Certificate Chain Validation
@@ -58,6 +59,23 @@ export interface TrustStore {
      * @returns True if `chain[0]` chains back to a trusted root
      */
     verifyChain(chain: (Uint8Array | pkijs.Certificate)[]): Promise<boolean>;
+
+    /**
+     * Verifies `chain[0]` as of `checkDate` (same target semantics as
+     * `verifyChain`). Optional capability: stores without it stay valid
+     * for current-time calls, while explicit historical requests against
+     * them fail instead of silently validating at the wrong date.
+     * Historical path trust alone establishes neither historical
+     * revocation nor archival qualification. `checkDate` must be finite.
+     *
+     * @param chain List of certificates (DER-encoded or pkijs.Certificate objects)
+     * @param checkDate Moment the path must have been valid at
+     * @returns True if `chain[0]` chained back to a trusted root then
+     */
+    verifyChainAtTime?(
+        chain: (Uint8Array | pkijs.Certificate)[],
+        checkDate: Date
+    ): Promise<boolean>;
 }
 
 /**
@@ -110,7 +128,7 @@ export class SimpleTrustStore implements TrustStore {
             this.trustedCerts.push(cert);
         } else {
             const asn1 = asn1js.fromBER(toArrayBuffer(cert));
-            if (asn1.offset === -1) {
+            if (asn1.offset !== cert.length) {
                 throw new TimestampError(
                     TimestampErrorCode.INVALID_RESPONSE,
                     "Failed to parse trusted certificate"
@@ -127,8 +145,29 @@ export class SimpleTrustStore implements TrustStore {
      * certificate), so the adapter reorders and deduplicates the engine
      * input internally without changing the public caller order, then
      * checks that the returned path begins with the intended target.
+     * Verdict time is captured once per call; the engine takes one more discarded reading.
      */
     async verifyChain(chain: (Uint8Array | pkijs.Certificate)[]): Promise<boolean> {
+        return this.verifyChainAtTime(chain, new Date());
+    }
+
+    /**
+     * Verifies that `chain[0]` chained back to a trusted root as of
+     * `checkDate`. Same target binding as `verifyChain`; the verdict
+     * follows only `checkDate` (the engine takes one discarded reading).
+     */
+    async verifyChainAtTime(
+        chain: (Uint8Array | pkijs.Certificate)[],
+        checkDate: Date
+    ): Promise<boolean> {
+        // Snapshot before any await: the caller keeps the reference.
+        const checkMs = snapshotDateMs(checkDate);
+        if (!Number.isFinite(checkMs)) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                "verifyChainAtTime checkDate must be a finite date"
+            );
+        }
         if (chain.length === 0) return false;
         if (this.trustedCerts.length === 0) return false;
 
@@ -136,6 +175,12 @@ export class SimpleTrustStore implements TrustStore {
         const certChain = chain.map((c) => {
             if (c instanceof pkijs.Certificate) return c;
             const asn1 = asn1js.fromBER(toArrayBuffer(c));
+            if (asn1.offset !== c.length) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    "Failed to parse chain certificate"
+                );
+            }
             return new pkijs.Certificate({ schema: asn1.result });
         });
 
@@ -193,6 +238,7 @@ export class SimpleTrustStore implements TrustStore {
             trustedCerts: engineAnchors,
             certs: engineCerts,
             crls: [], // CRLs not supported in simple verify yet
+            checkDate: new Date(checkMs),
         });
 
         // Verify the chain

@@ -297,6 +297,97 @@ function checkSingleFreshness(
 }
 
 /**
+ * True when GeneralizedTime content octets are the profile form:
+ * `YYYYMMDDHHMMSSZ` with a real proleptic-Gregorian calendar date and
+ * DER-midnight hours, plus an optional millisecond-precision fraction
+ * (`.f`, `.ff`, or `.fff`). asn1js parses Feb-30, month 13, and `+0000`
+ * offsets into a GeneralizedTime without error (silently normalizing),
+ * so the raw octets gate the grammar instead of the parsed Date. The
+ * calendar core mirrors the CRL invalidityDate grammar; the fraction
+ * tail is required here because revocationTime feeds millisecond
+ * comparisons (unlike the verdict-neutral invalidityDate), and this
+ * stack emits `.fffZ` for non-zero milliseconds. Deliberately local
+ * rather than shared (see the duplication note in crl-validation.ts).
+ */
+function isCanonicalGeneralizedTimeContent(content: Uint8Array): boolean {
+    // Whole seconds (15 octets) or millisecond fraction (17-19).
+    const wholeSeconds = content.length === 15;
+    const fractionDigits = content.length - 16;
+    const fractional = fractionDigits >= 1 && fractionDigits <= 3 && content[14] === 0x2e;
+    if (!wholeSeconds && !fractional) return false;
+    if (content[content.length - 1] !== 0x5a) return false;
+    for (let index = 0; index < 14; index++) {
+        const octet = content[index];
+        if (octet === undefined || octet < 0x30 || octet > 0x39) return false;
+    }
+    if (fractional) {
+        for (let index = 15; index < content.length - 1; index++) {
+            const octet = content[index];
+            if (octet === undefined || octet < 0x30 || octet > 0x39) return false;
+        }
+    }
+    const digits = (at: number, count: number): number => {
+        let value = 0;
+        for (let index = 0; index < count; index++) {
+            value = value * 10 + ((content[at + index] ?? 0) - 0x30);
+        }
+        return value;
+    };
+    const month = digits(4, 2);
+    const day = digits(6, 2);
+    const hour = digits(8, 2);
+    const minute = digits(10, 2);
+    const second = digits(12, 2);
+    if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+    const year = digits(0, 4);
+    const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    let daysInMonth = 31;
+    if (month === 2) {
+        daysInMonth = leap ? 29 : 28;
+    } else if (month === 4 || month === 6 || month === 9 || month === 11) {
+        daysInMonth = 30;
+    }
+    return day >= 1 && day <= daysInMonth;
+}
+
+/**
+ * Revoked instant of one matching SingleResponse against thisUpdate.
+ * Returns a diagnostic fragment, or null when the revocationTime is a
+ * finite date with canonical calendar content no later than thisUpdate
+ * plus skew (inclusive). Only revoked statuses reach here; grammar was
+ * enforced before selection, so anything but a GeneralizedTime instant
+ * is an unsupported shape.
+ *
+ * @internal Exported for direct unit tests of unreachable-via-DER
+ * shapes; not part of any public entry.
+ */
+export function checkRevocationTime(
+    certStatus: unknown,
+    thisUpdate: Date,
+    skewMs: number
+): string | null {
+    const revoked = certStatus instanceof asn1js.Constructed ? certStatus : null;
+    const instant = revoked?.valueBlock.value[0];
+    if (!(instant instanceof asn1js.GeneralizedTime)) {
+        return "revocationTime has an unsupported shape";
+    }
+    const revMs = instant.toDate().getTime();
+    if (!Number.isFinite(revMs)) {
+        return "revocationTime is not a finite date";
+    }
+    // Placed after the finite check so the defense-in-depth non-finite
+    // pin keeps its message; before the comparison so impossible
+    // calendar dates never feed a verdict.
+    if (!isCanonicalGeneralizedTimeContent(new Uint8Array(instant.valueBlock.valueHexView))) {
+        return "revocationTime is not a canonical calendar date";
+    }
+    if (revMs > thisUpdate.getTime() + skewMs) {
+        return "revocationTime is after thisUpdate";
+    }
+    return null;
+}
+
+/**
  * ResponderID match for one certificate. By-name compares the
  * encoded-name hex pkijs `PkiObject.toString()` returns (its default
  * `encoding` is "hex", not semantic DN text): strictly narrower than
@@ -1364,7 +1455,7 @@ async function evaluateOCSPEvidence(
     // unsolicited and ignored entirely.
 
     const checkMs = options.checkDate.getTime();
-    for (const match of matches) {
+    for (const [index, match] of matches.entries()) {
         const stale = checkSingleFreshness(
             match.thisUpdate,
             match.nextUpdate,
@@ -1375,6 +1466,19 @@ async function evaluateOCSPEvidence(
         );
         if (stale !== null) {
             return unknownEvidence(`OCSP: ${stale}; revocation status unknown`);
+        }
+        // A revoked verdict additionally requires the revocation
+        // instant itself: finite and no later than thisUpdate plus
+        // skew, evaluated for every matching SingleResponse.
+        if (statuses[index] === CertificateStatus.REVOKED) {
+            const badInstant = checkRevocationTime(
+                match.certStatus,
+                match.thisUpdate,
+                options.clockSkewMs
+            );
+            if (badInstant !== null) {
+                return unknownEvidence(`OCSP: ${badInstant}; revocation status unknown`);
+            }
         }
     }
 

@@ -16,6 +16,7 @@ import {
     type ExtractOptions,
 } from "../types.js";
 import { toArrayBuffer, bytesToHex, extractBytesFromByteRange } from "../utils.js";
+import { snapshotDateMs } from "../utils/date.js";
 import { MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES, assertPdfWithinSize } from "../constants.js";
 import { ensureWebCrypto } from "../utils/web-crypto.js";
 import { parsePdfDate } from "../utils/pdf-date.js";
@@ -67,6 +68,13 @@ export interface ExtractedTimestamp {
     verified: boolean;
     /** Verification error message if verification failed */
     verificationError?: string;
+    /**
+     * Machine-readable verification failure code, present when the
+     * failure classifies as a `TimestampErrorCode` (currently the
+     * historical chain-validation request failures; other failures
+     * still surface through `verificationError` alone).
+     */
+    verificationErrorCode?: TimestampErrorCode;
     /**
      * The certificates found in the timestamp signature.
      * Useful for performing manual revocation checks (CRL/OCSP).
@@ -457,6 +465,105 @@ function cloneTimestampInfo(info: TimestampInfo): TimestampInfo {
 }
 
 /**
+ * Every `VerificationOptions` field the verify worker reads. Each is
+ * materialized eagerly below so the original receiver governs; no other
+ * field of the options object is ever read downstream.
+ */
+const POLICY_FIELDS = [
+    "trustStore",
+    "chainValidationTime",
+    "pdf",
+    "requireTimestampingEKU",
+    "requireCertValidAtGenTime",
+    "strictESSValidation",
+] as const;
+
+/**
+ * Copies verification options for one own-value override while preserving
+ * lookup semantics: the same prototype, every non-policy own descriptor
+ * (including non-enumerable), and every policy field eagerly read once
+ * with the ORIGINAL receiver and rebuilt as an own data property (BASE
+ * spread semantics). A spread would drop an inherited or non-enumerable
+ * trustStore (T09b-N1); copied getters would instead run with the clone
+ * as `this` and lose WeakMap- or proxy-backed policy (T09b-N3). The
+ * override is defined, never assigned, so inherited setters cannot
+ * swallow it and getter-only shapes cannot throw (T09b-N2). A throwing
+ * policy getter becomes a deferred throw the worker raises inside its
+ * try/catch, so verification fails with the getter's own diagnostic
+ * instead of rejecting uncoded.
+ *
+ * @internal
+ */
+export function withOwn(
+    o: object | null,
+    k: "chainValidationTime" | "pdf",
+    v: unknown
+): VerificationOptions {
+    const s = (o ?? {}) as Record<string, unknown>;
+    const d = Object.getOwnPropertyDescriptors(s);
+    for (const f of POLICY_FIELDS) {
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- transient fresh descriptors stripped once per clone.
+        delete d[f];
+    }
+    const c = Object.create(Reflect.getPrototypeOf(s), d) as VerificationOptions &
+        Record<string, unknown>;
+    for (const f of POLICY_FIELDS) {
+        try {
+            // defineProperty never invokes setters. The override key takes
+            // the frozen value without invoking user code; every other
+            // policy field is read eagerly with the original receiver
+            // (BASE spread semantics).
+            Object.defineProperty(c, f, {
+                value: f === k ? v : s[f],
+                writable: true,
+                enumerable: true,
+                configurable: true,
+            });
+        } catch (error) {
+            // Deferred throw, unreachable for the override key (its fresh
+            // definition cannot fail): the worker reads every policy field
+            // inside its try/catch, so this surfaces as verified:false
+            // with the getter's own diagnostic.
+            Object.defineProperty(c, f, {
+                enumerable: true,
+                configurable: true,
+                get() {
+                    throw error;
+                },
+            });
+        }
+    }
+    return c;
+}
+
+/**
+ * Freezes a caller-owned `chainValidationTime` Date synchronously at a
+ * public entry point, before the first await lets the caller mutate it
+ * (T09b-F1). Strings, undefined, and non-Date shapes pass through
+ * untouched; a genuine Date becomes a fresh plain Date the caller
+ * cannot reach, holding the intrinsic call-time instant. A Date read
+ * that throws (revoked proxy) becomes an invalid Date the dispatch
+ * codes as INVALID_ARGUMENT. The dispatch snapshot stays as
+ * idempotent defense-in-depth.
+ *
+ * @internal
+ */
+export function freezeValidationTime(options: VerificationOptions): VerificationOptions {
+    let time: unknown;
+    try {
+        time = options.chainValidationTime;
+    } catch {
+        return options;
+    }
+    // Strings, null/undefined, and primitives pass through; every object
+    // (Date, revoked proxy, cross-realm, duck type) resolves through the
+    // total intrinsic read -- hostile shapes become an invalid Date the
+    // dispatch codes as INVALID_ARGUMENT.
+    if (typeof time !== "object" || time === null) return options;
+    return withOwn(options, "chainValidationTime", new Date(snapshotDateMs(time)));
+}
+
+/**
  * Extracts all RFC 3161 document timestamps from a PDF.
  *
  * @param pdfBytes - The PDF document bytes
@@ -797,7 +904,38 @@ async function verifyTimestampWithIndex(
                 signingCertificate,
                 ...certificates.filter((certificate) => certificate !== signingCertificate),
             ];
-            const isTrusted = await options.trustStore.verifyChain(chain);
+            // Historical requests need the store capability and a
+            // finite date; incapable stores fail loudly with a code,
+            // never silently at a wrong date.
+            const validationTime = options.chainValidationTime ?? "current";
+            let isTrusted: boolean;
+            if (validationTime === "current") {
+                isTrusted = await options.trustStore.verifyChain(chain);
+            } else {
+                const checkDate =
+                    validationTime === "genTime" ? parsed.info.genTime : validationTime;
+                if (typeof options.trustStore.verifyChainAtTime !== "function") {
+                    return {
+                        ...timestamp,
+                        verified: false,
+                        verificationError: "trust store does not support verifyChainAtTime",
+                        verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
+                        certificates,
+                    };
+                }
+                // Snapshot before the store await; the store gets a fresh Date.
+                const checkMs = snapshotDateMs(checkDate);
+                if (!Number.isFinite(checkMs)) {
+                    return {
+                        ...timestamp,
+                        verified: false,
+                        verificationError: "chainValidationTime must be a finite date",
+                        verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
+                        certificates,
+                    };
+                }
+                isTrusted = await options.trustStore.verifyChainAtTime(chain, new Date(checkMs));
+            }
             if (!isTrusted) {
                 return {
                     ...timestamp,
@@ -883,7 +1021,8 @@ export async function verifyTimestamp(
     timestamp: ExtractedTimestamp,
     options: VerificationOptions = {}
 ): Promise<ExtractedTimestamp> {
-    return verifyTimestampWithIndex(timestamp, options);
+    // Freeze the call-time instant before the worker's first await.
+    return verifyTimestampWithIndex(timestamp, freezeValidationTime(options));
 }
 
 function verificationCacheKey(timestamp: ExtractedTimestamp): string | undefined {
@@ -939,6 +1078,9 @@ function cloneSharedVerification(
     if (shared.verificationError !== undefined) {
         result.verificationError = shared.verificationError;
     }
+    if (shared.verificationErrorCode !== undefined) {
+        result.verificationErrorCode = shared.verificationErrorCode;
+    }
     if (shared.certificates !== undefined) {
         result.certificates = shared.certificates;
     }
@@ -964,6 +1106,8 @@ export async function verifyTimestampsWithSharedIndex(
     options: VerificationOptions = {},
     suppliedOccurrenceIndex?: PdfSignatureOccurrenceIndex
 ): Promise<ExtractedTimestamp[]> {
+    // Freeze the call-time instant before the first per-value await.
+    const frozen = freezeValidationTime(options);
     const verifiedValues = new Map<string, ExtractedTimestamp>();
     const results: ExtractedTimestamp[] = [];
     let coveredBytesReserved = 0;
@@ -979,7 +1123,7 @@ export async function verifyTimestampsWithSharedIndex(
         // and hash before entering verifyTimestampWithIndex. Invalid geometry
         // keeps its established verifier error; only valid safe lengths are
         // charged to the aggregate work budget.
-        const coveredBytes = options.pdf === undefined ? undefined : coveredByteLength(timestamp);
+        const coveredBytes = frozen.pdf === undefined ? undefined : coveredByteLength(timestamp);
         if (
             coveredBytes !== undefined &&
             coveredBytes > MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES - coveredBytesReserved
@@ -994,7 +1138,7 @@ export async function verifyTimestampsWithSharedIndex(
         // Sequential processing gives untrusted PDFs a fixed peak of one CMS
         // parse/signature verification. The cache avoids repeating that work
         // when several AcroForm fields inherit the same selected /V value.
-        const verified = await verifyTimestampWithIndex(timestamp, options, suppliedOccurrenceIndex);
+        const verified = await verifyTimestampWithIndex(timestamp, frozen, suppliedOccurrenceIndex);
         if (key !== undefined) verifiedValues.set(key, verified);
         results.push(verified);
     }
@@ -1025,6 +1169,9 @@ export async function verifyPdfTimestamps(
     pdfBytes: Uint8Array,
     options: ExtractInputOptions & Omit<VerificationOptions, "pdf"> = {}
 ): Promise<ExtractedTimestamp[]> {
+    // Freeze the call-time instant before discovery awaits; discovery
+    // itself never reads chainValidationTime.
+    const frozen = freezeValidationTime(options);
     const discovery = await discoverTimestamps(pdfBytes, options, false);
     const timestamps = discovery.timestamps;
     if (timestamps.length === 0) return [];
@@ -1046,5 +1193,9 @@ export async function verifyPdfTimestamps(
             verificationError: message,
         }));
     }
-    return verifyTimestampsWithSharedIndex(timestamps, { ...options, pdf: pdfBytes }, occurrenceIndex);
+    return verifyTimestampsWithSharedIndex(
+        timestamps,
+        withOwn(frozen, "pdf", pdfBytes),
+        occurrenceIndex
+    );
 }

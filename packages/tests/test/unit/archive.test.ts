@@ -11,21 +11,35 @@ import type { LTVData } from "../../../core/src/pdf/ltv.js";
 // Mock dependencies -- these tests cover wrapper-layer wiring only.
 // The real-PDF preservation boundary is exercised in archive-validation.test.ts.
 // These tests cover archive wiring only.
-vi.mock("../../../core/src/pdf/extract.js", () => {
-    const extractTimestamps = vi.fn();
-    const verifyTimestamp = vi.fn();
-    return {
-        extractTimestamps,
-        discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
-            timestamps: await extractTimestamps(pdf, options),
-            malformedFieldNames: [],
-        })),
-        verifyTimestamp,
-        verifyTimestampsWithSharedIndex: vi.fn(async (timestamps: unknown[], options: unknown) =>
-            Promise.all(timestamps.map((timestamp) => verifyTimestamp(timestamp, options)))
-        ),
-    };
-});
+vi.mock(
+    "../../../core/src/pdf/extract.js",
+    async (importOriginal: <T = unknown>() => Promise<T>) => {
+        const actual =
+            await importOriginal<typeof import("../../../core/src/pdf/extract.js")>();
+        const extractTimestamps = vi.fn();
+        const verifyTimestamp = vi.fn();
+        return {
+            extractTimestamps,
+            discoverArchiveTimestamps: vi.fn(async (pdf: Uint8Array, options: unknown) => ({
+                timestamps: await extractTimestamps(pdf, options),
+                malformedFieldNames: [],
+            })),
+            verifyTimestamp,
+            // The real entry freeze: archive wiring tests must exercise the
+            // production snapshot, not a stub.
+            freezeValidationTime: actual.freezeValidationTime,
+            // The real preserving clone: archive wiring tests must forward
+            // the production options object, not a stub.
+            withOwn: actual.withOwn,
+            verifyTimestampsWithSharedIndex: vi.fn(
+                async (timestamps: unknown[], options: unknown) =>
+                    Promise.all(
+                        timestamps.map((timestamp) => verifyTimestamp(timestamp, options))
+                    )
+            ),
+        };
+    }
+);
 
 vi.mock("../../../core/src/pdf/ltv.js", () => ({
     addDSS: vi.fn(),
@@ -383,6 +397,58 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
             expect(vi.mocked(timestampPdf)).not.toHaveBeenCalled();
         });
 
+        // T09b-F2: a coded INVALID_ARGUMENT failure means the renewal
+        // REQUEST itself is malformed (e.g. a historical chainValidationTime
+        // against an incapable store), not that an existing timestamp fails
+        // its checks. The permissive default policy must not renew over it,
+        // and strict mode must surface the argument failure as-is.
+        it("default: throws INVALID_ARGUMENT without renewal on coded request failures", async () => {
+            const codedFailure = {
+                ...failedVerification,
+                verificationError: "trust store does not support verifyChainAtTime",
+                verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
+            };
+            vi.mocked(extractTimestamps).mockResolvedValue([codedFailure]);
+            vi.mocked(verifyTimestamp).mockResolvedValue(codedFailure);
+            vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+            let caught: unknown;
+            try {
+                await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+            } catch (e) {
+                caught = e;
+            }
+
+            expect(caught).toBeInstanceOf(TimestampError);
+            expect((caught as TimestampError).code).toBe(TimestampErrorCode.INVALID_ARGUMENT);
+            expect(vi.mocked(timestampPdf)).not.toHaveBeenCalled();
+        });
+
+        it("strict: throws INVALID_ARGUMENT (not VERIFICATION_FAILED) on coded request failures", async () => {
+            const codedFailure = {
+                ...failedVerification,
+                verificationError: "chainValidationTime must be a finite date",
+                verificationErrorCode: TimestampErrorCode.INVALID_ARGUMENT,
+            };
+            vi.mocked(extractTimestamps).mockResolvedValue([codedFailure]);
+            vi.mocked(verifyTimestamp).mockResolvedValue(codedFailure);
+
+            let caught: unknown;
+            try {
+                await archiveTimestamp({
+                    pdf: mockPdf,
+                    tsa: mockTsaConfig,
+                    strictExistingVerification: true,
+                });
+            } catch (e) {
+                caught = e;
+            }
+
+            expect(caught).toBeInstanceOf(TimestampError);
+            expect((caught as TimestampError).code).toBe(TimestampErrorCode.INVALID_ARGUMENT);
+            expect(vi.mocked(timestampPdf)).not.toHaveBeenCalled();
+        });
+
         it("does not warn when existing timestamps verify cleanly", async () => {
             const cleanTimestamp = { ...failedVerification, verified: true, verificationError: undefined };
             vi.mocked(extractTimestamps).mockResolvedValue([cleanTimestamp]);
@@ -441,6 +507,34 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
                     requireTimestampingEKU: false,
                 })
             );
+        });
+
+        // T09b-F1 round 3: archiveTimestamp freezes the caller-owned
+        // chainValidationTime synchronously at entry, before discovery
+        // awaits. A synchronous post-call mutation must not reach the
+        // forwarded options, and the forwarded Date is a fresh copy.
+        it("freezes existingTimestampVerifyOptions.chainValidationTime at entry", async () => {
+            const clean = { ...failedVerification, verified: true, verificationError: undefined };
+            vi.mocked(extractTimestamps).mockResolvedValue([clean]);
+            vi.mocked(verifyTimestamp).mockResolvedValue(clean);
+            vi.mocked(timestampPdf).mockResolvedValue(mockTimestampResult);
+
+            const checkDate = new Date("2026-03-01T12:00:00Z");
+            const pending = archiveTimestamp({
+                pdf: mockPdf,
+                tsa: mockTsaConfig,
+                existingTimestampVerifyOptions: { chainValidationTime: checkDate },
+            });
+            checkDate.setTime(Date.parse("2035-01-01T00:00:00Z"));
+            await pending;
+
+            const forwarded = vi.mocked(verifyTimestampsWithSharedIndex).mock.calls[0]?.[1] as
+                | { chainValidationTime?: unknown }
+                | undefined;
+            const frozen = forwarded?.chainValidationTime;
+            expect(frozen).toBeInstanceOf(Date);
+            expect((frozen as Date).getTime()).toBe(Date.parse("2026-03-01T12:00:00Z"));
+            expect(frozen).not.toBe(checkDate);
         });
     });
 

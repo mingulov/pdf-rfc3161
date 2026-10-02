@@ -4508,4 +4508,162 @@ describe("OCSP authentication (T06)", () => {
             expect(result.errors).toEqual([]);
         });
     });
+
+    describe("T09b revocationTime evaluation (item 5)", () => {
+        const REVOCATION_BOUNDARY = new Date(THIS_UPDATE.getTime() + CLOCK_SKEW_MS);
+
+        async function revokedResponse(
+            revocationTime: Date
+        ): Promise<{ response: Uint8Array; requestBytes: Uint8Array }> {
+            const { requestBytes, nonce } = await boundRequest();
+            const response = await createSignedOCSPResponse(ca.cert, {
+                signerKeys: ca.keys,
+                producedAt: PRODUCED_AT,
+                responses: [
+                    {
+                        cert: leaf.cert,
+                        issuer: ca.cert,
+                        status: "revoked",
+                        thisUpdate: THIS_UPDATE,
+                        nextUpdate: NEXT_UPDATE,
+                        revocationTime,
+                    },
+                ],
+                nonceEcho: nonce!,
+            });
+            return { response, requestBytes };
+        }
+
+        it("reports revoked when revocationTime exactly equals thisUpdate plus skew", async () => {
+            const { response, requestBytes } = await revokedResponse(REVOCATION_BOUNDARY);
+            const result = await validateDirect(response, { requestBytes });
+            expect(result.status).toBe("revoked");
+            expect(result.errors).toEqual([]);
+        });
+
+        it("reports revoked when revocationTime is one millisecond before thisUpdate plus skew", async () => {
+            const { response, requestBytes } = await revokedResponse(
+                new Date(REVOCATION_BOUNDARY.getTime() - 1)
+            );
+            const result = await validateDirect(response, { requestBytes });
+            expect(result.status).toBe("revoked");
+            expect(result.errors).toEqual([]);
+        });
+
+        it("reports unknown when revocationTime is one millisecond past thisUpdate plus skew", async () => {
+            const { response, requestBytes } = await revokedResponse(
+                new Date(REVOCATION_BOUNDARY.getTime() + 1)
+            );
+            const result = await validateDirect(response, { requestBytes });
+            expect(result.status).toBe("unknown");
+            expect(result.errors.join("\n")).toMatch(/revocationTime/);
+        });
+
+        it("reports unknown when revocationTime is far past thisUpdate plus skew", async () => {
+            const { response, requestBytes } = await revokedResponse(
+                new Date("2027-01-01T00:00:00Z")
+            );
+            const result = await validateDirect(response, { requestBytes });
+            expect(result.status).toBe("unknown");
+            expect(result.errors.join("\n")).toMatch(/revocationTime/);
+        });
+
+        it.each(["20260230120000Z", "20260230120000.123Z"])(
+            "reports unknown on a Feb-30 revocationTime %s instead of normalizing to revoked",
+            async (text) => {
+                // asn1js parses Feb-30 into a GeneralizedTime (normalizing
+                // to Mar-2, inside the freshness window), so the raw octets
+                // gate the calendar grammar -- the CRL invalidityDate bar,
+                // with the millisecond-fraction tail this compared field
+                // requires.
+                const { requestBytes, nonce } = await boundRequest();
+                const feb30 = new TextEncoder().encode(text).slice().buffer;
+                const response = await createSignedOCSPResponse(ca.cert, {
+                    signerKeys: ca.keys,
+                    producedAt: PRODUCED_AT,
+                    responses: [
+                        {
+                            cert: leaf.cert,
+                            issuer: ca.cert,
+                            status: "revoked",
+                            thisUpdate: THIS_UPDATE,
+                            nextUpdate: NEXT_UPDATE,
+                            certStatusOverride: new asn1js.Constructed({
+                                idBlock: { tagClass: 3, tagNumber: 1 },
+                                value: [new asn1js.GeneralizedTime({ valueHex: feb30 })],
+                            }),
+                        },
+                    ],
+                    nonceEcho: nonce!,
+                });
+                const result = await validateDirect(response, { requestBytes });
+                expect(result.status).toBe("unknown");
+                expect(result.errors.join("\n")).toMatch(/revocationTime/);
+            }
+        );
+
+        it("treats non-finite and misshapen revocationTime as unknown (direct unit)", async () => {
+            // Unreachable via DER (asn1js throws on unparseable
+            // GeneralizedTime and serializing an Invalid Date throws
+            // too), pinned directly as defense-in-depth.
+            const { checkRevocationTime } =
+                await import("../../../core/src/pki/ocsp-validation.js");
+            const nonFinite = new asn1js.Constructed({
+                idBlock: { tagClass: 3, tagNumber: 1 },
+                value: [new asn1js.GeneralizedTime({ valueDate: new Date(NaN) })],
+            });
+            expect(checkRevocationTime(nonFinite, THIS_UPDATE, CLOCK_SKEW_MS)).toBe(
+                "revocationTime is not a finite date"
+            );
+            expect(checkRevocationTime(new asn1js.Null(), THIS_UPDATE, CLOCK_SKEW_MS)).toBe(
+                "revocationTime has an unsupported shape"
+            );
+            const feb30 = new asn1js.Constructed({
+                idBlock: { tagClass: 3, tagNumber: 1 },
+                value: [
+                    new asn1js.GeneralizedTime({
+                        valueHex: new TextEncoder().encode("20260230120000Z").slice().buffer,
+                    }),
+                ],
+            });
+            expect(checkRevocationTime(feb30, THIS_UPDATE, CLOCK_SKEW_MS)).toBe(
+                "revocationTime is not a canonical calendar date"
+            );
+            const exact = new asn1js.Constructed({
+                idBlock: { tagClass: 3, tagNumber: 1 },
+                value: [new asn1js.GeneralizedTime({ valueDate: REVOCATION_BOUNDARY })],
+            });
+            expect(checkRevocationTime(exact, THIS_UPDATE, CLOCK_SKEW_MS)).toBeNull();
+        });
+
+        it("evaluates the revocationTime of every matching SingleResponse", async () => {
+            const { requestBytes, nonce } = await boundRequest();
+            const response = await createSignedOCSPResponse(ca.cert, {
+                signerKeys: ca.keys,
+                producedAt: PRODUCED_AT,
+                responses: [
+                    {
+                        cert: leaf.cert,
+                        issuer: ca.cert,
+                        status: "revoked",
+                        thisUpdate: THIS_UPDATE,
+                        nextUpdate: NEXT_UPDATE,
+                        revocationTime: new Date("2026-04-15T00:00:00Z"),
+                    },
+                    {
+                        cert: leaf.cert,
+                        issuer: ca.cert,
+                        status: "revoked",
+                        thisUpdate: THIS_UPDATE,
+                        nextUpdate: NEXT_UPDATE,
+                        revocationTime: new Date("2027-01-01T00:00:00Z"),
+                    },
+                ],
+                nonceEcho: nonce!,
+            });
+            const result = await validateDirect(response, { requestBytes });
+            expect(result.status).toBe("unknown");
+            expect(result.errors.join("\n")).toMatch(/revocationTime/);
+        });
+    });
 });

@@ -200,6 +200,33 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   failure stops the URL loop after the first fetch. The one-call
   signing path is unchanged (LTV collection stays structural). See
   MIGRATION.md.
+- **Behavior (historical chain validation, C05):** `verifyTimestamp`
+  and `verifyPdfTimestamps` accept
+  `VerificationOptions.chainValidationTime` (`"current"` default,
+  `"genTime"`, or a finite `Date`), and `TrustStore` gains the
+  optional `verifyChainAtTime(chain, checkDate)` capability
+  (implemented by `SimpleTrustStore`). Explicit historical requests
+  validate `chain[0]` as of the carried date and fail with
+  `INVALID_ARGUMENT` -- surfaced as `verified: false` with the new
+  `verificationErrorCode` field -- against stores without the
+  capability or with a non-finite date, instead of silently
+  validating at the wrong date. Historical path validity alone
+  establishes neither historical revocation nor archival
+  qualification; see MIGRATION.md.
+- **Behavior (revocation instants evaluated):** strict OCSP and CRL
+  evaluation now check the revocation instant itself: a revoked
+  verdict additionally requires a finite `revocationTime` /
+  `revocationDate` no later than `thisUpdate` plus skew (inclusive
+  boundary). Responses listing a later instant yield "unknown" with
+  a diagnostic instead of "revoked". This closes the documented
+  T06/T07 deferral; see MIGRATION.md.
+- **Behavior (trust-anchor and chain DER consumption):**
+  `SimpleTrustStore.addCertificate` and `verifyChain` /
+  `verifyChainAtTime` now reject DER inputs with trailing garbage
+  (or unparseable framing) with `INVALID_RESPONSE` instead of
+  silently accepting the leading value (anchors) or surfacing a raw
+  schema error (chain inputs). `pkijs.Certificate` objects are
+  unaffected. See MIGRATION.md.
 
 ### Fixed
 
