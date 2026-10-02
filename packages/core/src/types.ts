@@ -104,6 +104,7 @@ export interface TimestampOptions {
      * validated its signature, issuer/responder authorization, freshness,
      * scope, CertID, or revocation status.
      * Takes precedence over automatic fetching when enableLTV is true.
+     * Silently ignored when enableLTV is false (no rejection).
      */
     revocationData?: {
         /** DER-encoded certificate candidate material to embed */
@@ -145,6 +146,16 @@ export interface TimestampResult {
         /** OCSP responses embedded for LTV */
         ocspResponses: Uint8Array[];
     };
+    /**
+     * LTV collection diagnostics, present only when collection ran
+     * (`enableLTV`) and reported at least one error. Collection is
+     * best-effort and never signing-fatal: these accompany successful
+     * bytes. Absent when collection was clean, skipped
+     * (`enableLTV: false`), or replaced by caller `revocationData`.
+     * `archiveTimestamp` combines its own collection diagnostics with
+     * the final timestamp's here. See MIGRATION.md.
+     */
+    ltvErrors?: string[];
     /** @deprecated Successful timestamp operations never set this field. */
     tsaRevocationWarning?: TSAStatus;
 }

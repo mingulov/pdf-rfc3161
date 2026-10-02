@@ -19,6 +19,7 @@ import { parseCRLInfo } from "./crl-client.js";
 import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./cert-utils.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
+import { formatDiagnosticUrl } from "../utils/url.js";
 import { getLogger } from "../utils/logger.js";
 import { DEFAULT_CRL_CONFIG, DEFAULT_OCSP_CONFIG } from "../constants.js";
 import {
@@ -533,7 +534,7 @@ export class ValidationSession {
             try {
                 crl = await this.fetchCRLWithCache(url, budget);
             } catch (e) {
-                const message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+                const message = `CRL from ${formatDiagnosticUrl(url)} failed: ${e instanceof Error ? e.message : String(e)}`;
                 evidence.errors.push(message);
                 result.errors.push(message);
                 // A spent budget refuses every remaining URL identically.
@@ -569,7 +570,7 @@ export class ValidationSession {
                     clockSkewMs: this.options.clockSkewMs,
                 });
             } catch (e) {
-                const message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+                const message = `CRL from ${formatDiagnosticUrl(url)} failed: ${e instanceof Error ? e.message : String(e)}`;
                 evidence.errors.push(message);
                 result.errors.push(message);
                 continue;
@@ -578,14 +579,14 @@ export class ValidationSession {
             // deadline is discarded (see the OCSP site): unknown with an
             // exhaustion diagnostic, no further URLs.
             if (budget.isElapsed()) {
-                const message = `CRL from ${url} failed: ${budget.exhaustionError().message}`;
+                const message = `CRL from ${formatDiagnosticUrl(url)} failed: ${budget.exhaustionError().message}`;
                 evidence.errors.push(message);
                 result.errors.push(message);
                 return evidence;
             }
             if (evaluated.status === "unknown") {
                 for (const diagnostic of evaluated.errors) {
-                    const message = `CRL from ${url}: ${diagnostic}`;
+                    const message = `CRL from ${formatDiagnosticUrl(url)}: ${diagnostic}`;
                     evidence.errors.push(message);
                     result.errors.push(message);
                 }

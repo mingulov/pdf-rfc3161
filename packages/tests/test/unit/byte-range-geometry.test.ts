@@ -10,6 +10,7 @@ import {
 } from "../../../core/src/pdf/extract.js";
 import { preparePdfForTimestamp, type PreparedPDF } from "../../../core/src/pdf/prepare.js";
 import { MAX_BATCH_TIMESTAMP_VERIFICATION_BYTES } from "../../../core/src/constants.js";
+import { TimestampErrorCode } from "../../../core/src/types.js";
 import { createTimestampRequest } from "../../../core/src/tsa/index.js";
 import { createRFC3161TokenFixtureFromRequest } from "../fixtures/rfc3161-token.js";
 import {
@@ -374,6 +375,7 @@ describe("RFC 3161 PDF ByteRange geometry", () => {
                 fieldName: second.fieldName,
                 verified: false,
                 verificationError: "Timestamp verification work budget exhausted",
+                verificationErrorCode: TimestampErrorCode.VERIFICATION_FAILED,
             });
             // The second distinct value is refused before its geometry check,
             // PDF slice/hash, or CMS parse. The first one is the sole CMS run.

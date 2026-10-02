@@ -151,15 +151,31 @@ export type { VerificationOptions, ParsedTimestampResponse };
  * @param options - {@link TimestampOptions}: the PDF bytes, TSA config,
  *   and tuning flags. Only `pdf` and `tsa` are required.
  * @returns A {@link TimestampResult} with the timestamped PDF bytes,
- *   parsed {@link TimestampInfo}, and optional `ltvData`.
+ *   parsed {@link TimestampInfo}, optional `ltvData`, and optional
+ *   `ltvErrors` collection diagnostics (present only when LTV collection
+ *   ran and reported errors; never signing-fatal).
  *
  * @throws {TimestampError} with `code`:
- *   - `PDF_ERROR` if the input PDF can't be parsed or exceeds `maxSize`.
+ *   - `PDF_ERROR` if the input PDF can't be parsed or exceeds `maxSize`,
+ *     or the token never fits the reservation cap
+ *     (`PlaceholderTooSmallError`).
+ *   - `INVALID_ARGUMENT` if `requestCertificate` is false (use
+ *     `TimestampSession` for that shape), or a `maxSize`,
+ *     `signatureSize`, `retry`, `retryDelay`, or `timeout` option is
+ *     out of range.
  *   - `TSA_ERROR` if the TSA returns any non-granted status.
  *   - `NETWORK_ERROR` if the TSA URL fails {@link validateUrl} (SSRF),
  *     exceeds the response size cap, or all retries are exhausted.
+ *   - `TIMEOUT` if the per-attempt deadline is exhausted.
+ *   - `CIRCUIT_OPEN` if the per-URL circuit breaker is open.
+ *   - `INVALID_RESPONSE` / `MALFORMED_RESPONSE` if the TSA response
+ *     cannot be parsed.
  *   - `VERIFICATION_FAILED` if the TSA response fails pre-embed request
  *     binding or CMS profile verification (for example, nonce or digest mismatch).
+ *
+ * LTV collection failures never throw: they are returned in
+ * `TimestampResult.ltvErrors` alongside the signed bytes. Caller
+ * `revocationData` is silently ignored when `enableLTV` is false.
  *
  * @example
  * Minimal usage:
@@ -269,6 +285,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
             let finalPdf = await session.embedTimestampToken(responseBytes);
 
             let ltvData: TimestampResult["ltvData"] = undefined;
+            let ltvErrors: string[] | undefined;
             if (enableLTV) {
                 const extracted = extractLTVData(tsResponse.token);
 
@@ -288,6 +305,9 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                     completed = await completeLTVData(extracted);
                 }
 
+                // Assigned only when non-empty, so the spread below can
+                // test truthiness to decide key presence.
+                if (completed.errors.length > 0) ltvErrors = completed.errors;
                 ltvData = {
                     certificates: completed.data.certificates,
                     crls: completed.data.crls,
@@ -301,6 +321,7 @@ export async function timestampPdf(options: TimestampOptions): Promise<Timestamp
                 pdf: finalPdf,
                 timestamp: tsResponse.info,
                 ltvData,
+                ...(ltvErrors && { ltvErrors }),
             };
         } catch (error) {
             // Retry placeholder exhaustion by type, never by message text: an

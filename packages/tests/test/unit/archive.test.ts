@@ -123,6 +123,33 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
         },
     };
 
+    it("combines archive collection diagnostics with final timestamp diagnostics", async () => {
+        vi.mocked(extractTimestamps).mockResolvedValue([]);
+        vi.mocked(completeLTVData).mockResolvedValue({
+            data: { certificates: [], crls: [], ocspResponses: [] },
+            errors: ["archive collection: boom"],
+        });
+        vi.mocked(timestampPdf).mockResolvedValue({
+            ...mockTimestampResult,
+            ltvErrors: ["final collection: bang"],
+        });
+
+        const result = await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+
+        expect(result.pdf).toEqual(mockTimestampResult.pdf);
+        expect(result.ltvErrors).toEqual(["archive collection: boom", "final collection: bang"]);
+    });
+
+    it("omits ltvErrors when neither archive nor final collection reports errors", async () => {
+        vi.mocked(extractTimestamps).mockResolvedValue([]);
+        vi.mocked(timestampPdf).mockResolvedValue({ ...mockTimestampResult });
+
+        const result = await archiveTimestamp({ pdf: mockPdf, tsa: mockTsaConfig });
+
+        expect(result.pdf).toEqual(mockTimestampResult.pdf);
+        expect("ltvErrors" in result).toBe(false);
+    });
+
     it("merges global DSS once and timestamps the returned DSS bytes without automatic LTV", async () => {
         const dssResult = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x44, 0x53, 0x53]);
         vi.mocked(extractTimestamps).mockResolvedValue([]);

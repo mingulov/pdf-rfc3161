@@ -87,6 +87,7 @@ export class TimestampSession {
     private disposed = false;
     /** Exact request binding captured for the mandatory pre-embed validator. */
     private currentRequestContext: TimestampRequestContext | null = null;
+    private ltvErrors: string[] = [];
 
     // Store mutable prepare options directly to allow updates
     private currentPrepareOptions: PrepareOptions;
@@ -122,6 +123,11 @@ export class TimestampSession {
         return this.options.enableLTV !== false ? LTV_SIGNATURE_SIZE : DEFAULT_SIGNATURE_SIZE;
     }
 
+    /** Copy of the latest embed attempt's LTV diagnostics; reset on every attempt and dispose. */
+    getLTVErrors(): readonly string[] {
+        return [...this.ltvErrors];
+    }
+
     /**
      * Update the signature size for the next request generation.
      * Useful for optimization loops or retries. The value is validated when
@@ -149,6 +155,7 @@ export class TimestampSession {
         this.pdfBytes = new Uint8Array(0);
         this.prepared = null;
         this.currentRequestContext = null;
+        this.ltvErrors = [];
         this.currentPrepareOptions = {};
     }
 
@@ -246,6 +253,9 @@ export class TimestampSession {
         validationOptions: TimestampResponseValidationOptions = {}
     ): Promise<Uint8Array> {
         this.throwIfDisposed();
+        // A new embed attempt resets collection diagnostics, even when the
+        // attempt itself fails validation below.
+        this.ltvErrors = [];
 
         if (!this.prepared) {
             throw new TimestampError(
@@ -277,7 +287,9 @@ export class TimestampSession {
         if (shouldEnableLTV) {
             let ltvData = extractLTVData(token);
             // Collect structural revocation candidate material for the DSS.
-            ltvData = (await completeLTVData(ltvData)).data;
+            const completed = await completeLTVData(ltvData);
+            this.ltvErrors = completed.errors;
+            ltvData = completed.data;
             finalPdf = await addDSS(finalPdf, ltvData);
         }
 

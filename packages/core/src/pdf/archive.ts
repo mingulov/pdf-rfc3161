@@ -258,7 +258,7 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
             "archiveTimestamp: `enableLTV: true` is ignored; archive manages LTV internally."
         );
     }
-    return timestampPdf({
+    const finalResult = await timestampPdf({
         pdf: currentPdf,
         tsa,
         signatureFieldName: options.signatureFieldName ?? "ArchiveTimestamp",
@@ -274,6 +274,11 @@ export async function archiveTimestamp(options: ArchiveTimestampOptions): Promis
         rejectOnRevocationWarning: options.rejectOnRevocationWarning,
         enableLTV: false, // see note above
     });
+    // The archive combines its own collection diagnostics with the final
+    // timestamp's; the key stays absent when both are clean.
+    const ltvErrors = ltvResult.errors.concat(finalResult.ltvErrors ?? []);
+    if (ltvErrors.length > 0) finalResult.ltvErrors = ltvErrors;
+    return finalResult;
 }
 
 /**

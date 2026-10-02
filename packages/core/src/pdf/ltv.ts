@@ -15,6 +15,7 @@ import { getCaIssuers, findIssuer, verifyIssuance } from "../pki/cert-utils.js";
 import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "../pki/der-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
+import { formatDiagnosticUrl } from "../utils/url.js";
 import { getLogger } from "../utils/logger.js";
 import { OperationBudget } from "../utils/operation-budget.js";
 import type { OperationBudgetLimits } from "../utils/operation-budget.js";
@@ -483,7 +484,7 @@ export async function completeLTVData(
                         break;
                     } catch (e) {
                         errors.push(
-                            `Fetched CRL candidate failed structural parsing or retrieval from ${url}: ${e instanceof Error ? e.message : String(e)}`
+                            `Fetched CRL candidate failed structural parsing or retrieval from ${formatDiagnosticUrl(url)}: ${e instanceof Error ? e.message : String(e)}`
                         );
                         // A spent budget refuses every remaining URL identically.
                         if (budget.exhausted) break;
@@ -620,7 +621,7 @@ async function buildChainViaAIA(
                 }
                 try {
                     logger.debug(
-                        `Fetching missing issuer for ${cert.serialNumber.valueBlock.toString()} from ${url}`
+                        `Fetching missing issuer for ${cert.serialNumber.valueBlock.toString()} from ${formatDiagnosticUrl(url)}`
                     );
                     const certBytes = certFetcher
                         ? await budget.countCustomFetch(
@@ -647,7 +648,7 @@ async function buildChainViaAIA(
                     // budgets the fetching itself.
                     if (!(await verifyIssuance(cert, newCert))) {
                         const msg =
-                            `AIA issuer from ${url} did not issue the target ` +
+                            `AIA issuer from ${formatDiagnosticUrl(url)} did not issue the target ` +
                             "certificate; trying next URL";
                         logger.warn(msg);
                         errors.push(msg);
@@ -669,7 +670,7 @@ async function buildChainViaAIA(
                     madeProgress = true;
                     break; // Found one valid issuer, move to next cert
                 } catch (e) {
-                    const msg = `Failed to fetch CA Issuer from ${url}: ${e instanceof Error ? e.message : String(e)}`;
+                    const msg = `Failed to fetch CA Issuer from ${formatDiagnosticUrl(url)}: ${e instanceof Error ? e.message : String(e)}`;
                     logger.warn(msg);
                     errors.push(msg);
                     // Once aborted, every remaining dispatch refuses

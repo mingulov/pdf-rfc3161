@@ -1031,6 +1031,7 @@ describe("verification-option lookup semantics (T09b-N1)", () => {
         );
         expect(result.verified).toBe(false);
         expect(result.verificationError).toBe("Certificate chain not trusted");
+        expect(result.verificationErrorCode).toBe(TimestampErrorCode.VERIFICATION_FAILED);
         expect(store.calls).toBe(1);
     });
 
@@ -1645,7 +1646,7 @@ describe("verification-option override semantics (T09b-N2/N3)", () => {
         expect(results).toHaveLength(1);
         expect(results[0]?.verified).toBe(false);
         expect(results[0]?.verificationError).toContain("boom-shared");
-        expect(results[0]?.verificationErrorCode).toBeUndefined();
+        expect(results[0]?.verificationErrorCode).toBe(TimestampErrorCode.VERIFICATION_FAILED);
     });
 
     it("PDF verification maps a throwing trustStore getter to verified:false", async () => {
@@ -1656,7 +1657,7 @@ describe("verification-option override semantics (T09b-N2/N3)", () => {
         expect(results).toHaveLength(1);
         expect(results[0]?.verified).toBe(false);
         expect(results[0]?.verificationError).toContain("boom-pdf");
-        expect(results[0]?.verificationErrorCode).toBeUndefined();
+        expect(results[0]?.verificationErrorCode).toBe(TimestampErrorCode.VERIFICATION_FAILED);
     });
 
     it("archiveTimestamp strict mode maps a throwing trustStore getter before any TSA call", async () => {
@@ -1694,7 +1695,7 @@ describe("verification-option override semantics (T09b-N2/N3)", () => {
         const result = await verifyTimestamp(lapsed.extracted, options);
         expect(result.verified).toBe(false);
         expect(result.verificationError).toContain("boom-proto");
-        expect(result.verificationErrorCode).toBeUndefined();
+        expect(result.verificationErrorCode).toBe(TimestampErrorCode.VERIFICATION_FAILED);
     });
 });
 

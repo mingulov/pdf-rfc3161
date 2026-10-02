@@ -1117,6 +1117,26 @@ describe("fetchBytesWithRetry", () => {
             }
         });
 
+        it("redacts uppercase-scheme credential-bearing URLs from attached causes", async () => {
+            const upperUrl = "HTTPS://user:pass@tsa.example.com/ts?token=secret";
+            mockFetch.mockRejectedValue(new TypeError(`Request failed for ${upperUrl}`));
+            const error = await fetchBytesWithRetry(
+                makeOptions({ url: upperUrl, retry: 0, retryDelay: 5 })
+            ).then(
+                () => null,
+                (e: unknown) => e
+            );
+            expect(error).toBeInstanceOf(TimestampError);
+            expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
+            const cause = (error as TimestampError).cause;
+            expect(cause).toBeInstanceOf(Error);
+            const causeMessage = (cause as Error).message;
+            expect(causeMessage).toContain("https://tsa.example.com/ts");
+            for (const fragment of SECRET_FRAGMENTS) {
+                expect(causeMessage).not.toContain(fragment);
+            }
+        });
+
         it("redacts nested causes on attached transport errors", async () => {
             const nested = new Error(`responder boom for ${SECRET_URL}`);
             mockFetch.mockRejectedValue(new Error("outer failure", { cause: nested }));

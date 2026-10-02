@@ -506,6 +506,61 @@ with a stable `INVALID_RESPONSE` message instead of embedding
 engine-specific crash text. Callers matching on the old raw messages
 must switch to error codes.
 
+### Loss-free LTV diagnostics and machine-readable verification codes
+
+LTV collection failures are now visible on every signing path instead
+of being dropped. The one-call `timestampPdf` result carries
+`ltvErrors?: string[]`, present only when collection ran with
+`enableLTV` and reported at least one error; `TimestampSession`
+exposes `getLTVErrors(): readonly string[]` (a copy of the latest
+embed's diagnostics, reset on every new embed attempt and on
+dispose); `archiveTimestamp` combines its own collection diagnostics
+with the final timestamp's `ltvErrors`. Collection stays best-effort:
+these diagnostics accompany successful bytes and never fail signing.
+Caller `revocationData` is silently ignored when `enableLTV` is
+`false` (no rejection); this documents the existing behavior.
+
+Every verification-failure result now sets the adopted
+`ExtractedTimestamp.verificationErrorCode`:
+
+| Failure | Code |
+|---|---|
+| Document-hash mismatch | `VERIFICATION_FAILED` |
+| Untrusted certificate chain | `VERIFICATION_FAILED` |
+| Missing/non-exclusive timestamping EKU | `VERIFICATION_FAILED` |
+| Signer not valid at genTime (or no genTime) | `VERIFICATION_FAILED` |
+| Strict ESS binding failure | `VERIFICATION_FAILED` |
+| Escaping non-`TimestampError` | `VERIFICATION_FAILED` |
+| Escaping `TimestampError` | its own code |
+| Unsupported `verifyChainAtTime` / non-finite date | `INVALID_ARGUMENT` |
+| Unbuildable shared signature index | `PDF_ERROR` |
+| Batch verification work-budget exhaustion | `VERIFICATION_FAILED` |
+
+A `trustStore.verifyChain` that throws `TimestampError` now surfaces
+that code (previously only the message survived). Archive renewal
+still rethrows `INVALID_ARGUMENT`-coded existing-timestamp failures
+in every mode, so a custom store that throws `INVALID_ARGUMENT` now
+escapes renewal instead of degrading to a warning.
+
+Transport cause redaction is now case-insensitive, consumes complete
+URL spans (no match-length cliff), removes quoted query tails, and
+resolves cyclic causes to sanitized copies; stacks participate in the
+identity shortcut. LTV diagnostics and log lines that echo AIA/OCSP/
+CRL URLs now render origin plus path only. The verbose CLI `TSA:` line
+is redacted the same way.
+
+`sendTimestampRequest` logs one warning per operation (not per retry)
+when the TSA URL uses plain HTTP, with the URL redacted to origin
+plus path. Loopback targets (`localhost`, `*.localhost`, 127.0.0.0/8,
+`::1`) are exempt: loopback traffic never leaves the host, so there
+is nothing network-visible to warn about, and the local-TSA
+integration fixtures stay quiet. Private-network addresses still
+warn. The warning says nothing about token authentication, which
+verification handles independently. The CLI entry now awaits async
+actions (`program.parseAsync().catch(...)`): an action rejection that
+escapes every existing catch exits 1 with a clean `Error:` line on
+stderr instead of crashing with an unhandled rejection.
+
 ## 0.2.1 -> 0.2.2
 
 Both the library and CLI now require Node.js >=22.12.0. Upgrade Node.js before

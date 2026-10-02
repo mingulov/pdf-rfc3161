@@ -1,7 +1,14 @@
 import { TimestampError, TimestampErrorCode } from "../types.js";
 
-/** Matches an http(s) URL embedded in free text (error messages, stacks). */
-const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s"'`]{1,2048}/g;
+/**
+ * Matches an http(s) scheme inside free text, case-insensitively: native
+ * fetch echoes the configured URL verbatim, including an uppercase scheme.
+ * The URL span itself is scanned by hand (never by an unbounded character
+ * class), so there is no match-length cliff for a secret to hide behind.
+ */
+const SCHEME_PATTERN = /https?:\/\//gi;
+/** First character that cannot continue a URL span. */
+const URL_END_PATTERN = /[\s"'`]/g;
 
 /**
  * Options for {@link validateUrl}.
@@ -44,32 +51,74 @@ export function formatDiagnosticUrl(urlString: string): string {
  * transport-attached causes are passed through here before being attached.
  */
 export function sanitizeTransportMessage(message: string): string {
-    return message.replace(URL_IN_TEXT_PATTERN, (match) => formatDiagnosticUrl(match));
+    let result = "";
+    let cursor = 0;
+    SCHEME_PATTERN.lastIndex = 0;
+    for (;;) {
+        const found = SCHEME_PATTERN.exec(message);
+        if (found === null) break;
+        const start = found.index;
+        URL_END_PATTERN.lastIndex = start + found[0].length;
+        const stop = URL_END_PATTERN.exec(message);
+        let end = stop?.index ?? message.length;
+        const quote = message[end];
+        const head = message.slice(start, end);
+        // A quote after a query/fragment span continues the value; drop
+        // the quoted span plus any &tail. No closing quote drops the rest
+        // of the message (fail closed); plain quoted URLs keep quotes.
+        if ((quote === '"' || quote === "'" || quote === "`") && /[?#=]/.test(head)) {
+            const closing = message.indexOf(quote, end + 1);
+            end = closing < 0 ? message.length : closing + 1;
+            // The tail may hold further quoted values (&token="a b"); skip
+            // each quoted span so an inner space cannot end the redaction.
+            // An unterminated tail quote consumes the rest (fail closed).
+            while (end < message.length && !/\s/.test(message.charAt(end))) {
+                const tail = message.charAt(end);
+                if (tail === '"' || tail === "'" || tail === "`") {
+                    const tailClosing = message.indexOf(tail, end + 1);
+                    end = tailClosing < 0 ? message.length : tailClosing + 1;
+                } else {
+                    end++;
+                }
+            }
+        }
+        result += message.slice(cursor, start) + formatDiagnosticUrl(head);
+        cursor = end;
+        SCHEME_PATTERN.lastIndex = end;
+    }
+    return result + message.slice(cursor);
 }
 
-function sanitizeCauseInner(cause: unknown, seen: Set<object>): unknown {
+function sanitizeCauseInner(cause: unknown, seen: Map<object, unknown>): unknown {
     if (typeof cause === "string") {
         return sanitizeTransportMessage(cause);
     }
     if (!(cause instanceof Error)) {
         return cause;
     }
-    if (seen.has(cause)) {
-        return cause;
+    const memoized = seen.get(cause);
+    if (memoized !== undefined) {
+        return memoized;
     }
-    seen.add(cause);
-    const nested = cause.cause;
-    const cleanNested = nested === undefined ? undefined : sanitizeCauseInner(nested, seen);
+    const nestedCause = cause.cause;
     const message = sanitizeTransportMessage(cause.message);
-    if (message === cause.message && cleanNested === nested) {
-        // No secrets: preserve the original by identity so subclass and
-        // identity checks downstream keep working.
-        return cause;
-    }
     const clean = new Error(message);
     clean.name = cause.name;
-    if (typeof cause.stack === "string") {
-        clean.stack = sanitizeTransportMessage(cause.stack);
+    // Reserve the copy before recursing so cyclic causes terminate; when
+    // nothing changed, the reservation is overwritten with the original.
+    seen.set(cause, clean);
+    const cleanNested =
+        nestedCause === undefined ? undefined : sanitizeCauseInner(nestedCause, seen);
+    const stack =
+        typeof cause.stack === "string" ? sanitizeTransportMessage(cause.stack) : undefined;
+    if (message === cause.message && cleanNested === nestedCause && stack === cause.stack) {
+        // No secrets: preserve the original by identity so subclass and
+        // identity checks downstream keep working.
+        seen.set(cause, cause);
+        return cause;
+    }
+    if (stack !== undefined) {
+        clean.stack = stack;
     }
     if (cleanNested !== undefined) {
         clean.cause = cleanNested;
@@ -81,11 +130,12 @@ function sanitizeCauseInner(cause: unknown, seen: Set<object>): unknown {
  * Sanitize a transport-attached cause (fetch/stream rejection) so attached
  * messages and stacks cannot leak URL credentials, query, or fragment.
  * Non-Error causes pass through; causes without embedded secrets keep
- * their identity. Validator-supplied causes are explicitly out of scope
- * and are never passed through here.
+ * their identity; cyclic causes resolve to their sanitized copies.
+ * Validator-supplied causes are explicitly out of scope and are never
+ * passed through here.
  */
 export function sanitizeTransportCause(cause: unknown): unknown {
-    return sanitizeCauseInner(cause, new Set());
+    return sanitizeCauseInner(cause, new Map());
 }
 
 // Hostnames that route to the local machine no matter the deployment.
