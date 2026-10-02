@@ -177,4 +177,26 @@ export interface ValidationSessionOptions {
     cache?: ValidationCache;
     /** Whether to prefer OCSP over CRL (default: true) */
     preferOCSP?: boolean;
+    /**
+     * Moment OCSP evidence must be fresh and live at. Defaults to the
+     * time `validateAll()` runs. Must be a finite date.
+     */
+    checkDate?: Date;
+    /**
+     * Accepted OCSP clock skew in milliseconds, applied in both
+     * directions (default: 300,000, i.e. 5 minutes). Must be finite and
+     * non-negative.
+     */
+    clockSkewMs?: number;
+    /**
+     * Freshness horizon for OCSP responses without nextUpdate (default:
+     * 604,800,000, i.e. 7 days). Must be finite and non-negative.
+     */
+    maxAgeWithoutNextUpdateMs?: number;
+    /**
+     * Whether OCSP requests carry a fresh 32-byte nonce that the
+     * response must echo (default: true). Disable only for responders
+     * that cannot echo nonces; the exchange then loses replay protection.
+     */
+    includeOCSPNonce?: boolean;
 }

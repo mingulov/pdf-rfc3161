@@ -28,6 +28,7 @@ vi.mock("../../../core/src/pki/ocsp-utils.js", () => ({
     getOCSPURI: vi.fn(),
     createOCSPRequest: vi.fn(),
     parseOCSPResponse: vi.fn(),
+    OCSP_NONCE_OID: "1.3.6.1.5.5.7.48.1.2",
     CertificateStatus: {
         GOOD: "good",
         REVOKED: "revoked",

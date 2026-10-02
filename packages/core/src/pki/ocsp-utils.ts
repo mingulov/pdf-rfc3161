@@ -1,7 +1,12 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "./der-utils.js";
+import {
+    createDerDecodeBudget,
+    parseCanonicalDERSequenceTree,
+    requireSchemaRoundTrip,
+    type DerDecodeBudget,
+} from "./der-utils.js";
 
 /**
  * OCSP Response Status values (RFC 6960)
@@ -132,14 +137,27 @@ function validateOcspResponseSchema(value: asn1js.BaseBlock): OCSPResponseStatus
 }
 
 /**
- * Validates and parses an OCSP response.
- *
- * @param responseBytes - DER-encoded OCSP Response
- * @returns ParsedOCSPResponse with status details
- * @throws TimestampError if response is invalid or indicates failure
+ * Structural parse of a BasicOCSPResponse. Shared by the collector API
+ * below and the strict validator in ocsp-validation.ts so the framing
+ * grammar lives in exactly one place.
  */
-export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse {
-    const asn1 = parseCanonicalDERSequenceTree(responseBytes, "OCSP response");
+export interface ParsedBasicOCSPResponse {
+    status: OCSPResponseStatus;
+    basic: pkijs.BasicOCSPResponse;
+}
+
+/**
+ * Parses the OCSPResponse framing and its nested BasicOCSPResponse under
+ * one shared DER budget (T03 F6: the outer value and the nested OCTET
+ * STRING payload count against a single allowance). Throws TimestampError
+ * on malformed input or a non-successful responder status.
+ */
+export function parseBasicOCSPResponse(
+    responseBytes: Uint8Array,
+    options: { budget?: DerDecodeBudget } = {}
+): ParsedBasicOCSPResponse {
+    const budget = options.budget ?? createDerDecodeBudget();
+    const asn1 = parseCanonicalDERSequenceTree(responseBytes, "OCSP response", { budget });
     const status = validateOcspResponseSchema(asn1);
 
     const ocspResponse = new pkijs.OCSPResponse({ schema: asn1 });
@@ -184,7 +202,10 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
     const responseBytesValue = ocspResponse.responseBytes.response.valueBlock.valueHexView;
     const responseBytesAsn1 = parseCanonicalDERSequenceTree(
         responseBytesValue,
-        "BasicOCSPResponse"
+        "BasicOCSPResponse",
+        {
+            budget,
+        }
     );
     const basicOCSPResponse = new pkijs.BasicOCSPResponse({ schema: responseBytesAsn1 });
     requireSchemaRoundTrip(
@@ -192,6 +213,66 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
         basicOCSPResponse.toSchema().toBER(false),
         "BasicOCSPResponse"
     );
+
+    return { status, basic: basicOCSPResponse };
+}
+
+/**
+ * Classifies one SingleResponse certificate status with strict RFC 6960
+ * framing checks. Shared by the collector API and the strict validator.
+ *
+ * CertStatus ::= CHOICE { good [0] IMPLICIT NULL, revoked [1] RevokedInfo,
+ * unknown [2] UnknownInfo }. Good must be primitive with no content.
+ */
+export function classifySingleCertStatus(certStatus: unknown): CertificateStatus {
+    if (!isCertStatusBlock(certStatus) || certStatus.idBlock.tagClass !== 3) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "OCSP response certificate status is malformed"
+        );
+    }
+
+    switch (certStatus.idBlock.tagNumber) {
+        case 0:
+            if (
+                !(certStatus instanceof asn1js.Primitive) ||
+                certStatus.valueBlock.valueHexView.byteLength !== 0
+            ) {
+                throw new TimestampError(
+                    TimestampErrorCode.INVALID_RESPONSE,
+                    "OCSP response certificate status is malformed"
+                );
+            }
+            return CertificateStatus.GOOD;
+        case 1:
+            return CertificateStatus.REVOKED;
+        case 2:
+            return CertificateStatus.UNKNOWN;
+        default:
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "OCSP response certificate status is malformed"
+            );
+    }
+}
+
+/**
+ * Validates and parses an OCSP response.
+ *
+ * This is the structural collector API: it reports the first
+ * SingleResponse status without authenticating anything (no signature,
+ * responder authorization, CertID, nonce, or freshness checks). Strict
+ * revocation evaluation lives in ocsp-validation.ts.
+ *
+ * @param responseBytes - DER-encoded OCSP Response
+ * @returns ParsedOCSPResponse with status details
+ * @throws TimestampError if response is invalid or indicates failure
+ */
+export function parseOCSPResponse(
+    responseBytes: Uint8Array,
+    options: { budget?: DerDecodeBudget } = {}
+): ParsedOCSPResponse {
+    const { status, basic: basicOCSPResponse } = parseBasicOCSPResponse(responseBytes, options);
 
     // Get the single response
     const singleResponses = basicOCSPResponse.tbsResponseData.responses;
@@ -210,43 +291,7 @@ export function parseOCSPResponse(responseBytes: Uint8Array): ParsedOCSPResponse
         );
     }
 
-    // Extract certificate status
-    const statusCandidate: unknown = singleResponse.certStatus;
-    if (!isCertStatusBlock(statusCandidate) || statusCandidate.idBlock.tagClass !== 3) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_RESPONSE,
-            "OCSP response certificate status is malformed"
-        );
-    }
-
-    // CertStatus ::= CHOICE { good [0] IMPLICIT NULL, revoked [1] RevokedInfo,
-    // unknown [2] UnknownInfo }  -- RFC 6960. Good must be primitive with no content.
-    let certStatus: CertificateStatus;
-    switch (statusCandidate.idBlock.tagNumber) {
-        case 0:
-            if (
-                !(statusCandidate instanceof asn1js.Primitive) ||
-                statusCandidate.valueBlock.valueHexView.byteLength !== 0
-            ) {
-                throw new TimestampError(
-                    TimestampErrorCode.INVALID_RESPONSE,
-                    "OCSP response certificate status is malformed"
-                );
-            }
-            certStatus = CertificateStatus.GOOD;
-            break;
-        case 1:
-            certStatus = CertificateStatus.REVOKED;
-            break;
-        case 2:
-            certStatus = CertificateStatus.UNKNOWN;
-            break;
-        default:
-            throw new TimestampError(
-                TimestampErrorCode.INVALID_RESPONSE,
-                "OCSP response certificate status is malformed"
-            );
-    }
+    const certStatus = classifySingleCertStatus(singleResponse.certStatus);
 
     // Extract timestamps
     const thisUpdate = singleResponse.thisUpdate;
@@ -308,7 +353,13 @@ export function getOCSPURI(cert: pkijs.Certificate): string | null {
  * OCSP Nonce Extension OID (RFC 6960)
  * id-pkix-ocsp-nonce = 1.3.6.1.5.5.7.48.1.2
  */
-const OCSP_NONCE_OID = "1.3.6.1.5.5.7.48.1.2";
+export const OCSP_NONCE_OID = "1.3.6.1.5.5.7.48.1.2";
+
+/**
+ * Fresh random bytes in every OCSP request nonce. 32 bytes (256 bits)
+ * make nonce prediction and cross-request replay infeasible.
+ */
+export const OCSP_NONCE_BYTES = 32;
 
 /**
  * Creates a raw DER-encoded OCSP Request for a given certificate and its issuer.
@@ -334,8 +385,7 @@ export async function createOCSPRequest(
     // Optionally add nonce extension for freshness protection
     // The nonce prevents replay attacks and ensures the response is fresh
     if (options?.includeNonce !== false) {
-        // Generate a random 8-byte nonce
-        const nonceBytes = new Uint8Array(8);
+        const nonceBytes = new Uint8Array(OCSP_NONCE_BYTES);
         crypto.getRandomValues(nonceBytes);
 
         // Add the nonce extension to the request
@@ -346,8 +396,9 @@ export async function createOCSPRequest(
             extnValue: nonceOctetString.toBER(false),
         });
 
-        // Add extensions using pkijs type assertion
-        (ocspReq.tbsRequest as { extensions?: pkijs.Extension[] }).extensions = [nonceExtension];
+        // R22: pkijs serializes `requestExtensions` ([2] EXPLICIT). The old
+        // `tbsRequest.extensions` assignment never reached the wire.
+        ocspReq.tbsRequest.requestExtensions = [nonceExtension];
     }
 
     const ocspReqDer = ocspReq.toSchema(true).toBER(false);

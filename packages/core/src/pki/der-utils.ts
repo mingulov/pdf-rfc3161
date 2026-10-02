@@ -282,6 +282,43 @@ export function parseCanonicalDERSequenceTree(
     if (bytes[0] !== 0x30) {
         throw invalidResponse(`${description}: expected canonical DER SEQUENCE tag`);
     }
+    // Self-contained on purpose: delegating to parseCanonicalDERValue
+    // would keep that strict-side-only export reachable from the main
+    // bundle (ltv.ts uses this function) and break tree-shaking.
+    const budget = options.budget ?? createDerDecodeBudget();
+    const end = validateCanonicalDerTree(bytes, 0, bytes.length, description, budget);
+    if (end !== bytes.length) {
+        throw invalidResponse(`${description}: trailing bytes are not permitted`);
+    }
+
+    const parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    if (parsed.offset === -1) {
+        throw invalidResponse(`${description}: ASN.1 parse failed${decoderDetail(parsed)}`);
+    }
+    if (parsed.offset !== bytes.length) {
+        throw invalidResponse(`${description}: trailing bytes are not permitted`);
+    }
+    return parsed.result;
+}
+
+/**
+ * Parses one complete DER value with any root tag after iteratively
+ * validating canonical TLV framing for the whole tree.
+ *
+ * Same preflight as parseCanonicalDERSequenceTree (tag and length
+ * minimality, definite lengths, child boundaries, INTEGER/ENUMERATED
+ * minimality, depth and node budgets), but without the SEQUENCE-root
+ * requirement: extension payloads such as the nonce OCTET STRING and
+ * the key usage BIT STRING are opaque to the outer preflight (their
+ * OCTET STRING wrapper is primitive), so each gets its own canonical
+ * framing and complete-consumption gate here. Callers remain
+ * responsible for ASN.1 schema and semantic checks.
+ */
+export function parseCanonicalDERValue(
+    bytes: Uint8Array,
+    description: string,
+    options: { budget?: DerDecodeBudget } = {}
+): asn1js.BaseBlock {
     const budget = options.budget ?? createDerDecodeBudget();
     const end = validateCanonicalDerTree(bytes, 0, bytes.length, description, budget);
     if (end !== bytes.length) {

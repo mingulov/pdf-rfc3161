@@ -7,7 +7,9 @@ import {
     CertificateStatus,
 } from "../../../core/src/pki/ocsp-utils.js";
 import { TimestampErrorCode } from "../../../core/src/types.js";
+import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
+import { inspectOCSPRequest } from "../fixtures/signed-revocation-material.js";
 
 vi.stubGlobal("crypto", {
     getRandomValues: (arr: Uint8Array) => {
@@ -270,6 +272,56 @@ describe("OCSP Utils", () => {
     describe("createOCSPRequest", () => {
         it("should be defined as a function", () => {
             expect(typeof createOCSPRequest).toBe("function");
+        });
+
+        function minimalCertificate(commonName: string, serial: number): pkijs.Certificate {
+            const cert = new pkijs.Certificate();
+            cert.serialNumber = new asn1js.Integer({ value: serial });
+            cert.subject.typesAndValues.push(
+                new pkijs.AttributeTypeAndValue({
+                    type: "2.5.4.3",
+                    value: new asn1js.PrintableString({ value: commonName }),
+                })
+            );
+            cert.subjectPublicKeyInfo = new pkijs.PublicKeyInfo();
+            return cert;
+        }
+
+        // T06 (R22): the builder used to stash the nonce on
+        // `tbsRequest.extensions`, which pkijs never serializes. The nonce
+        // must reach the wire inside `requestExtensions` ([2] EXPLICIT).
+        it("serializes requestExtensions with exactly 32 nonce bytes", async () => {
+            const leaf = minimalCertificate("R22 Leaf", 2001);
+            const issuer = minimalCertificate("R22 CA", 1001);
+            const request = await createOCSPRequest(leaf, issuer);
+
+            const inspected = inspectOCSPRequest(request);
+            expect(inspected.requestCount).toBe(1);
+            expect(inspected.certId).not.toBeNull();
+            expect(inspected.nonces).toHaveLength(1);
+            expect(inspected.nonces[0]?.length).toBe(32);
+        });
+
+        it("generates a fresh random nonce for every request", async () => {
+            const leaf = minimalCertificate("R22 Leaf", 2001);
+            const issuer = minimalCertificate("R22 CA", 1001);
+            const first = await createOCSPRequest(leaf, issuer);
+            const second = await createOCSPRequest(leaf, issuer);
+
+            expect(first).not.toEqual(second);
+            const firstNonce = inspectOCSPRequest(first).nonces[0];
+            const secondNonce = inspectOCSPRequest(second).nonces[0];
+            expect(firstNonce).not.toEqual(secondNonce);
+        });
+
+        it("omits requestExtensions when includeNonce is false", async () => {
+            const leaf = minimalCertificate("R22 Leaf", 2001);
+            const issuer = minimalCertificate("R22 CA", 1001);
+            const request = await createOCSPRequest(leaf, issuer, { includeNonce: false });
+
+            const inspected = inspectOCSPRequest(request);
+            expect(inspected.requestCount).toBe(1);
+            expect(inspected.nonces).toHaveLength(0);
         });
     });
 

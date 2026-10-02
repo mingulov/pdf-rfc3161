@@ -194,9 +194,7 @@ were dropped from the DSS.
 `InMemoryValidationCache` entries are now keyed by the full OCSP request
 bytes scoped by the exact URL (previously the first 32 request bytes),
 so requests that share a prefix but differ in the tail no longer
-collide; fresh random-nonce requests normally miss (once T06
-serializes the request nonce; until R22 is fixed, consecutive
-requests are byte-identical and hit). Bytes are copied on
+collide; fresh random-nonce requests normally miss. Bytes are copied on
 insertion and retrieval, so mutating caller arrays can no longer poison
 the cache. Entries expire after 300,000 ms, the cache holds at most 256
 entries and 20 MiB with oldest-first eviction, and single entries larger
@@ -217,6 +215,100 @@ same-serial distinct issuers are now both retained. If your chain
 relies on AIA responses that do not verify against their targets, those
 issuers will no longer be collected; embed the correct intermediates
 directly or via `revocationData` instead.
+
+### OCSP evidence is authenticated and requests carry a real nonce
+
+`ValidationSession` (the `pdf-rfc3161/advanced` entry) now
+authenticates OCSP evidence instead of reporting "unknown" for every
+certificate. A response yields "good" or "revoked" only when it is
+signed by the verified issuer or an authorized delegate, answers the
+exact request CertID and nonce, and is fresh at the check date;
+anything else -- wrong signer, CertID or nonce mismatch, stale or
+future-dated times, unauthorized responder -- yields "unknown" with a
+diagnostic, and `isValid` stays true only for authenticated "good".
+CRL evidence is still structural (always "unknown") until its own
+authenticator lands. Fetched OCSP bytes are still collected into
+`sources`, `ocspResponses`, and `exportLTVData` even when strict
+evaluation stays unknown, so LTV embedding never loses candidate
+material to a strict verdict.
+
+Revoked means revoked regardless of `revocationTime`: the session
+does not compare the revocation instant against `thisUpdate`, so an
+authenticated, bound, and fresh response that says revoked yields
+"revoked" whatever instant it names. Historical questions -- whether
+the certificate was already revoked at some past date -- are owned by
+a later task (T09b) and are not answered here.
+
+OCSP requests now carry a fresh random 32-byte nonce inside
+`requestExtensions` (previously the nonce never reached the wire), and
+responses must echo it exactly. A responder that drops or rewrites the
+nonce yields "unknown" rather than a decisive verdict; if your
+responder cannot echo nonces, pass `includeOCSPNonce: false` to send
+nonce-free requests (the exchange then loses replay protection).
+Because every request carries a fresh nonce, consecutive OCSP cache
+lookups normally miss; pre-fetched or custom-cache responses are
+validated against the current request bytes exactly like fetched ones.
+
+One deliberate narrowing of the T05 cache contract rides along: a
+cached entry that fails to parse is still refetched once, but a
+cached entry that parses and then fails authentication -- wrong
+signer, CertID or nonce mismatch, staleness -- yields "unknown" with
+no refetch. An authentication verdict is the responder's answer about
+this request, not cache corruption, so refetching cannot change it;
+retention bounds keep the stale entry from lingering.
+
+Delegated responders must be issued directly by the certificate issuer,
+carry the `id-kp-OCSPSigning` extended key usage (plus
+`digitalSignature` key usage when the extension is present), be live at
+the check date, and carry `id-pkix-ocsp-nocheck`. The last requirement
+is a deliberate profile boundary: the session does not check delegate
+revocation, so a delegate that requires revocation checking is reported
+"unknown", never silently trusted. Issuer-signed responses need no
+embedded responder certificate. When the ResponderID matches the issuer
+name but the issuer key does not verify, the session now falls through
+to matching embedded delegates instead of stopping at the issuer
+failure. Strict validation additionally rejects any critical extension
+it does not process (only the nonce echo in responseExtensions; no
+SingleResponse extension is processed, so any critical single
+extension fails closed; only key usage, EKU, and nocheck on the
+selected delegate), requires complete TBS consumption and v1-only
+versions on
+both request and response sides, complete TBSCertificate consumption
+plus explicit Name/RDN/AttributeTypeAndValue grammar for the selected
+delegate (a malformed responder name matches nothing; an empty RDN SET
+fails while an entirely empty Name passes), requires X.509 v3 for the
+selected delegate, requires the delegate inner/outer signature
+algorithms to agree and suit the issuer key family (RSA keys pair only
+with RSASSA-PKCS1-v1_5 OIDs and EC keys only with ECDSA OIDs; RSA-PSS
+and unrecognized OIDs are unsupported), requires primitive
+octet-aligned signature BIT STRINGs with canonical two-INTEGER ECDSA
+payloads on both the response and the delegate certificate, requires
+strict delegate public-key encodings (RSA parameters NULL-or-absent
+with a canonical two-INTEGER key payload, EC parameters exactly the
+named-curve OID), rejects inverted delegate validity intervals before
+skew is applied, requires canonical DER extension payloads (nonce,
+key usage with zeroed padding bits, EKU) with complete consumption,
+requires canonical DER OBJECT IDENTIFIER contents (nonempty,
+terminated, minimal base-128) in every EKU member and Name attribute
+type, rejects empty extension OIDs (extnID) in response,
+SingleResponse, and delegate-certificate extension lists, requires exactly
+one NULL-valued
+nocheck and an EKU sequence of only OIDs containing `id-kp-OCSPSigning`,
+and checks the declared signature algorithm against the responder key:
+RSA keys pair only with RSASSA-PKCS1-v1_5 OIDs (NULL or absent
+parameters) and EC keys only with ECDSA OIDs (parameters must be
+absent); RSA-PSS and unrecognized OIDs are unsupported. Anything outside
+this narrowed profile yields "unknown" with a diagnostic. Tune the time policy with the new
+`checkDate` (default: when `validateAll()` runs), `clockSkewMs`
+(default: 300,000, i.e. 5 minutes), and
+`maxAgeWithoutNextUpdateMs` (default: 604,800,000, i.e. 7 days)
+session options; invalid values reject with `INVALID_ARGUMENT`.
+
+Two smaller changes ride along: a certificate with no OCSP responder
+URL and no CRL distribution points now records one "No revocation
+endpoints attempted" diagnostic in `errors` instead of succeeding
+silently, and the one-call signing path is unchanged -- LTV collection
+stays structural and never depends on nonce echo or strict validation.
 
 ## 0.2.1 -> 0.2.2
 
