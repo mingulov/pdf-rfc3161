@@ -3,6 +3,9 @@
 // 6ccfb6e6ee5568d1102226410341b15f5806f9927129de92debd304e4964feff,
 // verifiedby f7c933e601a7febbc6a8f572ca30dc275c908905). The T00 browser
 // gate asserts the installed engine hash before trusting any verdict.
+// T15 extends the subset with the per-element surface the C04 closure
+// asserts (anchored, time, imprint, computed) and the trustAnchors
+// parameter; every added member matches the pinned declaration file.
 declare module "verifiedby" {
     export type VerifyStatus =
         | "no-signature"
@@ -12,6 +15,12 @@ declare module "verifiedby" {
         | "signed-untimed"
         | "verified-untrusted-root"
         | "verified";
+
+    export interface TimeInfo {
+        value: Date | null;
+        trusted: boolean;
+        source: string;
+    }
 
     export interface VerifyElement {
         kind: "doctimestamp" | "signature" | "unsupported" | "unreadable";
@@ -23,9 +32,13 @@ declare module "verifiedby" {
         signatureValid?: boolean;
         attrsCommit?: boolean;
         chainValid?: boolean;
+        anchored?: boolean;
         withinValidity?: boolean;
         authentic?: boolean;
+        time?: TimeInfo;
         hashAlg?: string | null;
+        imprint?: string | null;
+        computed?: string | null;
         notes: string[];
     }
 
@@ -53,6 +66,9 @@ declare module "verifiedby" {
         trailing: string;
     }
 
-    export function verify(pdfBytes: Uint8Array): Promise<VerifyResult>;
+    export function verify(
+        pdfBytes: Uint8Array,
+        trustAnchors?: Uint8Array[]
+    ): Promise<VerifyResult>;
     export function extractSignatures(bytes: Uint8Array): SignatureDictionary[];
 }
