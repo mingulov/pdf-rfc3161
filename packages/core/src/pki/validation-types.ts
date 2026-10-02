@@ -28,8 +28,7 @@ export interface CertificateToValidate {
  * name constraints, policy processing, and so on). Only authenticated
  * evaluators may produce "good" or "revoked": missing endpoints/issuers,
  * malformed, stale or unsupported evidence, and outages all yield
- * "unknown". Until the authenticated OCSP/CRL evaluators exist, structural
- * evidence alone always yields "unknown".
+ * "unknown". Structural evidence alone always yields "unknown".
  */
 export type RevocationStatus = "good" | "revoked" | "unknown";
 
@@ -56,8 +55,7 @@ export interface ValidationResult {
     cert: pkijs.Certificate;
     /**
      * Revocation status relative to a verified issuing key (see
-     * RevocationStatus). Until authenticated evaluators exist, structural
-     * evidence alone yields "unknown".
+     * RevocationStatus). Structural evidence alone yields "unknown".
      */
     revocationStatus: RevocationStatus;
     /**
@@ -178,12 +176,12 @@ export interface ValidationSessionOptions {
     /** Whether to prefer OCSP over CRL (default: true) */
     preferOCSP?: boolean;
     /**
-     * Moment OCSP evidence must be fresh and live at. Defaults to the
-     * time `validateAll()` runs. Must be a finite date.
+     * Moment OCSP/CRL evidence must be fresh and live at. Defaults to
+     * the time `validateAll()` runs. Must be a finite date.
      */
     checkDate?: Date;
     /**
-     * Accepted OCSP clock skew in milliseconds, applied in both
+     * Accepted OCSP/CRL clock skew in milliseconds, applied in both
      * directions (default: 300,000, i.e. 5 minutes). Must be finite and
      * non-negative.
      */

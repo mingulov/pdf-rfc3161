@@ -64,10 +64,9 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   Missing endpoints/issuers, outages, malformed responses, and
   unauthenticated (including forged) OCSP/CRL evidence all yield
   "unknown" with `isValid` false; most of these cases previously
-  returned `isValid` true. Until the authenticated OCSP/CRL evaluators
-  land, structural evidence alone always yields "unknown", so advanced
-  revocation checks temporarily report unknown for every certificate;
-  there is no compatibility switch to restore the old `true`. The
+  returned `isValid` true. Both authenticated evaluators have landed
+  since (OCSP, then CRL); there is no compatibility switch to restore
+  the old `true`. The
   `preferOCSP: false` order now falls back to OCSP after CRL instead of
   never trying OCSP. The one-call signing path is unaffected: it never
   consumed these verdicts and still signs with partial LTV plus
@@ -116,7 +115,7 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   collected into `sources`, `ocspResponses`, and `exportLTVData` even
   when strict evaluation stays unknown, and the one-call signing path
   is unchanged (LTV collection stays structural). CRL evidence is
-  still structural until its own authenticator lands. See MIGRATION.md.
+  authenticated too; see the next entry. See MIGRATION.md.
 - **Behavior (OCSP request nonce, C06):** OCSP requests now serialize a
   fresh random 32-byte nonce inside `requestExtensions` (previously the
   nonce was assigned to a pkijs field that never reached the wire, so
@@ -167,6 +166,40 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   only, RSA-PSS unsupported, ECDSA parameters must be absent) before
   verifying. Responses outside this narrowed profile yield "unknown"
   with a diagnostic instead of a decisive verdict; see MIGRATION.md.
+- **Behavior (authenticated CRL evidence, C01/C06):** advanced
+  `ValidationSession` now authenticates CRLs instead of reporting
+  "unknown" for every certificate. A CRL yields "good" or "revoked"
+  only when it is a complete CRL issued directly by the verified
+  issuer key, in scope for the certificate distribution point, and
+  fresh at the check date (a CRL without nextUpdate fails closed as
+  unbounded freshness). Wrong keys, forged signatures, stale/future
+  dates, missing cRLSign key usage, unknown critical extensions,
+  scope mismatches, and indirect/partitioned/delta CRLs yield
+  "unknown" with a diagnostic; `isValid` stays true only for
+  authenticated "good". Serials compare by exact numeric identity
+  (no float extraction, no -128/128 conflation), entry scope follows
+  the complete certificateIssuer grammar (same-issuer accepted,
+  foreign/malformed fails the CRL -- no per-entry skip), entry
+  processing is whole-CRL (critical faults on any entry fail closed,
+  duplicate serials reject), cRLIssuer-bearing distribution points
+  are out of scope per RFC 5280 6.3.3(b)(1), nested explicit
+  wrappers must prove complete (single-Name directoryNames,
+  single-choice distributionPoint fields with ordered unique
+  members, otherName/x400Address/ediPartyName outside the profile),
+  authority key identifiers need ordered unique [0]/[1]/[2] members
+  with a complete authorityCertIssuer under the same name profile,
+  removeFromCRL and undefined reason values fail the
+  complete-CRL profile (hold stays revoked), invalidity dates need
+  canonical UTC-seconds grammar, and the issuer SPKI is gated before
+  use; delta CRLs are explicitly deferred (never complete; base/delta
+  merging is future work with follow-up criteria in MIGRATION.md).
+  Fetching needs only the leaf distribution point,
+  so CRL bytes are still collected into `sources`, `crls`, and
+  `exportLTVData` even when strict evaluation stays unknown -- and
+  even when no issuer can validate them -- while issuer resolution
+  failure stops the URL loop after the first fetch. The one-call
+  signing path is unchanged (LTV collection stays structural). See
+  MIGRATION.md.
 
 ### Fixed
 

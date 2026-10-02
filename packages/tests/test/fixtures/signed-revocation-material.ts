@@ -56,7 +56,7 @@ function skiExtension(keyId: Uint8Array): pkijs.Extension {
     });
 }
 
-function akiExtension(keyId: Uint8Array): pkijs.Extension {
+export function akiExtension(keyId: Uint8Array): pkijs.Extension {
     const aki = new pkijs.AuthorityKeyIdentifier({
         keyIdentifier: new asn1js.OctetString({ valueHex: toArrayBuffer(keyId) }),
     });
@@ -177,6 +177,8 @@ export async function createTestCA(
         notBefore?: Date;
         notAfter?: Date;
         ski?: Uint8Array;
+        /** CA key usage content bytes; omitted (no KU) unless a test sets it. */
+        keyUsage?: Uint8Array;
     } = {}
 ): Promise<TestCertificateAuthority> {
     const keys = options.keys ?? (await generateRSAKeyPair());
@@ -197,6 +199,7 @@ export async function createTestCA(
             extnValue: new pkijs.BasicConstraints({ cA: true }).toSchema().toBER(false),
         }),
     ];
+    if (options.keyUsage) extensions.push(keyUsageExtension(options.keyUsage));
     if (options.ski) extensions.push(skiExtension(options.ski));
     cert.extensions = extensions;
     await cert.sign(keys.privateKey, "SHA-256");
@@ -216,6 +219,8 @@ export async function createTestLeaf(
         keys?: TestKeyPair;
         ocspUrl?: string;
         crlUrls?: string[];
+        /** Raw CRLDistributionPoints extension; overrides crlUrls when set. */
+        crlDPExtension?: pkijs.Extension;
         aki?: Uint8Array;
         notBefore?: Date;
         notAfter?: Date;
@@ -235,7 +240,9 @@ export async function createTestLeaf(
     const extensions: pkijs.Extension[] = [];
     if (options.aki) extensions.push(akiExtension(options.aki));
     if (options.ocspUrl) extensions.push(ocspAiaExtension(options.ocspUrl));
-    if (options.crlUrls && options.crlUrls.length > 0) {
+    if (options.crlDPExtension) {
+        extensions.push(options.crlDPExtension);
+    } else if (options.crlUrls && options.crlUrls.length > 0) {
         extensions.push(crlDistributionPointsExtension(options.crlUrls));
     }
     if (extensions.length > 0) cert.extensions = extensions;
@@ -558,4 +565,256 @@ export function requestWithDuplicateEntries(requestBytes: Uint8Array): Uint8Arra
     request.tbsRequest.requestList = [first, first];
     request.tbsRequest.tbsView = new Uint8Array(0);
     return new Uint8Array(request.toSchema(true).toBER(false));
+}
+
+// ---------------------------------------------------------------------------
+// Signed CRLs (T07)
+// ---------------------------------------------------------------------------
+//
+// Same independence contract as the OCSP builders above: real keys, real
+// signatures, DER round-trips, verifiable without the library's own
+// validators (see the T07 report for the openssl receipts).
+
+/** CRL number extension (RFC 5280 5.2.3). */
+export function crlNumberExtension(crlNumber: number): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.20",
+        critical: false,
+        extnValue: new asn1js.Integer({ value: crlNumber }).toBER(false),
+    });
+}
+
+/** Delta CRL indicator (RFC 5280 5.2.4); presence marks a delta CRL. */
+export function deltaCrlIndicatorExtension(baseNumber: number): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.27",
+        critical: false,
+        extnValue: new asn1js.Integer({ value: baseNumber }).toBER(false),
+    });
+}
+
+/** Issuing distribution point (RFC 5280 5.2.5) from a pkijs value. */
+export function issuingDistributionPointExtension(
+    idp: pkijs.IssuingDistributionPoint,
+    critical = false
+): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.28",
+        critical,
+        extnValue: idp.toSchema().toBER(false),
+    });
+}
+
+/** CRL entry reason code (RFC 5280 5.3.1). */
+export function reasonCodeExtension(reason: number, critical = false): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.21",
+        critical,
+        extnValue: new asn1js.Enumerated({ value: reason }).toBER(false),
+    });
+}
+
+/** CRL entry certificate issuer scope (RFC 5280 5.3.3). */
+export function certificateIssuerExtension(
+    issuers: pkijs.GeneralName[],
+    critical = true
+): pkijs.Extension {
+    const sequence = new asn1js.Sequence({
+        value: issuers.map((issuer) => issuer.toSchema()),
+    });
+    return new pkijs.Extension({
+        extnID: "2.5.29.29",
+        critical,
+        extnValue: sequence.toBER(false),
+    });
+}
+
+/** CRL entry hold instruction code (RFC 5280 5.3.4). */
+export function holdInstructionExtension(oid: string): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.23",
+        critical: false,
+        extnValue: new asn1js.ObjectIdentifier({ value: oid }).toBER(false),
+    });
+}
+
+/** CRL entry invalidity date (RFC 5280 5.3.2). */
+export function invalidityDateExtension(date: Date): pkijs.Extension {
+    return new pkijs.Extension({
+        extnID: "2.5.29.24",
+        critical: false,
+        extnValue: new asn1js.GeneralizedTime({ valueDate: date }).toBER(false),
+    });
+}
+
+/** Directory-name GeneralName for cRLIssuer / certificateIssuer scope fixtures. */
+export function directoryNameGeneralName(
+    name: pkijs.RelativeDistinguishedNames
+): pkijs.GeneralName {
+    return new pkijs.GeneralName({ type: 4, value: name });
+}
+
+/**
+ * Builds a CRLDistributionPoints certificate extension from raw
+ * DistributionPoint values (scope-binding fixtures: reasons, cRLIssuer,
+ * relative names). The plain-URL helper stays for ordinary leaves.
+ */
+export function crlDistributionPointsExtensionFromPoints(
+    points: pkijs.DistributionPoint[]
+): pkijs.Extension {
+    const cdp = new pkijs.CRLDistributionPoints({ distributionPoints: points });
+    return new pkijs.Extension({
+        extnID: "2.5.29.31",
+        critical: false,
+        extnValue: cdp.toSchema().toBER(false),
+    });
+}
+
+/**
+ * ReasonFlags value with exactly the given bits set (bit 1 is
+ * keyCompromise), encoded as the raw [1] IMPLICIT BIT STRING content:
+ * the unused-bits count octet followed by the data octets.
+ * KeyCompromise-only is content `06 40` (wire `81 02 06 40`).
+ *
+ * The valueHex layout is deliberate, not a layering slip: pkijs
+ * DistributionPoint.toSchema emits `reasons.valueBlock.valueHexView`
+ * VERBATIM as the [1] content, omitting the unused-bits octet a real
+ * BIT STRING carries. Building a textbook BitString here (data octets
+ * only, unusedBits set) would emit malformed wire bytes -- the T07 fix
+ * round 2 fixture correction (`81 01 40`, where `40` reads as an
+ * unused-bits count of 64). The quirk is byte-stable in both
+ * directions, so parsed-back values carry the same layout.
+ */
+export function reasonFlagsBitString(bits: number[]): asn1js.BitString {
+    for (const bit of bits) {
+        if (!Number.isInteger(bit) || bit < 0 || bit > 15) {
+            throw new Error("reason bit out of range for fixture");
+        }
+    }
+    const maxBit = bits.length === 0 ? 0 : Math.max(...bits);
+    const octets = Math.floor(maxBit / 8) + 1;
+    const data = new Uint8Array(octets);
+    for (const bit of bits) {
+        const at = Math.floor(bit / 8);
+        data[at] = (data[at] ?? 0) | (0x80 >> (bit % 8));
+    }
+    const unused = octets * 8 - (maxBit + 1);
+    return new asn1js.BitString({ valueHex: toArrayBuffer(new Uint8Array([unused, ...data])) });
+}
+
+/**
+ * Reasons field with attacker-chosen raw [1] content bytes
+ * (malformed-grammar probes: empty content, invalid unused-bits
+ * counts, nonzero padding). pkijs emits the bytes verbatim.
+ */
+export function rawReasonFlagsContent(content: Uint8Array): asn1js.BitString {
+    return new asn1js.BitString({ valueHex: toArrayBuffer(content) });
+}
+
+export interface CrlEntrySpec {
+    /** Serial number; ignored when serialValueHex is set. */
+    serial?: number;
+    /** Raw INTEGER content octets for serial-identity probes (minimal or not). */
+    serialValueHex?: Uint8Array;
+    revocationDate?: Date;
+    entryExtensions?: pkijs.Extension[];
+}
+
+export interface SignedCRLOptions {
+    /**
+     * Key that signs the CRL. Defaults to the issuer keys (direct
+     * issuance); override with another CA's keys for a wrong-key fixture.
+     */
+    signerKeys?: TestKeyPair;
+    /**
+     * Certificate the CRL issuer name is taken from. Defaults to the
+     * issuer; override for a wrong-issuer fixture.
+     */
+    crlIssuerCert?: pkijs.Certificate;
+    /** CRL version (0 = v1, 1 = v2). Defaults to 1 when any extension is present, else 0. */
+    version?: number;
+    thisUpdate: Date;
+    nextUpdate?: Date;
+    entries?: CrlEntrySpec[];
+    crlExtensions?: pkijs.Extension[];
+}
+
+export async function createSignedCRL(
+    issuer: TestCertificateAuthority,
+    options: SignedCRLOptions
+): Promise<Uint8Array> {
+    const revokedCertificates = (options.entries ?? []).map((entry) => {
+        const userCertificate =
+            entry.serialValueHex === undefined
+                ? new asn1js.Integer({ value: entry.serial ?? 2001 })
+                : new asn1js.Integer({ valueHex: toArrayBuffer(entry.serialValueHex) });
+        return new pkijs.RevokedCertificate({
+            userCertificate,
+            revocationDate: new pkijs.Time({
+                value: entry.revocationDate ?? new Date("2026-04-01T00:00:00Z"),
+            }),
+            ...(entry.entryExtensions === undefined
+                ? {}
+                : {
+                      crlEntryExtensions: new pkijs.Extensions({
+                          extensions: entry.entryExtensions,
+                      }),
+                  }),
+        });
+    });
+    const hasEntryExtensions = (options.entries ?? []).some(
+        (entry) => entry.entryExtensions !== undefined
+    );
+    const hasCrlExtensions =
+        options.crlExtensions !== undefined && options.crlExtensions.length > 0;
+    const crl = new pkijs.CertificateRevocationList({
+        version: options.version ?? (hasCrlExtensions || hasEntryExtensions ? 1 : 0),
+        issuer: (options.crlIssuerCert ?? issuer.cert).subject,
+        thisUpdate: new pkijs.Time({ value: options.thisUpdate }),
+        ...(options.nextUpdate === undefined
+            ? {}
+            : { nextUpdate: new pkijs.Time({ value: options.nextUpdate }) }),
+        ...(revokedCertificates.length === 0 ? {} : { revokedCertificates }),
+        ...(options.crlExtensions === undefined || options.crlExtensions.length === 0
+            ? {}
+            : {
+                  crlExtensions: new pkijs.Extensions({
+                      extensions: options.crlExtensions,
+                  }),
+              }),
+    });
+    await crl.sign((options.signerKeys ?? issuer.keys).privateKey, "SHA-256");
+    // pkijs types CertificateRevocationList.toSchema() as `any`; the
+    // double assertion recovers the documented SEQUENCE type.
+    const schema = crl.toSchema(true) as unknown as asn1js.Sequence;
+    const bytes = new Uint8Array(schema.toBER(false));
+    // Round-trip through DER so construction errors surface here, not in the test.
+    const reparsed = asn1js.fromBER(toArrayBuffer(bytes.slice()));
+    if (reparsed.offset === -1 || reparsed.offset !== bytes.length) {
+        throw new Error("built CRL is not DER");
+    }
+    return bytes;
+}
+
+/**
+ * Corrupts the CRL signatureValue BIT STRING in place (structure stays
+ * valid, the signature stops verifying). Flips the last signature byte;
+ * the re-encoded CRL keeps byte-identical TBSCertList.
+ */
+export function corruptCRLSignature(crlBytes: Uint8Array): Uint8Array {
+    const asn1 = asn1js.fromBER(toArrayBuffer(crlBytes.slice()));
+    if (asn1.offset === -1 || !(asn1.result instanceof asn1js.Sequence)) {
+        throw new Error("CRL is not DER");
+    }
+    const outer = asn1.result;
+    const signatureValue = outer.valueBlock.value[2];
+    if (!(signatureValue instanceof asn1js.BitString)) throw new Error("CRL has no signature");
+    const signature = new Uint8Array(signatureValue.valueBlock.valueHexView);
+    if (signature.length === 0) throw new Error("CRL has an empty signature");
+    signature[signature.length - 1] = (signature[signature.length - 1] ?? 0) ^ 0x01;
+    outer.valueBlock.value[2] = new asn1js.BitString({
+        valueHex: toArrayBuffer(signature),
+        unusedBits: signatureValue.valueBlock.unusedBits,
+    });
+    return new Uint8Array(outer.toBER(false));
 }
