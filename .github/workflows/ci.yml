@@ -201,7 +201,15 @@ jobs:
         run: pnpm build
 
       - name: Run offline PAdES interoperability checks
-        run: pnpm --filter pdf-rfc3161-tests test:interoperability
+        run: pnpm --filter pdf-rfc3161-tests test:interoperability -- --output-dir /tmp/pades-conformance
+
+      - name: Upload PAdES conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pades-conformance-artifacts
+          path: /tmp/pades-conformance/
+          if-no-files-found: error
 
   native-pdf-compatibility:
     name: Native PDF compatibility (${{ matrix.os }})

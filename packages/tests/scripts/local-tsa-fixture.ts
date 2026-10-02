@@ -8,10 +8,13 @@ export const TSA_POLICY = "1.3.6.1.4.1.57264.1.1";
 
 export interface LocalTsaConfiguration {
     rootCert: string;
+    rootKey: string;
     config: string;
     tsaCert: string;
     tsaKey: string;
 }
+
+export type LocalTsaKeyType = "RSA" | "EC";
 
 export interface LocalTsaOptions {
     /**
@@ -21,6 +24,28 @@ export interface LocalTsaOptions {
      * endpoints (the deterministic default).
      */
     ocspUrl?: string;
+    /**
+     * CRL distribution point URL embedded in the TSA signer certificate.
+     * Like `ocspUrl`, this is a controlled endpoint for offline
+     * revocation-oracle tests; omitted by default.
+     */
+    crlUrl?: string;
+    /**
+     * Validity horizon in days for the test root (default: 2). The
+     * signer-validity boundary cases use a long-lived root so the
+     * TSA-signer window alone drives the notBefore/notAfter edges.
+     */
+    rootDays?: number;
+    /**
+     * Validity horizon in days for the TSA signer certificate
+     * (default: 2).
+     */
+    tsaDays?: number;
+    /**
+     * TSA signer key type (default: "RSA"). "EC" issues a P-256 signer
+     * under the same RSA root for the C05 RSA/EC breadth cases.
+     */
+    keyType?: LocalTsaKeyType;
 }
 
 function commandOutput(result: SpawnSyncReturns<string>): string {
@@ -54,6 +79,10 @@ function createOpenSslConfig(directory: string, options: LocalTsaOptions = {}): 
     const configPath = join(directory, "tsa.cnf");
     const ocspExtension =
         options.ocspUrl === undefined ? "" : `\nauthorityInfoAccess = OCSP;URI:${options.ocspUrl}`;
+    const crlExtension =
+        options.crlUrl === undefined
+            ? ""
+            : `\ncrlDistributionPoints = URI:${options.crlUrl}`;
     writeFileSync(
         configPath,
         `[req]
@@ -74,7 +103,7 @@ basicConstraints = critical,CA:false
 keyUsage = critical,digitalSignature,nonRepudiation
 extendedKeyUsage = critical,timeStamping
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer${ocspExtension}
+authorityKeyIdentifier = keyid:always,issuer${ocspExtension}${crlExtension}
 
 [tsa]
 default_tsa = tsa_config
@@ -104,6 +133,23 @@ export function createLocalTsa(
     directory: string,
     options: LocalTsaOptions = {}
 ): LocalTsaConfiguration {
+    const rootDays = options.rootDays ?? 2;
+    const tsaDays = options.tsaDays ?? 2;
+    assert.ok(
+        Number.isSafeInteger(rootDays) && rootDays >= 1,
+        "Local TSA root validity must be a positive integer number of days"
+    );
+    assert.ok(
+        Number.isSafeInteger(tsaDays) && tsaDays >= 1,
+        "Local TSA signer validity must be a positive integer number of days"
+    );
+    const requestedKeyType: string = options.keyType ?? "RSA";
+    assert.ok(
+        requestedKeyType === "RSA" || requestedKeyType === "EC",
+        "Local TSA key type must be RSA or EC"
+    );
+    const keyType: LocalTsaKeyType = requestedKeyType;
+
     const rootKey = join(directory, "root.key");
     const rootCert = join(directory, "root.pem");
     const tsaKey = join(directory, "tsa.key");
@@ -125,22 +171,34 @@ export function createLocalTsa(
         "-out",
         rootCert,
         "-days",
-        "2",
+        rootDays.toString(),
         "-sha256",
         "-config",
         config,
         "-extensions",
         "root_extensions",
     ]);
-    assertOpenSslSuccess([
-        "genpkey",
-        "-algorithm",
-        "RSA",
-        "-pkeyopt",
-        "rsa_keygen_bits:2048",
-        "-out",
-        tsaKey,
-    ]);
+    assertOpenSslSuccess(
+        keyType === "EC"
+            ? [
+                  "genpkey",
+                  "-algorithm",
+                  "EC",
+                  "-pkeyopt",
+                  "ec_paramgen_curve:P-256",
+                  "-out",
+                  tsaKey,
+              ]
+            : [
+                  "genpkey",
+                  "-algorithm",
+                  "RSA",
+                  "-pkeyopt",
+                  "rsa_keygen_bits:2048",
+                  "-out",
+                  tsaKey,
+              ]
+    );
     assertOpenSslSuccess([
         "req",
         "-new",
@@ -164,7 +222,7 @@ export function createLocalTsa(
         "-out",
         tsaCert,
         "-days",
-        "2",
+        tsaDays.toString(),
         "-sha256",
         "-extfile",
         config,
@@ -182,7 +240,99 @@ export function createLocalTsa(
     const ekuValue = lines.slice(ekuHeader + 1).find((line) => line.trim().length > 0);
     assert.equal(ekuValue?.trim(), "Time Stamping", "Local TSA certificate EKU must be exclusive");
 
-    return { rootCert, config, tsaCert, tsaKey };
+    return { rootCert, rootKey, config, tsaCert, tsaKey };
+}
+
+export interface UnrelatedTrustAnchor {
+    rootCert: string;
+    rootKey: string;
+    intermediateCert: string;
+}
+
+/**
+ * Issues a trust hierarchy that shares nothing with any local TSA: a
+ * self-signed root plus a genuine CA intermediate. The T01
+ * trust-target conformance case stuffs the intermediate into a TSA
+ * token's unsigned certificate bag and verifies under this root: the
+ * signer still chains nowhere trusted, so every engine must reject.
+ */
+export function createUnrelatedTrustAnchor(
+    directory: string,
+    commonName = "Unrelated Test"
+): UnrelatedTrustAnchor {
+    const rootKey = join(directory, "unrelated-root.key");
+    const rootCert = join(directory, "unrelated-root.pem");
+    const intermediateKey = join(directory, "unrelated-int.key");
+    const intermediateRequest = join(directory, "unrelated-int.csr");
+    const intermediateCert = join(directory, "unrelated-int.pem");
+    const extensionsPath = join(directory, "unrelated-ext.cnf");
+    writeFileSync(
+        extensionsPath,
+        "basicConstraints = critical,CA:true\n" +
+            "keyUsage = critical,keyCertSign,cRLSign\n" +
+            "subjectKeyIdentifier = hash\n" +
+            "authorityKeyIdentifier = keyid:always,issuer\n"
+    );
+
+    assertOpenSslSuccess([
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        rootKey,
+        "-out",
+        rootCert,
+        "-days",
+        "2",
+        "-sha256",
+        "-subj",
+        `/CN=${commonName} Root`,
+        "-addext",
+        "basicConstraints=critical,CA:true",
+        "-addext",
+        "keyUsage=critical,keyCertSign,cRLSign",
+    ]);
+    assertOpenSslSuccess([
+        "genpkey",
+        "-algorithm",
+        "RSA",
+        "-pkeyopt",
+        "rsa_keygen_bits:2048",
+        "-out",
+        intermediateKey,
+    ]);
+    assertOpenSslSuccess([
+        "req",
+        "-new",
+        "-key",
+        intermediateKey,
+        "-out",
+        intermediateRequest,
+        "-subj",
+        `/CN=${commonName} Intermediate`,
+    ]);
+    assertOpenSslSuccess([
+        "x509",
+        "-req",
+        "-in",
+        intermediateRequest,
+        "-CA",
+        rootCert,
+        "-CAkey",
+        rootKey,
+        "-CAcreateserial",
+        "-out",
+        intermediateCert,
+        "-days",
+        "2",
+        "-sha256",
+        "-extfile",
+        extensionsPath,
+    ]);
+
+    return { rootCert, rootKey, intermediateCert };
 }
 
 export function createTimestampResponse(
