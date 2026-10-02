@@ -5,6 +5,10 @@ import {
 } from "../../../core/src/utils/fetch-with-retry.js";
 import { ResponseTooLargeError } from "../../../core/src/utils/bounded-fetch.js";
 import { monotonicNow } from "../../../core/src/utils/clock.js";
+import {
+    OperationBudget,
+    type OperationBudgetLimits,
+} from "../../../core/src/utils/operation-budget.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { CircuitBreakerMap, CircuitState } from "../../../core/src/utils/circuit-breaker.js";
 
@@ -1136,9 +1140,7 @@ describe("fetchBytesWithRetry", () => {
         it("preserves non-leaking transport causes by identity", async () => {
             const failure = new Error("down");
             mockFetch.mockRejectedValue(failure);
-            const error = await fetchBytesWithRetry(
-                makeOptions({ retry: 0, retryDelay: 5 })
-            ).then(
+            const error = await fetchBytesWithRetry(makeOptions({ retry: 0, retryDelay: 5 })).then(
                 () => null,
                 (e: unknown) => e
             );
@@ -1251,6 +1253,243 @@ describe("fetchBytesWithRetry", () => {
                 expect((error as TimestampError).code).toBe(TimestampErrorCode.NETWORK_ERROR);
             } finally {
                 vi.useRealTimers();
+            }
+        });
+    });
+
+    describe("operation budget (T08)", () => {
+        const ownedBudgets: OperationBudget[] = [];
+        const makeBudget = (limits: OperationBudgetLimits): OperationBudget => {
+            const budget = new OperationBudget(limits);
+            ownedBudgets.push(budget);
+            return budget;
+        };
+        const withBudget = (
+            options: FetchWithRetryOptions,
+            limits: OperationBudgetLimits
+        ): FetchWithRetryOptions =>
+            ({ ...options, budget: makeBudget(limits) }) as FetchWithRetryOptions;
+
+        afterEach(() => {
+            for (const budget of ownedBudgets.splice(0)) {
+                budget.dispose();
+            }
+        });
+
+        it("stops retrying once the attempt budget is spent", async () => {
+            mockFetch.mockRejectedValue(new Error("Network error"));
+
+            const error = await fetchBytesWithRetry(
+                withBudget(makeOptions({ retry: 3, retryDelay: 5 }), { maxAttempts: 1 })
+            ).then(
+                () => undefined,
+                (e: unknown) => e
+            );
+
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect((error as Error | undefined)?.message ?? "").toMatch(
+                /operation budget exhausted/
+            );
+        });
+
+        it("counts bytes even from validator-rejected evidence and then refuses", async () => {
+            const budget = makeBudget({ maxBytes: 150 });
+            const withShared = (options: FetchWithRetryOptions): FetchWithRetryOptions =>
+                ({ ...options, budget }) as FetchWithRetryOptions;
+            // Fresh body per call: a shared Response would read empty after
+            // the first consumption.
+            mockFetch.mockImplementation(() => okResponse(new Uint8Array(100).fill(3)));
+
+            const first = await fetchBytesWithRetry(
+                withShared(
+                    makeOptions({
+                        maxResponseBytes: 1024,
+                        validateBytes: () => {
+                            throw new TimestampError(
+                                TimestampErrorCode.INVALID_RESPONSE,
+                                "rejected evidence"
+                            );
+                        },
+                    })
+                )
+            ).then(
+                (value: Uint8Array) => value,
+                (e: unknown) => e
+            );
+            expect(first).toBeInstanceOf(TimestampError);
+            expect((first as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+
+            // 100 rejected + 100 tipping over the 150 cap: the tipping
+            // bytes are still delivered, the call after is refused.
+            const second = await fetchBytesWithRetry(
+                withShared(makeOptions({ maxResponseBytes: 1024 }))
+            );
+            expect(second).toBeInstanceOf(Uint8Array);
+            await expect(
+                fetchBytesWithRetry(withShared(makeOptions({ maxResponseBytes: 1024 })))
+            ).rejects.toThrow(/operation budget exhausted/);
+            expect(mockFetch).toHaveBeenCalledTimes(2);
+        });
+
+        it("counts built-in over-cap bytes via actualBytes and then refuses", async () => {
+            // P2-2: brief item 1 mandates byte counting on ALL built-in
+            // paths, including bodies rejected by the service cap.
+            const budget = makeBudget({ maxBytes: 150 });
+            const withShared = (options: FetchWithRetryOptions): FetchWithRetryOptions =>
+                ({ ...options, budget }) as FetchWithRetryOptions;
+            mockFetch.mockImplementation(() => okResponse(new Uint8Array(100).fill(3)));
+
+            // 100 bytes over the 60-byte service cap: rejected, but the
+            // actualBytes still consume budget.
+            const first = await fetchBytesWithRetry(
+                withShared(makeOptions({ maxResponseBytes: 60 }))
+            ).then(
+                (value: Uint8Array) => value,
+                (e: unknown) => e
+            );
+            expect(first).toBeInstanceOf(ResponseTooLargeError);
+            expect((first as ResponseTooLargeError).actualBytes).toBe(100);
+
+            // 100 consumed + 100 tipping over the 150 cap: the tipping
+            // bytes are still delivered, the call after is refused.
+            const second = await fetchBytesWithRetry(
+                withShared(makeOptions({ maxResponseBytes: 1024 }))
+            );
+            expect(second).toBeInstanceOf(Uint8Array);
+            await expect(
+                fetchBytesWithRetry(withShared(makeOptions({ maxResponseBytes: 1024 })))
+            ).rejects.toThrow(/operation budget exhausted/);
+            expect(mockFetch).toHaveBeenCalledTimes(2);
+        });
+
+        it("counts partial body bytes read before a mid-body failure (fix round 4, F1)", async () => {
+            // F1: bytes read before a body failure are observable and must
+            // consume budget before the failure propagates.
+            const budget = makeBudget({ maxBytes: 1024 });
+            const withShared = (options: FetchWithRetryOptions): FetchWithRetryOptions =>
+                ({ ...options, budget }) as FetchWithRetryOptions;
+            mockFetch.mockImplementation(() => {
+                const stream = new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array(4096).fill(0xab));
+                    },
+                    pull(controller) {
+                        controller.error(new Error("body exploded"));
+                    },
+                });
+                return new Response(stream, { status: 200 });
+            });
+
+            const error = await fetchBytesWithRetry(
+                withShared(makeOptions({ retry: 3, retryDelay: 5, maxResponseBytes: 64 * 1024 }))
+            ).then(
+                () => undefined,
+                (e: unknown) => e
+            );
+
+            // The first failed body delivered 4096 bytes against a
+            // 1024-byte budget, so the retries are refused, never issued.
+            // (Red run: 4 fetches, NETWORK_ERROR, zero bytes counted.)
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect((error as Error | undefined)?.message ?? "").toMatch(
+                /operation budget exhausted/
+            );
+        });
+
+        it("charges zero bytes for an unread declared Content-Length (fix round 4, F4)", async () => {
+            // F4: the untrusted declared length is never charged; only
+            // actually-read bytes consume budget.
+            const budget = makeBudget({ maxBytes: 150 });
+            const withShared = (options: FetchWithRetryOptions): FetchWithRetryOptions =>
+                ({ ...options, budget }) as FetchWithRetryOptions;
+            let calls = 0;
+            mockFetch.mockImplementation(() => {
+                calls++;
+                if (calls === 1) {
+                    const empty = new ReadableStream<Uint8Array>({
+                        start(controller) {
+                            controller.close();
+                        },
+                    });
+                    return new Response(empty, {
+                        status: 200,
+                        headers: { "content-length": "20971521" },
+                    });
+                }
+                return okResponse(new Uint8Array(100).fill(3));
+            });
+
+            const first = await fetchBytesWithRetry(
+                withShared(makeOptions({ maxResponseBytes: 60 }))
+            ).then(
+                (value: Uint8Array) => value,
+                (e: unknown) => e
+            );
+            expect(first).toBeInstanceOf(ResponseTooLargeError);
+            expect((first as ResponseTooLargeError).actualBytes).toBe(0);
+
+            // The zero-pull rejection charged zero, so the follow-up
+            // fetch proceeds. (Red run: 20971521 charged, refused.)
+            const second = await fetchBytesWithRetry(
+                withShared(makeOptions({ maxResponseBytes: 1024 }))
+            );
+            expect(second).toBeInstanceOf(Uint8Array);
+            expect(mockFetch).toHaveBeenCalledTimes(2);
+        });
+
+        it("merges distinct caller and budget signals without AbortSignal.any", async () => {
+            // P1-1: AbortSignal.any is baseline-2024; older browsers and
+            // edge runtimes throw TypeError. The shell must fall back to
+            // manual listener chaining when it is missing.
+            const realAny = AbortSignal.any;
+            delete (AbortSignal as unknown as { any?: unknown }).any;
+            try {
+                const caller = new AbortController();
+                mockFetch.mockImplementation(() => okResponse(new Uint8Array([1, 2, 3])));
+                const bytes = await fetchBytesWithRetry(
+                    withBudget(makeOptions({ signal: caller.signal }), {})
+                );
+                expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+            } finally {
+                (AbortSignal as unknown as { any: typeof realAny }).any = realAny;
+            }
+        });
+
+        it("propagates caller aborts through the fallback merge", async () => {
+            const realAny = AbortSignal.any;
+            delete (AbortSignal as unknown as { any?: unknown }).any;
+            try {
+                const caller = new AbortController();
+                const budget = makeBudget({});
+                hangUntilAbort();
+                const pending = fetchBytesWithRetry({
+                    ...makeOptions({ timeout: 10000 }),
+                    signal: caller.signal,
+                    budget,
+                });
+                await new Promise((resolve) => setTimeout(resolve, 10));
+                const reason = new Error("caller went away");
+                caller.abort(reason);
+                await expect(pending).rejects.toBe(reason);
+            } finally {
+                (AbortSignal as unknown as { any: typeof realAny }).any = realAny;
+            }
+        });
+
+        it("reuses an identical caller and budget signal without AbortSignal.any", async () => {
+            const realAny = AbortSignal.any;
+            delete (AbortSignal as unknown as { any?: unknown }).any;
+            try {
+                const budget = makeBudget({});
+                mockFetch.mockImplementation(() => okResponse(new Uint8Array([1, 2, 3])));
+                const bytes = await fetchBytesWithRetry({
+                    ...makeOptions({}),
+                    signal: budget.signal,
+                    budget,
+                });
+                expect(bytes).toEqual(new Uint8Array([1, 2, 3]));
+            } finally {
+                (AbortSignal as unknown as { any: typeof realAny }).any = realAny;
             }
         });
     });

@@ -1,7 +1,7 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
 import { CircuitBreakerMap, CircuitState } from "../utils/circuit-breaker.js";
-import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
+import { fetchBytesWithRetry, type FetchWithRetryOptions } from "../utils/fetch-with-retry.js";
 import { getLogger } from "../utils/logger.js";
 import { DEFAULT_CRL_CONFIG } from "../constants.js";
 import { toArrayBuffer } from "../utils.js";
@@ -112,12 +112,12 @@ const crlCircuitBreakers = new CircuitBreakerMap({
  * Fetches a CRL (Certificate Revocation List) from a URL.
  *
  * @param url - The CRL URL
- * @param options - Optional parameters for delta-CRL support
+ * @param options - Optional delta-CRL support, caller signal, aggregate budget
  * @returns The DER-encoded CRL bytes
  */
 export async function fetchCRL(
     url: string,
-    options?: { fetchDeltaIfAvailable?: boolean }
+    options?: { fetchDeltaIfAvailable?: boolean } & Pick<FetchWithRetryOptions, "signal" | "budget">
 ): Promise<Uint8Array> {
     return fetchBytesWithRetry({
         url,
@@ -125,6 +125,8 @@ export async function fetchCRL(
         config: DEFAULT_CRL_CONFIG,
         circuitBreakers: crlCircuitBreakers,
         serviceLabel: "CRL server",
+        signal: options?.signal,
+        budget: options?.budget,
         validateBytes: (bytes) => {
             if (options?.fetchDeltaIfAvailable) {
                 const crlInfo = parseCRLInfo(bytes);

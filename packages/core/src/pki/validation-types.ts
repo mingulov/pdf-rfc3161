@@ -1,4 +1,5 @@
 import * as pkijs from "pkijs";
+import type { OperationBudgetLimits } from "../utils/operation-budget.js";
 
 /**
  * Represents a single certificate requiring validation
@@ -84,8 +85,35 @@ export interface ValidationResult {
 }
 
 /**
+ * Per-call context handed to every fetcher invocation. The parameter is
+ * optional and trailing, so legacy two-argument implementations keep
+ * working unchanged: they simply never observe it.
+ */
+export interface RevocationFetchContext {
+    /**
+     * Aborts when the completion's operation budget is spent. Cooperative
+     * fetchers should cancel their in-flight I/O and reject promptly.
+     * Explicitly: a legacy fetcher that ignores this signal cannot have
+     * its underlying I/O forcibly cancelled, nor its internal allocations
+     * bounded, by the caller; late results are then discarded (never used
+     * or cached) once the budget is spent, but the fetcher's own work
+     * already happened.
+     */
+    signal?: AbortSignal;
+}
+
+/**
  * Fetch implementation interface - allows pluggable fetch.
  * Implement this interface to provide custom network behavior.
+ *
+ * Completion accounting splits by implementation: a genuine built-in
+ * fetcher (either module format, without method overrides) counts every
+ * physical attempt (retries included) and every received chunk, while
+ * anything else -- custom fetchers and DefaultFetcher subclasses whose
+ * overrides are caller I/O -- is counted as one attempt per call with
+ * returned bytes counted (an approximation for opaque I/O). Returns are
+ * size-checked against the same service caps, even when the trailing
+ * context argument is ignored.
  *
  * @example
  * ```typescript
@@ -112,16 +140,22 @@ export interface RevocationDataFetcher {
      * Fetch OCSP response for a certificate
      * @param url OCSP responder URL
      * @param request DER-encoded OCSP request
+     * @param context Optional abort context (ignorable by legacy fetchers)
      * @returns DER-encoded OCSP response
      */
-    fetchOCSP(url: string, request: Uint8Array): Promise<Uint8Array>;
+    fetchOCSP(
+        url: string,
+        request: Uint8Array,
+        context?: RevocationFetchContext
+    ): Promise<Uint8Array>;
 
     /**
      * Fetch CRL from distribution point
      * @param url CRL URL
+     * @param context Optional abort context (ignorable by legacy fetchers)
      * @returns DER-encoded CRL
      */
-    fetchCRL(url: string): Promise<Uint8Array>;
+    fetchCRL(url: string, context?: RevocationFetchContext): Promise<Uint8Array>;
 }
 
 /**
@@ -197,4 +231,11 @@ export interface ValidationSessionOptions {
      * that cannot echo nonces; the exchange then loses replay protection.
      */
     includeOCSPNonce?: boolean;
+    /**
+     * Per-completion operation-budget overrides. Omitted fields take the
+     * default budget (32 attempts, 20 MiB, 32 certificates, 8 URLs per
+     * certificate, 60 s elapsed). Exhaustion yields unknown verdicts with
+     * diagnostics, never failures.
+     */
+    budget?: OperationBudgetLimits;
 }

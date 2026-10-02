@@ -3,6 +3,7 @@ import { CircuitState, type CircuitBreakerMap } from "./circuit-breaker.js";
 import { validateUrl, formatDiagnosticUrl, sanitizeTransportCause } from "./url.js";
 import { readResponseBounded, assertResponseCap } from "./bounded-fetch.js";
 import { monotonicNow, type MonotonicClock } from "./clock.js";
+import type { OperationBudget } from "./operation-budget.js";
 
 /**
  * Largest delay the platform timer accepts: 2^31 - 1 ms. Larger values
@@ -58,6 +59,15 @@ export interface FetchWithRetryOptions {
      * per-attempt timeout owned by this helper.
      */
     signal?: AbortSignal;
+    /**
+     * Optional aggregate operation budget. Every attempt (including
+     * retries) claims one attempt and every received chunk counts its
+     * bytes as it arrives, even when the body later fails or is
+     * rejected. Once spent, no further attempt is issued and in-flight
+     * I/O aborts; exhaustion throws a local-policy error and never
+     * records a remote outage.
+     */
+    budget?: OperationBudget;
     /**
      * Monotonic clock (ms) for elapsed-deadline checks. Defaults to the
      * shared monotonic clock; tests inject a manual clock to control
@@ -122,6 +132,27 @@ function discardBody(response: Response): void {
     }
 }
 
+/**
+ * Minimal AbortSignal.any for runtimes predating baseline-2024: aborts
+ * with the first input reason when either input aborts. Inputs are
+ * known distinct here; identical signals take the fast path instead.
+ */
+function chainAbortSignals(first: AbortSignal, second: AbortSignal): AbortSignal {
+    const controller = new AbortController();
+    const onAbort = (): void => {
+        // A later second abort is a no-op: the first reason is kept.
+        controller.abort(first.aborted ? first.reason : second.reason);
+    };
+    if (first.aborted || second.aborted) onAbort();
+    else {
+        // No once:true: a second abort is a no-op (first reason kept)
+        // and both inputs die with the completion, so removal buys nothing.
+        first.addEventListener("abort", onAbort);
+        second.addEventListener("abort", onAbort);
+    }
+    return controller.signal;
+}
+
 /** Backoff sleep that stays cancellable by the caller. */
 function sleepAbortable(ms: number, callerSignal: AbortSignal | undefined): Promise<void> {
     throwIfCallerAborted(callerSignal);
@@ -146,12 +177,29 @@ function sleepAbortable(ms: number, callerSignal: AbortSignal | undefined): Prom
  * clients. redirect:manual (3xx/opaque rejected, never followed); 5xx
  * retried, every 4xx terminal; one per-attempt deadline covers headers
  * and body; caller-cancelable backoff; empty/validator failures
- * terminal. Exhaustion throws TIMEOUT (deadline) or NETWORK_ERROR.
+ * terminal. Exhaustion throws TIMEOUT (deadline) or NETWORK_ERROR. An
+ * optional aggregate budget counts every attempt and every returned
+ * body, and refuses further attempts once spent.
  */
 export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promise<Uint8Array> {
     const { url, method, headers, body, config, circuitBreakers, validateBytes } = options;
     const serviceLabel = options.serviceLabel ?? "service";
     const callerSignal = options.signal;
+    const budget = options.budget;
+    // Budget exhaustion arrives as an abort whose reason is the exhaustion
+    // error, so it merges with caller cancellation: whichever fires first
+    // wins, and the exhaustion reason propagates like a caller reason
+    // (verbatim, never retried, never recorded as a remote outage).
+    // Identical signals merge to themselves (the common LTV/session
+    // case); distinct signals use AbortSignal.any where present and a
+    // manual listener chain on older runtimes.
+    const budgetSignal = budget?.signal;
+    const abortSignal =
+        callerSignal === undefined || budgetSignal === undefined || budgetSignal === callerSignal
+            ? (callerSignal ?? budgetSignal)
+            : typeof AbortSignal.any === "function"
+              ? AbortSignal.any([callerSignal, budgetSignal])
+              : chainAbortSignals(callerSignal, budgetSignal);
 
     assertValidFetchConfig(config);
     // H4: validate once up-front so a bad URL fails fast instead of consuming
@@ -182,17 +230,22 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
         error: unknown,
         attempt: number
     ): Promise<void> => {
-        // Caller cancellation wins over every retryable verdict, including
-        // an abort landing in the `await discardBody` window on the final
-        // attempt where there is no backoff sleep to re-check. Placed here
-        // it covers the fetch-rejection, 5xx, and body-failure paths
-        // uniformly, before any circuit record or classified throw.
-        throwIfCallerAborted(callerSignal);
+        // Caller/budget cancellation wins over every retryable verdict,
+        // including an abort landing in the `await discardBody` window on
+        // the final attempt where there is no backoff sleep to re-check.
+        // Placed here it covers the fetch-rejection, 5xx, and body-failure
+        // paths uniformly, before any circuit record or classified throw.
+        throwIfCallerAborted(abortSignal);
         if (attempt < config.retry) {
+            // A spent budget never sleeps through a backoff just to refuse
+            // the next attempt afterwards. The final attempt below still
+            // reports its own classified failure (and records it): failing
+            // on the merits is remote evidence, not local policy.
+            if (budget?.exhausted === true) throw budget.exhaustionError();
             // Exponential backoff capped at the platform timer range so a
             // large retryDelay cannot overflow into a ~1 ms misfire.
             const backoffMs = Math.min(config.retryDelay * 2 ** attempt, MAX_TIMER_DELAY_MS);
-            await sleepAbortable(backoffMs, callerSignal);
+            await sleepAbortable(backoffMs, abortSignal);
             return;
         }
         circuitBreakers?.recordFailure(url);
@@ -226,7 +279,12 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
         // Attempt entry re-check: an abort landing between backoff
         // resolution and this dispatch must not start another fetch with
         // a fresh, unaborted signal.
-        throwIfCallerAborted(callerSignal);
+        throwIfCallerAborted(abortSignal);
+        // A spent aggregate budget issues no further fetch, including
+        // retries; the local-policy error records no remote outage.
+        if (budget !== undefined && !budget.tryStartAttempt()) {
+            throw budget.exhaustionError();
+        }
         // Absolute per-attempt deadline on the monotonic clock, alongside
         // the armed timer. Signal state alone cannot observe a deadline
         // the event loop never got to run, so elapsed time is checked
@@ -243,12 +301,13 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
         // with a live signal and unexpired deadline is not our timeout.
         const isAttemptExpired = (): boolean =>
             controller.signal.aborted || clock() >= attemptDeadline;
-        // Caller aborts are told apart from the per-attempt timeout by
-        // checking the caller signal first wherever an abort surfaces.
+        // Caller/budget aborts are told apart from the per-attempt
+        // timeout by checking the merged signal first wherever an abort
+        // surfaces.
         const onCallerAbort = (): void => {
-            controller.abort(callerSignal?.reason);
+            controller.abort(abortSignal?.reason);
         };
-        callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+        abortSignal?.addEventListener("abort", onCallerAbort, { once: true });
         try {
             let response: Response;
             try {
@@ -260,7 +319,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
                     redirect: "manual",
                 });
             } catch (error) {
-                throwIfCallerAborted(callerSignal);
+                throwIfCallerAborted(abortSignal);
                 await failRetryable(isAttemptExpired() ? "timeout" : "network", error, attempt);
                 continue;
             }
@@ -271,7 +330,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             if (response.type === "opaqueredirect" || response.type === "opaque") {
                 discardBody(response);
                 // An abort landing in discard wins over the terminal verdict.
-                throwIfCallerAborted(callerSignal);
+                throwIfCallerAborted(abortSignal);
                 throw new TimestampError(
                     TimestampErrorCode.NETWORK_ERROR,
                     `${serviceLabel} returned an unreadable opaque redirect; ` +
@@ -281,7 +340,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             const status = response.status;
             if (status >= 300 && status <= 399) {
                 discardBody(response);
-                throwIfCallerAborted(callerSignal);
+                throwIfCallerAborted(abortSignal);
                 throw new TimestampError(
                     TimestampErrorCode.NETWORK_ERROR,
                     `${serviceLabel} returned redirect HTTP ${String(status)}; ` +
@@ -303,7 +362,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             // Any other non-ok status fails closed the same way.
             if (!response.ok) {
                 discardBody(response);
-                throwIfCallerAborted(callerSignal);
+                throwIfCallerAborted(abortSignal);
                 throw new TimestampError(
                     TimestampErrorCode.NETWORK_ERROR,
                     `${serviceLabel} returned HTTP ${String(status)}: ${response.statusText}`
@@ -320,20 +379,27 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
                     signal: controller.signal,
                     deadlineMs: attemptDeadline,
                     clock,
+                    // Bytes count as they arrive, so partial reads before
+                    // a failure, timeout, or abort still consume budget.
+                    onChunk: (n) => budget?.addBytes(n),
                 });
             } catch (error) {
-                throwIfCallerAborted(callerSignal);
+                throwIfCallerAborted(abortSignal);
                 // Over-cap reads arrive here as TimestampErrors; terminal.
+                // Their bytes (like every partial read) were already
+                // counted through onChunk, so nothing is added here.
                 if (error instanceof TimestampError) {
                     throw error;
                 }
                 await failRetryable(isAttemptExpired() ? "timeout" : "network", error, attempt);
                 continue;
             }
-            // Never report success after the caller cancelled, and never
-            // accept bytes past the attempt deadline: genuine exhaustion
-            // retries through the normal timeout policy instead.
-            throwIfCallerAborted(callerSignal);
+            // Consumed bytes were already counted through onChunk as they
+            // arrived (counting is not reporting: cancellation still
+            // wins). A budget deadline observed here (timer callback
+            // starved) ends the call instead of accepting overdue bytes.
+            throwIfCallerAborted(abortSignal);
+            if (budget?.isElapsed() === true) throw budget.exhaustionError();
             if (isAttemptExpired()) {
                 await failRetryable(
                     "timeout",
@@ -356,7 +422,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
                 } catch (error) {
                     // A validator that aborts and then throws must surface
                     // the caller reason, not a validation wrapper.
-                    throwIfCallerAborted(callerSignal);
+                    throwIfCallerAborted(abortSignal);
                     if (error instanceof TimestampError) throw error;
                     throw new TimestampError(
                         TimestampErrorCode.INVALID_RESPONSE,
@@ -368,7 +434,8 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             // A validator that aborts and returns must not read as success,
             // and synchronous validation past the deadline is exhaustion,
             // not an accepted verdict: re-check before recording success.
-            throwIfCallerAborted(callerSignal);
+            throwIfCallerAborted(abortSignal);
+            if (budget?.isElapsed() === true) throw budget.exhaustionError();
             if (isAttemptExpired()) {
                 await failRetryable(
                     "timeout",
@@ -382,7 +449,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             return responseBytes;
         } finally {
             clearTimeout(timeoutId);
-            callerSignal?.removeEventListener("abort", onCallerAbort);
+            abortSignal?.removeEventListener("abort", onCallerAbort);
         }
     }
 }

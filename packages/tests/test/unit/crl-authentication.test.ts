@@ -4,6 +4,7 @@ import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { toArrayBuffer, bytesToHex } from "../../../core/src/utils.js";
 import { ValidationSession } from "../../../core/src/pki/validation-session.js";
+import { DefaultFetcher } from "../../../core/src/pki/fetchers/default-fetcher.js";
 import { MockFetcher } from "../../../core/src/pki/fetchers/mock-fetcher.js";
 import { InMemoryValidationCache } from "../../../core/src/pki/fetchers/memory-cache.js";
 import type {
@@ -2639,6 +2640,190 @@ describe("CRL authentication (T07)", () => {
                 }
             );
             expect(completed.data.crls).toHaveLength(1);
+        });
+    });
+
+    describe("operation budget elapsed boundaries (T08 fix round 4, F2)", () => {
+        it("refuses usable cached CRL bytes once the elapsed budget is spent (F2a)", async () => {
+            const crl = await freshCRL(ca, { entries: [{ serial: 9999 }] });
+            const fetcher = recordingFetcher({});
+            const cache: ValidationCache = {
+                getOCSP: () => null,
+                setOCSP: () => undefined,
+                getCRL: () => crl,
+                setCRL: () => undefined,
+                clear: () => undefined,
+            };
+            const session = new ValidationSession({
+                fetcher,
+                cache,
+                checkDate: CHECK_DATE,
+                clockSkewMs: CLOCK_SKEW_MS,
+                budget: { maxElapsedMs: 0 },
+            });
+            session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+            const [result] = await session.validateAll();
+
+            // Elapsed exhaustion refuses even free cache hits: unknown
+            // with a diagnostic, zero fetches. (Red run: good, no errors.)
+            expect(fetcher.ocspCalls).toBe(0);
+            expect(fetcher.crlCalls).toBe(0);
+            expect(result?.revocationStatus).toBe("unknown");
+            expect(result?.isValid).toBe(false);
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("refuses authenticated CRL verdicts completing past the elapsed deadline (F2b)", async () => {
+            const crl = await freshCRL(ca, { entries: [{ serial: 9999 }] });
+            const fetcher = recordingFetcher({ crl });
+            const session = new ValidationSession({
+                fetcher,
+                checkDate: CHECK_DATE,
+                clockSkewMs: CLOCK_SKEW_MS,
+                budget: { maxElapsedMs: 20 },
+            });
+            session.queueCertificate(leaf.cert, { issuer: ca.cert });
+            // Hold every real verification 50 ms: verdicts unchanged, only
+            // late, so the 20 ms budget timer fires mid-validation.
+            const subtle = crypto.subtle as unknown as {
+                verify: (...args: never[]) => Promise<boolean>;
+            };
+            const originalVerify = subtle.verify.bind(subtle);
+            subtle.verify = (async (...args: never[]) => {
+                await new Promise((resolve) => setTimeout(resolve, 50));
+                return originalVerify(...args);
+            }) as (...args: never[]) => Promise<boolean>;
+            try {
+                const [result] = await session.validateAll();
+
+                // The verdict completed past the deadline: unknown with a
+                // diagnostic. (Red run: good, no errors, aborted signal.)
+                expect(result?.revocationStatus).toBe("unknown");
+                expect(result?.isValid).toBe(false);
+                expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+            } finally {
+                subtle.verify = originalVerify;
+            }
+        });
+    });
+
+    describe("operation budget late-chunk byte accounting (T08 fix round 5, F1 residual)", () => {
+        it("charges a chunk delivered past the attempt deadline, then refuses further fetches", async () => {
+            // Sol re-review residual: a body chunk delivered past the
+            // attempt deadline escaped byte accounting because onChunk ran
+            // after the post-read deadline check, which threw first.
+            // Rebuild of sol's standalone reproducer: a signed leaf with
+            // two CRL URLs, DefaultFetcher maxRetries 3, budget { maxBytes:
+            // 1024, maxAttempts: 10, maxElapsedMs: 10037 }, every first pull
+            // blocking past the attempt timeout then delivering 4096 bytes.
+            // Only retry backoffs (500/1000/2000) are accelerated; attempt
+            // and operation deadlines stay real. The race window is scaled
+            // 10x from sol's 15 ms / 40 ms to 150 ms / 200 ms: under
+            // full-suite CPU oversubscription the OS preempts the fetch
+            // continuation past a 15 ms attempt timeout (observed: pre-read
+            // AttemptDeadlineExceededError at +15 ms, legitimately retried
+            // with zero bytes delivered), which flakes the raw fetch count;
+            // the scaled window keeps the chunk-always-late regime
+            // identical while scheduling stalls stay far below it.
+            const twoUrlLeaf = await createTestLeaf(ca, {
+                serial: 2401,
+                crlUrls: [CRL_URL, CRL_URL_2],
+            });
+            const calls: string[] = [];
+            const counters = { pulls: 0, fulfilledBytes: 0, cancellations: 0 };
+            const realFetch = globalThis.fetch;
+            const realSetTimeout = globalThis.setTimeout;
+            const backoffDelays = new Set([500, 1000, 2000]);
+            globalThis.setTimeout = ((
+                callback: (...args: never[]) => void,
+                delay?: number,
+                ...args: never[]
+            ) =>
+                realSetTimeout(
+                    callback,
+                    backoffDelays.has(delay ?? 0) ? 0 : delay,
+                    ...args
+                )) as unknown as typeof setTimeout;
+            globalThis.fetch = (async (input: string) => {
+                calls.push(input);
+                let sent = false;
+                const body = new ReadableStream<Uint8Array>(
+                    {
+                        pull(controller) {
+                            counters.pulls++;
+                            if (sent) return;
+                            sent = true;
+                            // Block the loop past the 150 ms attempt
+                            // timeout: the chunk always fulfills late.
+                            const start = Date.now();
+                            while (Date.now() - start < 200) {
+                                // Busy-wait: no timer callback interleaves.
+                            }
+                            controller.enqueue(new Uint8Array(4096));
+                        },
+                        cancel() {
+                            counters.cancellations++;
+                        },
+                    },
+                    { highWaterMark: 0 }
+                );
+                const savedGetReader = body.getReader.bind(body);
+                body.getReader = (() => {
+                    const reader = savedGetReader();
+                    const savedRead = reader.read.bind(reader);
+                    reader.read = async () => {
+                        const chunk = await savedRead();
+                        if (!chunk.done) counters.fulfilledBytes += chunk.value.byteLength;
+                        return chunk;
+                    };
+                    return reader;
+                }) as typeof body.getReader;
+                return new Response(body);
+            }) as typeof fetch;
+            try {
+                const nullCache: ValidationCache = {
+                    getOCSP: () => null,
+                    getCRL: () => null,
+                    setOCSP: () => undefined,
+                    setCRL: () => undefined,
+                    clear: () => undefined,
+                };
+                const session = new ValidationSession({
+                    fetcher: new DefaultFetcher({ timeout: 150, maxRetries: 3 }),
+                    cache: nullCache,
+                    preferOCSP: false,
+                    checkDate: CHECK_DATE,
+                    clockSkewMs: CLOCK_SKEW_MS,
+                    budget: { maxBytes: 1024, maxAttempts: 10, maxElapsedMs: 10037 },
+                });
+                session.queueCertificate(twoUrlLeaf.cert, { issuer: ca.cert });
+
+                const [result] = await session.validateAll();
+
+                // The late 4096-byte chunk is charged, tipping the
+                // 1024-byte budget: exactly one body is ever read, and no
+                // fetch issues after the trip -- retries and the second URL
+                // are refused. Zero-byte pre-read deadline retries (a
+                // scheduling stall past the attempt timeout before any read
+                // issues) deliver nothing, charge nothing, and are
+                // legitimate, so the raw fetch count is not pinned; the
+                // single pull plus the charged-bytes diagnostic pin the
+                // invariant instead. (Red run: 8 fetches / 8 pulls / 32768
+                // fulfilled bytes over both URLs, timeout errors, no
+                // byte-limit diagnostic.)
+                expect(new Set(calls)).toEqual(new Set([CRL_URL]));
+                expect(counters.pulls).toBe(1);
+                expect(counters.fulfilledBytes).toBe(4096);
+                expect(counters.cancellations).toBe(calls.length);
+                expect(result?.revocationStatus).toBe("unknown");
+                expect((result?.errors ?? []).join("\n")).toMatch(
+                    /byte limit \(1024\) exceeded after 4096 bytes/
+                );
+            } finally {
+                globalThis.fetch = realFetch;
+                globalThis.setTimeout = realSetTimeout;
+            }
         });
     });
 

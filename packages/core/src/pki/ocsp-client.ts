@@ -1,5 +1,5 @@
 import { CircuitBreakerMap, CircuitState } from "../utils/circuit-breaker.js";
-import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
+import { fetchBytesWithRetry, type FetchWithRetryOptions } from "../utils/fetch-with-retry.js";
 import { DEFAULT_OCSP_CONFIG } from "../constants.js";
 
 /**
@@ -16,9 +16,14 @@ const ocspCircuitBreakers = new CircuitBreakerMap({
  *
  * @param url - The OCSP Responder URL
  * @param request - The DER-encoded OCSP Request
+ * @param options - Optional caller signal and aggregate budget
  * @returns The DER-encoded OCSP Response
  */
-export async function fetchOCSPResponse(url: string, request: Uint8Array): Promise<Uint8Array> {
+export async function fetchOCSPResponse(
+    url: string,
+    request: Uint8Array,
+    options?: Pick<FetchWithRetryOptions, "signal" | "budget">
+): Promise<Uint8Array> {
     return fetchBytesWithRetry({
         url,
         method: "POST",
@@ -27,6 +32,8 @@ export async function fetchOCSPResponse(url: string, request: Uint8Array): Promi
         config: DEFAULT_OCSP_CONFIG,
         circuitBreakers: ocspCircuitBreakers,
         serviceLabel: "OCSP responder",
+        signal: options?.signal,
+        budget: options?.budget,
     });
 }
 

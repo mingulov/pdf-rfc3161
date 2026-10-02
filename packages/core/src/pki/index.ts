@@ -5,6 +5,7 @@ export type {
     RevocationStatus,
     ValidationResult,
     RevocationDataFetcher,
+    RevocationFetchContext,
     ValidationCache,
     ValidationSessionOptions,
 } from "./validation-types.js";

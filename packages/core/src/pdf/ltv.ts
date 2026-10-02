@@ -1,12 +1,6 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
-import {
-    PDFDocument,
-    PDFName,
-    PDFArray,
-    PDFRef,
-    PDFDict,
-} from "pdf-lib-incremental-save";
+import { PDFDocument, PDFName, PDFArray, PDFRef, PDFDict } from "pdf-lib-incremental-save";
 import { TimestampError, TimestampErrorCode, type ExtractOptions } from "../types.js";
 import {
     getOCSPURI,
@@ -22,6 +16,10 @@ import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "../pki/de
 import { fetchCertificate } from "../pki/cert-client.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
+import { OperationBudget } from "../utils/operation-budget.js";
+import type { OperationBudgetLimits } from "../utils/operation-budget.js";
+import type { RevocationFetchContext } from "../pki/validation-types.js";
+import { DEFAULT_CERT_CONFIG, DEFAULT_CRL_CONFIG, DEFAULT_OCSP_CONFIG } from "../constants.js";
 import { updateValidationStore } from "./validation-store.js";
 
 /**
@@ -38,19 +36,48 @@ export interface LTVData {
 
 /**
  * Settings for LTV data completion, allowing custom network fetchers.
+ *
+ * Every fetcher (built-in or custom), every retry, and every repeated
+ * URL consumes from one operation budget per completion. Custom fetchers
+ * are counted like built-in I/O (one attempt per call, returned bytes
+ * counted) and their returns are size-checked against the same service
+ * caps, whether or not they observe the trailing context argument.
+ * Explicitly: a legacy fetcher that ignores the abort signal cannot have
+ * its underlying I/O forcibly cancelled, nor its internal allocations
+ * bounded, by the caller; late results are discarded once the budget is
+ * spent, but the fetcher's own work already happened.
  */
 export interface LTVSettings {
     fetchers?: {
-        certFetcher?: (url: string) => Promise<Uint8Array>;
-        ocspFetcher?: (url: string, request: Uint8Array) => Promise<Uint8Array>;
-        crlFetcher?: (url: string) => Promise<Uint8Array>;
+        certFetcher?: (url: string, context?: RevocationFetchContext) => Promise<Uint8Array>;
+        ocspFetcher?: (
+            url: string,
+            request: Uint8Array,
+            context?: RevocationFetchContext
+        ) => Promise<Uint8Array>;
+        crlFetcher?: (url: string, context?: RevocationFetchContext) => Promise<Uint8Array>;
     };
+    /**
+     * Per-completion operation-budget overrides. Omitted fields take the
+     * default budget (32 attempts, 20 MiB, 32 certificates, 8 URLs per
+     * certificate, 60 s elapsed). Exhaustion yields partial data plus
+     * diagnostics, never a failure.
+     */
+    budget?: OperationBudgetLimits;
+    /**
+     * Validation check-time carried by the completion's budget. Defaults
+     * to the time the completion runs. Must be a finite date.
+     */
+    checkDate?: Date;
 }
 
 function parseCompleteCrlCandidate(crlBytes: Uint8Array): pkijs.CertificateRevocationList {
     const asn1 = parseCanonicalDERSequenceTree(crlBytes, "CRL candidate");
     if (!(asn1 instanceof asn1js.Sequence)) {
-        throw new TimestampError(TimestampErrorCode.INVALID_RESPONSE, "CRL candidate must be a SEQUENCE");
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_RESPONSE,
+            "CRL candidate must be a SEQUENCE"
+        );
     }
 
     const children = asn1.valueBlock.value;
@@ -303,6 +330,11 @@ export async function completeLTVData(
     ltvData: LTVData,
     settings?: LTVSettings
 ): Promise<CompletedLTVData> {
+    // One budget per completion, carrying the single check-time capture.
+    // Invalid limits or checkDate fail fast here, never as a diagnostic.
+    const budget = new OperationBudget(settings?.budget ?? {}, {
+        checkTime: settings?.checkDate,
+    });
     const enrichedData: LTVData = {
         certificates: [...ltvData.certificates],
         crls: [...ltvData.crls],
@@ -324,6 +356,10 @@ export async function completeLTVData(
             const asn1 = asn1js.fromBER(toArrayBuffer(certBytes));
             if (asn1.offset !== -1) {
                 const parsed = new pkijs.Certificate({ schema: asn1.result });
+                if (!budget.admitCertificate()) {
+                    errors.push(budget.certificateRefusal());
+                    continue;
+                }
                 certs.push(parsed);
                 certIds.set(parsed, bytesToHex(certBytes));
             }
@@ -332,12 +368,12 @@ export async function completeLTVData(
         // We need at least 2 certs to have an issuer-subject pair (unless self-signed, which don't have OCSP)
         if (certs.length < 2) {
             // Attempt to build chain via AIA if we only have the leaf
-            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds);
+            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds, budget);
         } else {
             // Even if we have > 1, we might be missing the root or an intermediate
             // A smarter approach: check if the chain is complete.
             // For now, let's run the AIA builder anyway, it checks for missing issuers.
-            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds);
+            await buildChainViaAIA(certs, enrichedData, errors, settings, certIds, budget);
         }
 
         // Pre-index certificates by subject to speed up issuer lookups
@@ -348,6 +384,9 @@ export async function completeLTVData(
             list.push(cert);
             certsBySubject.set(subject, list);
         }
+
+        const ocspFetcher = settings?.fetchers?.ocspFetcher;
+        const crlFetcher = settings?.fetchers?.crlFetcher;
 
         // Iterate over certs to find their issuers and fetch OCSP
         // We skip the root (last one usually, or self-signed) effectively because we won't find an issuer for it
@@ -377,9 +416,16 @@ export async function completeLTVData(
                     const request = await createOCSPRequest(cert, issuer);
 
                     // Fetch Response
-                    const response = settings?.fetchers?.ocspFetcher
-                        ? await settings.fetchers.ocspFetcher(ocspUrl, request)
-                        : await fetchOCSPResponse(ocspUrl, request);
+                    const response = ocspFetcher
+                        ? await budget.countCustomFetch(
+                              "OCSP",
+                              DEFAULT_OCSP_CONFIG.maxResponseBytes,
+                              ({ signal }) => ocspFetcher(ocspUrl, request, { signal })
+                          )
+                        : await fetchOCSPResponse(ocspUrl, request, {
+                              signal: budget.signal,
+                              budget,
+                          });
 
                     // Only a complete, successful Basic OCSP response with a
                     // structurally good certificate status is a candidate.
@@ -417,9 +463,13 @@ export async function completeLTVData(
                 const crlUrls = getCRLDistributionPoints(cert);
                 for (const url of crlUrls) {
                     try {
-                        const crlBytes = settings?.fetchers?.crlFetcher
-                            ? await settings.fetchers.crlFetcher(url)
-                            : await fetchCRL(url);
+                        const crlBytes = crlFetcher
+                            ? await budget.countCustomFetch(
+                                  "CRL",
+                                  DEFAULT_CRL_CONFIG.maxResponseBytes,
+                                  ({ signal }) => crlFetcher(url, { signal })
+                              )
+                            : await fetchCRL(url, { signal: budget.signal, budget });
 
                         parseCompleteCrlCandidate(crlBytes);
 
@@ -435,15 +485,22 @@ export async function completeLTVData(
                         errors.push(
                             `Fetched CRL candidate failed structural parsing or retrieval from ${url}: ${e instanceof Error ? e.message : String(e)}`
                         );
+                        // A spent budget refuses every remaining URL identically.
+                        if (budget.exhausted) break;
                     }
                 }
             }
+            // Once aborted, every remaining dispatch refuses
+            // identically; the refusal already pushed is terminal.
+            if (budget.signal.aborted) break;
         }
     } catch (e) {
         // Unexpected error in completeLTVData - log and return partial results
         errors.push(
             `Unexpected error completing LTV data: ${e instanceof Error ? e.message : String(e)}`
         );
+    } finally {
+        budget.dispose();
     }
 
     return { data: enrichedData, errors };
@@ -500,9 +557,11 @@ async function buildChainViaAIA(
     enrichedData: LTVData,
     errors: string[],
     settings: LTVSettings | undefined,
-    certIds: Map<pkijs.Certificate, string>
+    certIds: Map<pkijs.Certificate, string>,
+    budget: OperationBudget
 ): Promise<void> {
     const logger = getLogger();
+    const certFetcher = settings?.fetchers?.certFetcher;
     let madeProgress = true;
     let depth = 0;
     const MAX_DEPTH = 5;
@@ -544,16 +603,32 @@ async function buildChainViaAIA(
             if (caIssuersUrls.length === 0) {
                 continue;
             }
+            if (!budget.canAdmitCertificate()) {
+                errors.push(budget.certificateRefusal());
+                continue;
+            }
 
             // Try to fetch
+            const certKey = certIds.get(cert) ?? "";
             for (const url of caIssuersUrls) {
+                // Repeats of an attempted URL are free; new URLs consume
+                // the per-certificate allowance, then stop with a diagnostic.
+                if (budget.seenUrl(certKey, url)) continue;
+                if (!budget.claimUrl(certKey, url)) {
+                    errors.push(budget.urlRefusal());
+                    break;
+                }
                 try {
                     logger.debug(
                         `Fetching missing issuer for ${cert.serialNumber.valueBlock.toString()} from ${url}`
                     );
-                    const certBytes = settings?.fetchers?.certFetcher
-                        ? await settings.fetchers.certFetcher(url)
-                        : await fetchCertificate(url);
+                    const certBytes = certFetcher
+                        ? await budget.countCustomFetch(
+                              "certificate",
+                              DEFAULT_CERT_CONFIG.maxResponseBytes,
+                              ({ signal }) => certFetcher(url, { signal })
+                          )
+                        : await fetchCertificate(url, { signal: budget.signal, budget });
 
                     const fetchedId = bytesToHex(certBytes);
                     if (seenCerts.has(fetchedId)) {
@@ -583,6 +658,9 @@ async function buildChainViaAIA(
                     logger.info(
                         `Found new intermediate certificate: ${newCert.subject.toString()}`
                     );
+                    // Admission was peeked before the URL loop and nothing
+                    // between consumes certificates, so this cannot refuse.
+                    budget.admitCertificate();
                     certs.push(newCert);
                     certIds.set(newCert, fetchedId);
                     subjectMap.set(newCert.subject.toString(), newCert);
@@ -594,6 +672,9 @@ async function buildChainViaAIA(
                     const msg = `Failed to fetch CA Issuer from ${url}: ${e instanceof Error ? e.message : String(e)}`;
                     logger.warn(msg);
                     errors.push(msg);
+                    // Once aborted, every remaining dispatch refuses
+                    // identically; the refusal already pushed is terminal.
+                    if (budget.signal.aborted) break;
                     // try next URL
                 }
             }
