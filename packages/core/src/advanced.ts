@@ -13,6 +13,7 @@ export {
     type RevocationStatus,
     type ValidationResult,
     type RevocationDataFetcher,
+    type RevocationFetchContext,
     type ValidationCache,
     type ValidationSessionOptions,
     DefaultFetcher,

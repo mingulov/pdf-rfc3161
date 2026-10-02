@@ -1,5 +1,5 @@
 import { CircuitBreakerMap, CircuitState } from "../utils/circuit-breaker.js";
-import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
+import { fetchBytesWithRetry, type FetchWithRetryOptions } from "../utils/fetch-with-retry.js";
 import { DEFAULT_CERT_CONFIG } from "../constants.js";
 
 /**
@@ -14,15 +14,21 @@ const certCircuitBreakers = new CircuitBreakerMap({
  * Fetches a Certificate from a URL (AIA).
  *
  * @param url - The Certificate URL (usually .cer or .crt, DER or PEM)
+ * @param options - Optional caller signal and aggregate budget
  * @returns The certificate bytes
  */
-export async function fetchCertificate(url: string): Promise<Uint8Array> {
+export async function fetchCertificate(
+    url: string,
+    options?: Pick<FetchWithRetryOptions, "signal" | "budget">
+): Promise<Uint8Array> {
     return fetchBytesWithRetry({
         url,
         method: "GET",
         config: DEFAULT_CERT_CONFIG,
         circuitBreakers: certCircuitBreakers,
         serviceLabel: "Cert server",
+        signal: options?.signal,
+        budget: options?.budget,
     });
 }
 

@@ -1,11 +1,20 @@
 /* eslint-disable @typescript-eslint/no-deprecated -- compatibility coverage */
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { ValidationSession } from "../../../core/src/pki/validation-session.js";
 import * as validationSessionModule from "../../../core/src/pki/validation-session.js";
+import { DefaultFetcher } from "../../../core/src/pki/fetchers/default-fetcher.js";
 import { MockFetcher } from "../../../core/src/pki/fetchers/mock-fetcher.js";
-import type { RevocationDataFetcher } from "../../../core/src/pki/validation-types.js";
+import { InMemoryValidationCache } from "../../../core/src/pki/fetchers/memory-cache.js";
+import { resetOCSPCircuits } from "../../../core/src/pki/ocsp-client.js";
+import { resetCRLCircuits } from "../../../core/src/pki/crl-client.js";
+import type { OperationBudgetLimits } from "../../../core/src/utils/operation-budget.js";
+import type {
+    RevocationDataFetcher,
+    RevocationFetchContext,
+    ValidationSessionOptions,
+} from "../../../core/src/pki/validation-types.js";
 import { createOcspResponseCandidate, createCrlFixture } from "../fixtures/revocation-material.js";
 import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
 
@@ -17,6 +26,10 @@ import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js"
 const OCSP_URL = "http://ocsp.example.com/";
 const CRL_URL = "http://crl.example.com/ca.crl";
 const LEAF_SERIAL = 4242;
+
+// Real setTimeout, captured before any fake timers: yields genuine
+// event-loop turns while the fake clock stays frozen.
+const realSetTimeout: typeof setTimeout = globalThis.setTimeout;
 
 function roundTripCertificate(cert: pkijs.Certificate): pkijs.Certificate {
     const der = new Uint8Array(cert.toSchema(true).toBER(false));
@@ -411,5 +424,529 @@ describe("crlContainsSerial structural scan (T04)", () => {
         expect(validationSessionModule.crlContainsSerial(new Uint8Array([0xff, 0xff]), leaf)).toBe(
             false
         );
+    });
+});
+
+describe("ValidationSession operation budget (T08)", () => {
+    let issuer: pkijs.Certificate;
+    let issuerKeys: { publicKey: CryptoKey; privateKey: CryptoKey };
+
+    function signedByIssuer(): { issuer: pkijs.Certificate; privateKey: CryptoKey } {
+        return { issuer, privateKey: issuerKeys.privateKey };
+    }
+
+    beforeAll(async () => {
+        issuerKeys = await generateRSAKeyPair();
+        issuer = await createIssuerCertificate(issuerKeys.publicKey);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    function makeBudget(limits: OperationBudgetLimits): OperationBudgetLimits {
+        return { ...limits };
+    }
+
+    function withBudget(
+        options: ValidationSessionOptions,
+        limits: OperationBudgetLimits
+    ): ValidationSessionOptions {
+        return { ...options, budget: makeBudget(limits) } as ValidationSessionOptions;
+    }
+
+    async function runToSettled<T>(pending: Promise<T>, isDispatched: () => boolean): Promise<T> {
+        const state = { settled: false };
+        const watched = pending.then(
+            (value: T) => {
+                state.settled = true;
+                return value;
+            },
+            (error: unknown) => {
+                state.settled = true;
+                throw error;
+            }
+        );
+        // Real loop turns until dispatch: crypto setup completes while the
+        // fake clock stays frozen, so short elapsed budgets cannot fire.
+        for (let step = 0; step < 500 && !state.settled && !isDispatched(); step++) {
+            await new Promise((resolve) => realSetTimeout(resolve, 0));
+        }
+        expect(isDispatched()).toBe(true);
+        for (let step = 0; step < 300 && !state.settled; step++) {
+            await vi.advanceTimersByTimeAsync(1000);
+        }
+        expect(state.settled).toBe(true);
+        return watched;
+    }
+
+    it("cancels cooperative custom fetchers once the elapsed budget expires", async () => {
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        let captured: AbortSignal | undefined;
+        const fetcher: RevocationDataFetcher = {
+            fetchOCSP: async (
+                _url: string,
+                _request: Uint8Array,
+                context?: RevocationFetchContext
+            ): Promise<Uint8Array> => {
+                captured = context?.signal;
+                if (context?.signal === undefined) {
+                    return createOcspResponseCandidate("good");
+                }
+                return new Promise<Uint8Array>((_resolve, reject) => {
+                    context.signal?.addEventListener("abort", () => {
+                        reject(new Error("custom OCSP cancelled"));
+                    });
+                });
+            },
+            fetchCRL: () => Promise.reject(new Error("no CRL response")),
+        };
+        const session = new ValidationSession(withBudget({ fetcher }, { maxElapsedMs: 4000 }));
+        session.queueCertificate(leaf, { issuer });
+        vi.useFakeTimers();
+
+        const [result] = await runToSettled(session.validateAll(), () => captured !== undefined);
+
+        expect(result?.revocationStatus).toBe("unknown");
+        expect(captured?.aborted).toBe(true);
+        expect((result?.errors ?? []).join("\n")).toMatch(/custom OCSP cancelled/);
+    });
+
+    it("discards late custom-fetcher returns instead of using them", async () => {
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        const cache = new InMemoryValidationCache();
+        let requestBytes: Uint8Array | undefined;
+        let fetchCalled = false;
+        const fetcher: RevocationDataFetcher = {
+            fetchOCSP: async (_url: string, request: Uint8Array): Promise<Uint8Array> => {
+                requestBytes = request;
+                fetchCalled = true;
+                // Legacy behavior: ignores the abort context entirely, and
+                // resolves long after the elapsed budget expires.
+                await new Promise((resolve) => setTimeout(resolve, 50000));
+                return createOcspResponseCandidate("good");
+            },
+            fetchCRL: () => Promise.reject(new Error("no CRL response")),
+        };
+        const session = new ValidationSession(
+            withBudget({ fetcher, cache }, { maxElapsedMs: 4000 })
+        );
+        session.queueCertificate(leaf, { issuer });
+        vi.useFakeTimers();
+
+        const [result] = await runToSettled(session.validateAll(), () => fetchCalled);
+
+        expect(result?.sources).toEqual([]);
+        expect(requestBytes ? cache.getOCSP(OCSP_URL, requestBytes) : null).toBeNull();
+        expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+    });
+
+    it("rejects over-cap custom-fetcher bytes", async () => {
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        const fetcher: RevocationDataFetcher = {
+            fetchOCSP: async (): Promise<Uint8Array> => new Uint8Array(60 * 1024).fill(0xcd),
+            fetchCRL: () => Promise.reject(new Error("no CRL response")),
+        };
+        const session = new ValidationSession(withBudget({ fetcher }, {}));
+        session.queueCertificate(leaf, { issuer });
+
+        const [result] = await session.validateAll();
+
+        expect(result?.revocationStatus).toBe("unknown");
+        expect(result?.sources).toEqual([]);
+        expect((result?.errors ?? []).join("\n")).toMatch(/exceed/);
+    });
+
+    it("refuses cache-refetch once the attempt budget is spent", async () => {
+        const cache = new InMemoryValidationCache();
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        const poison = new Uint8Array([0xff, 0xff]);
+        // First session (unbudgeted) plants the poisoned cache entry. The
+        // nonce is off so both sessions build byte-identical requests.
+        const planter = new ValidationSession({
+            fetcher: {
+                fetchOCSP: async (): Promise<Uint8Array> => poison,
+                fetchCRL: () => Promise.reject(new Error("no CRL response")),
+            },
+            cache,
+            includeOCSPNonce: false,
+        });
+        planter.queueCertificate(leaf, { issuer });
+        await planter.validateAll();
+
+        let calls = 0;
+        const session = new ValidationSession(
+            withBudget(
+                {
+                    fetcher: {
+                        fetchOCSP: async (): Promise<Uint8Array> => {
+                            calls++;
+                            return poison;
+                        },
+                        fetchCRL: () => Promise.reject(new Error("no CRL response")),
+                    },
+                    cache,
+                    includeOCSPNonce: false,
+                },
+                { maxAttempts: 0 }
+            )
+        );
+        session.queueCertificate(leaf, { issuer });
+
+        const [result] = await session.validateAll();
+
+        expect(calls).toBe(0);
+        expect(result?.revocationStatus).toBe("unknown");
+        expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+    });
+
+    it("hands custom fetchers a signal-only context with no budget handle (R19)", async () => {
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        let captured: RevocationFetchContext | undefined;
+        const fetcher: RevocationDataFetcher = {
+            fetchOCSP: async (
+                _url: string,
+                _request: Uint8Array,
+                context?: RevocationFetchContext
+            ): Promise<Uint8Array> => {
+                captured = context;
+                return createOcspResponseCandidate("good");
+            },
+            fetchCRL: () => Promise.reject(new Error("no CRL response")),
+        };
+        const session = new ValidationSession(withBudget({ fetcher }, {}));
+        session.queueCertificate(leaf, { issuer });
+
+        await session.validateAll();
+
+        expect(captured?.signal).toBeInstanceOf(AbortSignal);
+        // R19: the public fetcher context is signal-only. The live
+        // budget must never be observable from caller fetchers, not
+        // even as an own property on the handed object.
+        expect(captured === undefined ? [] : Object.keys(captured)).toEqual(["signal"]);
+        expect(captured !== undefined && "budget" in captured).toBe(false);
+    });
+
+    it("hands DefaultFetcher subclasses a signal-only context too (R19/M1)", async () => {
+        const leaf = await createLeafCertificate({ ocspUrl: OCSP_URL, signedBy: signedByIssuer() });
+        let captured: RevocationFetchContext | undefined;
+        class CaptureFetcher extends DefaultFetcher {
+            async fetchOCSP(
+                _url: string,
+                _request: Uint8Array,
+                context?: RevocationFetchContext
+            ): Promise<Uint8Array> {
+                captured = context;
+                return createOcspResponseCandidate("good");
+            }
+        }
+        const session = new ValidationSession(withBudget({ fetcher: new CaptureFetcher() }, {}));
+        session.queueCertificate(leaf, { issuer });
+
+        await session.validateAll();
+
+        // A subclass override is caller code: it must observe the same
+        // signal-only context as any other custom fetcher.
+        expect(captured?.signal).toBeInstanceOf(AbortSignal);
+        expect(captured === undefined ? [] : Object.keys(captured)).toEqual(["signal"]);
+        expect(captured !== undefined && "budget" in captured).toBe(false);
+    });
+
+    it("yields unknown with diagnostics for certificates past the cap", async () => {
+        const leaves = await Promise.all(
+            [5001, 5002, 5003].map((serial) =>
+                createLeafCertificate({ serial, ocspUrl: OCSP_URL, signedBy: signedByIssuer() })
+            )
+        );
+        let calls = 0;
+        const fetcher: RevocationDataFetcher = {
+            fetchOCSP: async (): Promise<Uint8Array> => {
+                calls++;
+                return new Uint8Array([0xff, 0xff]);
+            },
+            fetchCRL: () => Promise.reject(new Error("no CRL response")),
+        };
+        const session = new ValidationSession(withBudget({ fetcher }, { maxCertificates: 1 }));
+        for (const leaf of leaves) {
+            session.queueCertificate(leaf, { issuer });
+        }
+
+        const results = await session.validateAll();
+
+        // One result per queued certificate, even past the cap.
+        expect(results).toHaveLength(3);
+        expect(calls).toBe(1);
+        expect(results[1]?.revocationStatus).toBe("unknown");
+        expect((results[1]?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+    });
+
+    describe("built-in fetcher budget accounting (fix round 3)", () => {
+        const mockFetch = vi.fn();
+        let originalFetch: typeof globalThis.fetch;
+
+        beforeEach(() => {
+            originalFetch = globalThis.fetch;
+            globalThis.fetch = mockFetch;
+            vi.clearAllMocks();
+            mockFetch.mockReset();
+            resetOCSPCircuits();
+            resetCRLCircuits();
+        });
+
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+        });
+
+        function failTwiceThenSucceed(body: Uint8Array): void {
+            let calls = 0;
+            mockFetch.mockImplementation(async () => {
+                calls++;
+                if (calls <= 2) return new Response("error-body", { status: 500 });
+                return new Response(body as BodyInit, { status: 200 });
+            });
+        }
+
+        function subclassFetcher(counter: { calls: number }): RevocationDataFetcher {
+            class SubclassFetcher extends DefaultFetcher {
+                async fetchOCSP(): Promise<Uint8Array> {
+                    counter.calls++;
+                    return createOcspResponseCandidate("good");
+                }
+            }
+            return new SubclassFetcher();
+        }
+
+        it("counts every physical OCSP attempt of the built-in fetcher, retries included", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            failTwiceThenSucceed(createOcspResponseCandidate("good"));
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher() }, { maxAttempts: 1 })
+            );
+            session.queueCertificate(leaf, { issuer });
+
+            const [result] = await session.validateAll();
+
+            // One physical attempt spends the budget; the retries are
+            // refused, never issued. (Red run: one counted attempt covers
+            // all three physical fetches, so the call succeeds.)
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect(result?.revocationStatus).toBe("unknown");
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("admits built-in OCSP retries that fit the attempt budget", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            failTwiceThenSucceed(createOcspResponseCandidate("good"));
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher() }, { maxAttempts: 3 })
+            );
+            session.queueCertificate(leaf, { issuer });
+            vi.useFakeTimers();
+
+            const [result] = await runToSettled(
+                session.validateAll(),
+                () => mockFetch.mock.calls.length > 0
+            );
+
+            // Control: exactly three physical attempts are claimed, so a
+            // budget of three admits the fail-twice-then-succeed exchange.
+            // (Green before and after; proves the responder setup works.)
+            expect(mockFetch).toHaveBeenCalledTimes(3);
+            expect(result?.sources).toEqual(["OCSP"]);
+            expect(result?.revocationStatus).toBe("unknown");
+        });
+
+        it("counts built-in failed-attempt bytes even when the body is rejected", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                crlUrl: CRL_URL,
+                signedBy: signedByIssuer(),
+            });
+            mockFetch.mockImplementation(async (url: string) => {
+                if (url === OCSP_URL) {
+                    return new Response(new Uint8Array(60 * 1024).fill(0xcd) as BodyInit, {
+                        status: 200,
+                    });
+                }
+                return new Response(new Uint8Array([0x30, 0x00]) as BodyInit, { status: 200 });
+            });
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher() }, { maxBytes: 150 })
+            );
+            session.queueCertificate(leaf, { issuer });
+
+            const [result] = await session.validateAll();
+
+            const crlCalls = mockFetch.mock.calls.filter((call) => (call[0] as string) === CRL_URL);
+            // The 60 KiB rejected OCSP body tips the byte budget, so the CRL
+            // fallback is refused without issuing a fetch. (Red run: the
+            // rejected body counts nothing, so the CRL fetch goes out.)
+            expect(crlCalls).toHaveLength(0);
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("counts physical attempts for explicit-timeout built-in fetchers", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            failTwiceThenSucceed(createOcspResponseCandidate("good"));
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher({ timeout: 5000 }) }, { maxAttempts: 1 })
+            );
+            session.queueCertificate(leaf, { issuer });
+
+            const [result] = await session.validateAll();
+
+            // Same per-physical-attempt accounting through the
+            // explicit-policy direct-shell branch. (Red run: succeeds; the
+            // in-shell retries are free.)
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("admits explicit-timeout built-in retries that fit the attempt budget", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            failTwiceThenSucceed(createOcspResponseCandidate("good"));
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher({ timeout: 5000 }) }, { maxAttempts: 3 })
+            );
+            session.queueCertificate(leaf, { issuer });
+            vi.useFakeTimers();
+
+            const [result] = await runToSettled(
+                session.validateAll(),
+                () => mockFetch.mock.calls.length > 0
+            );
+
+            // Control for the explicit branch: three physical attempts fit
+            // a budget of three. (Green before and after.)
+            expect(mockFetch).toHaveBeenCalledTimes(3);
+            expect(result?.sources).toEqual(["OCSP"]);
+            expect(result?.revocationStatus).toBe("unknown");
+        });
+
+        it("routes DefaultFetcher subclasses through the custom path: override invoked, one attempt", async () => {
+            const leaves = await Promise.all(
+                [5001, 5002].map((serial) =>
+                    createLeafCertificate({ serial, ocspUrl: OCSP_URL, signedBy: signedByIssuer() })
+                )
+            );
+            const counter = { calls: 0 };
+            const session = new ValidationSession(
+                withBudget({ fetcher: subclassFetcher(counter) }, { maxAttempts: 1 })
+            );
+            for (const leaf of leaves) {
+                session.queueCertificate(leaf, { issuer });
+            }
+
+            const results = await session.validateAll();
+
+            // The override is caller I/O: invoked (not bypassed by an
+            // internal built-in method) and counted as one custom attempt,
+            // so the second certificate is refused without a fetch.
+            expect(counter.calls).toBe(1);
+            expect(results[0]?.sources).toEqual(["OCSP"]);
+            expect((results[1]?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("counts DefaultFetcher-subclass return bytes as custom-fetch bytes", async () => {
+            const leaves = await Promise.all(
+                [5001, 5002].map((serial) =>
+                    createLeafCertificate({ serial, ocspUrl: OCSP_URL, signedBy: signedByIssuer() })
+                )
+            );
+            const counter = { calls: 0 };
+            const session = new ValidationSession(
+                withBudget({ fetcher: subclassFetcher(counter) }, { maxBytes: 10 })
+            );
+            for (const leaf of leaves) {
+                session.queueCertificate(leaf, { issuer });
+            }
+
+            const results = await session.validateAll();
+
+            // The canned OCSP return (far over 10 bytes) tips the byte
+            // budget, so the second certificate is refused without a fetch.
+            expect(counter.calls).toBe(1);
+            expect(results[0]?.sources).toEqual(["OCSP"]);
+            expect((results[1]?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("routes non-overriding DefaultFetcher subclasses through the budgeted path (fix round 4, F3)", async () => {
+            // F3 mechanism pin: a cross-format genuine instance (CJS
+            // fetcher + ESM session) shares no constructor identity, so
+            // dispatch is capability + same-realm override self-check, not
+            // exact-constructor. A subclass overriding nothing is genuine
+            // built-in I/O with per-physical-attempt accounting.
+            class PlainSubclass extends DefaultFetcher {}
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            failTwiceThenSucceed(createOcspResponseCandidate("good"));
+            const session = new ValidationSession(
+                withBudget({ fetcher: new PlainSubclass() }, { maxAttempts: 1 })
+            );
+            session.queueCertificate(leaf, { issuer });
+
+            const [result] = await session.validateAll();
+
+            // Every physical attempt is claimed, so the retries are
+            // refused, never issued. (Red run: 3 fetches via the custom
+            // path with free in-shell retries.)
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect(result?.revocationStatus).toBe("unknown");
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
+
+        it("aborts in-flight built-in session I/O once the elapsed budget expires", async () => {
+            const leaf = await createLeafCertificate({
+                ocspUrl: OCSP_URL,
+                signedBy: signedByIssuer(),
+            });
+            mockFetch.mockImplementation(
+                (_url: string, init?: { signal?: AbortSignal }) =>
+                    new Promise<never>((_resolve, reject) => {
+                        const signal = init?.signal;
+                        if (signal?.aborted === true) {
+                            reject(new Error("Aborted"));
+                            return;
+                        }
+                        signal?.addEventListener("abort", () => {
+                            const error = new Error("Aborted");
+                            error.name = "AbortError";
+                            reject(error);
+                        });
+                    })
+            );
+            const session = new ValidationSession(
+                withBudget({ fetcher: new DefaultFetcher() }, { maxElapsedMs: 4000 })
+            );
+            session.queueCertificate(leaf, { issuer });
+            vi.useFakeTimers();
+
+            const [result] = await runToSettled(
+                session.validateAll(),
+                () => mockFetch.mock.calls.length > 0
+            );
+
+            // The budget signal stays wired into built-in I/O as real
+            // cancellation. (Green before and after; guards the signal half
+            // of the internal budgeted path.)
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            const firstInit = mockFetch.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+            expect(firstInit?.signal?.aborted).toBe(true);
+            expect((result?.errors ?? []).join("\n")).toMatch(/operation budget exhausted/);
+        });
     });
 });

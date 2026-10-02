@@ -190,29 +190,48 @@ export class CircuitBreakerError extends Error {
  *     fetcher implementation (`RevocationDataFetcher`).
  *   - Lower `resetTimeoutMs` so OPEN -> HALF_OPEN transition is fast.
  */
+/**
+ * Default cap on entries per breaker map. Distinct hostile URLs must not
+ * grow a persistent map without bound; eviction is oldest-first and does
+ * not replace the per-completion operation budget.
+ */
+export const DEFAULT_CIRCUIT_BREAKER_MAX_ENTRIES = 256;
+
 export class CircuitBreakerMap {
     private readonly breakers = new Map<string, CircuitBreaker>();
     private readonly defaultConfig: CircuitBreakerConfig;
+    private readonly maxEntries: number;
 
-    constructor(defaultConfig: CircuitBreakerConfig = {}) {
+    constructor(
+        defaultConfig: CircuitBreakerConfig = {},
+        maxEntries: number = DEFAULT_CIRCUIT_BREAKER_MAX_ENTRIES
+    ) {
+        if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+            throw new Error(`Invalid maxEntries ${String(maxEntries)}: integer >= 1`);
+        }
         this.defaultConfig = defaultConfig;
+        this.maxEntries = maxEntries;
     }
 
     /**
-     * Get or create a circuit breaker for a specific URL
+     * Get or create a circuit breaker for a specific URL. Access refreshes
+     * recency; creating past the cap evicts the least-recently-used entry.
      */
     getBreaker(url: string): CircuitBreaker {
-        if (!this.breakers.has(url)) {
-            this.breakers.set(url, new CircuitBreaker(this.defaultConfig));
+        const existing = this.breakers.get(url);
+        if (existing !== undefined) {
+            // Refresh recency so eviction below stays least-recently-used.
+            this.breakers.delete(url);
+            this.breakers.set(url, existing);
+            return existing;
         }
-        const breaker = this.breakers.get(url);
-        if (!breaker) {
-            // Internal invariant: we just .set() above, so .get() must return.
-            // Plain Error (not TimestampError) because this is an impossible
-            // bug, not a user-facing condition.
-            throw new Error(`Circuit breaker not found for ${url}`);
+        if (this.breakers.size >= this.maxEntries) {
+            const oldest = this.breakers.keys().next();
+            if (!oldest.done) this.breakers.delete(oldest.value);
         }
-        return breaker;
+        const created = new CircuitBreaker(this.defaultConfig);
+        this.breakers.set(url, created);
+        return created;
     }
 
     /**

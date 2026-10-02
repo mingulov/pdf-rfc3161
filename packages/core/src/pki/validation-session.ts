@@ -20,6 +20,23 @@ import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
 import { getLogger } from "../utils/logger.js";
+import { DEFAULT_CRL_CONFIG, DEFAULT_OCSP_CONFIG } from "../constants.js";
+import {
+    OperationBudget,
+    assertValidOperationBudgetLimits,
+    type OperationBudgetLimits,
+} from "../utils/operation-budget.js";
+
+/**
+ * Structural view of DefaultFetcher's @internal budgeted entries for the
+ * session's capability probe. The probe is typeof-only: the supported
+ * ESM/CJS mixing means a genuine instance may come from the other realm's
+ * constructor, and subclass-override detection happens inside the entry
+ * itself via a same-realm prototype comparison.
+ */
+type InternalBudgetedFetcher = Partial<
+    Pick<DefaultFetcher, "fetchOCSPWithBudget" | "fetchCRLWithBudget">
+>;
 
 /**
  * Default accepted OCSP clock skew: 5 minutes in both directions.
@@ -187,6 +204,7 @@ export class ValidationSession {
         clockSkewMs: number;
         maxAgeWithoutNextUpdateMs: number;
         includeOCSPNonce: boolean;
+        budget: OperationBudgetLimits | undefined;
     };
     private state: "initialized" | "validating" | "completed" = "initialized";
 
@@ -219,6 +237,9 @@ export class ValidationSession {
                 "ValidationSession maxAgeWithoutNextUpdateMs must be finite and non-negative"
             );
         }
+        if (options.budget !== undefined) {
+            assertValidOperationBudgetLimits(options.budget);
+        }
         this.options = {
             fetcher: options.fetcher ?? new DefaultFetcher(),
             cache: options.cache ?? new InMemoryValidationCache(),
@@ -229,6 +250,7 @@ export class ValidationSession {
             maxAgeWithoutNextUpdateMs:
                 options.maxAgeWithoutNextUpdateMs ?? DEFAULT_OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS,
             includeOCSPNonce: options.includeOCSPNonce ?? true,
+            budget: options.budget === undefined ? undefined : { ...options.budget },
         };
     }
 
@@ -309,11 +331,31 @@ export class ValidationSession {
 
         this.state = "validating";
         this.results = [];
-        const checkDate = this.options.checkDate ?? new Date();
-
-        for (const certReq of this.certificates) {
-            const result = await this.validateCertificate(certReq, checkDate);
-            this.results.push(result);
+        // One budget per run, carrying the single check-time capture: every
+        // fetch, retry, and cache refetch below consumes from it, and every
+        // evaluation reads the same checkDate from it.
+        const budget = new OperationBudget(this.options.budget ?? {}, {
+            checkTime: this.options.checkDate ?? new Date(),
+        });
+        try {
+            for (const certReq of this.certificates) {
+                if (!budget.admitCertificate()) {
+                    // Structural admission refusal, never a verdict: one
+                    // unknown result per queued certificate, in order.
+                    this.results.push({
+                        cert: certReq.cert,
+                        revocationStatus: "unknown",
+                        isValid: false,
+                        sources: [],
+                        errors: [budget.certificateRefusal()],
+                    });
+                    continue;
+                }
+                const result = await this.validateCertificate(certReq, budget);
+                this.results.push(result);
+            }
+        } finally {
+            budget.dispose();
         }
 
         this.state = "completed";
@@ -331,7 +373,7 @@ export class ValidationSession {
      */
     private async validateCertificate(
         req: CertificateToValidate,
-        checkDate: Date
+        budget: OperationBudget
     ): Promise<ValidationResult> {
         const result: ValidationResult = {
             cert: req.cert,
@@ -348,8 +390,8 @@ export class ValidationSession {
         for (const source of order) {
             const evaluated =
                 source === "OCSP"
-                    ? await this.evaluateOCSPEvidence(req, result, checkDate)
-                    : await this.evaluateCRLEvidence(req, result, checkDate);
+                    ? await this.evaluateOCSPEvidence(req, result, budget)
+                    : await this.evaluateCRLEvidence(req, result, budget);
             if (evaluated !== null) {
                 evidence.push(evaluated);
                 if (evaluated.status !== "unknown") {
@@ -390,7 +432,7 @@ export class ValidationSession {
     private async evaluateOCSPEvidence(
         req: CertificateToValidate,
         result: ValidationResult,
-        checkDate: Date
+        budget: OperationBudget
     ): Promise<RevocationEvidenceResult | null> {
         const ocspUrl = getOCSPURI(req.cert);
         if (!ocspUrl) {
@@ -409,7 +451,7 @@ export class ValidationSession {
             request = await createOCSPRequest(req.cert, issuerCert, {
                 includeNonce: this.options.includeOCSPNonce,
             });
-            response = await this.fetchOCSPWithCache(ocspUrl, request);
+            response = await this.fetchOCSPWithCache(ocspUrl, request, budget);
         } catch (e) {
             const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
             evidence.errors.push(message);
@@ -427,12 +469,22 @@ export class ValidationSession {
                 cert: req.cert,
                 issuer: issuerCert,
                 requestBytes: request,
-                checkDate,
+                checkDate: budget.checkTime,
                 clockSkewMs: this.options.clockSkewMs,
                 maxAgeWithoutNextUpdateMs: this.options.maxAgeWithoutNextUpdateMs,
             });
         } catch (e) {
             const message = `OCSP failed: ${e instanceof Error ? e.message : String(e)}`;
+            evidence.errors.push(message);
+            result.errors.push(message);
+            return evidence;
+        }
+        // An authenticated verdict completing past the elapsed deadline
+        // is discarded: the completion ran out of time, so the evidence
+        // cannot vouch for it. The clock (not the signal) is read so a
+        // starved timer cannot smuggle a stale verdict through.
+        if (budget.isElapsed()) {
+            const message = `OCSP failed: ${budget.exhaustionError().message}`;
             evidence.errors.push(message);
             result.errors.push(message);
             return evidence;
@@ -458,7 +510,7 @@ export class ValidationSession {
     private async evaluateCRLEvidence(
         req: CertificateToValidate,
         result: ValidationResult,
-        checkDate: Date
+        budget: OperationBudget
     ): Promise<RevocationEvidenceResult | null> {
         const crlUrls = getCRLDistributionPoints(req.cert);
         if (crlUrls.length === 0) {
@@ -479,11 +531,13 @@ export class ValidationSession {
         for (const url of crlUrls) {
             let crl: Uint8Array;
             try {
-                crl = await this.fetchCRLWithCache(url);
+                crl = await this.fetchCRLWithCache(url, budget);
             } catch (e) {
                 const message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
                 evidence.errors.push(message);
                 result.errors.push(message);
+                // A spent budget refuses every remaining URL identically.
+                if (budget.exhausted) break;
                 continue;
             }
             // M2: capture the CRL bytes for downstream exportLTVData
@@ -511,7 +565,7 @@ export class ValidationSession {
                 evaluated = await validateCRLEvidence(crl, {
                     cert: req.cert,
                     issuer: issuerCert,
-                    checkDate,
+                    checkDate: budget.checkTime,
                     clockSkewMs: this.options.clockSkewMs,
                 });
             } catch (e) {
@@ -519,6 +573,15 @@ export class ValidationSession {
                 evidence.errors.push(message);
                 result.errors.push(message);
                 continue;
+            }
+            // An authenticated verdict completing past the elapsed
+            // deadline is discarded (see the OCSP site): unknown with an
+            // exhaustion diagnostic, no further URLs.
+            if (budget.isElapsed()) {
+                const message = `CRL from ${url} failed: ${budget.exhaustionError().message}`;
+                evidence.errors.push(message);
+                result.errors.push(message);
+                return evidence;
             }
             if (evaluated.status === "unknown") {
                 for (const diagnostic of evaluated.errors) {
@@ -642,35 +705,80 @@ export class ValidationSession {
         }
     }
 
-    private async fetchOCSPWithCache(url: string, request: Uint8Array): Promise<Uint8Array> {
+    private async fetchOCSPWithCache(
+        url: string,
+        request: Uint8Array,
+        budget: OperationBudget
+    ): Promise<Uint8Array> {
         const cached = this.options.cache.getOCSP(url, request);
         if (cached) {
-            if (this.isUsableCachedOCSP(cached)) return cached;
-            // Rejected cached evidence is refetched once; the fresh bytes
-            // overwrite the poisoned entry below. T08 budgets this refetch.
+            // Elapsed exhaustion refuses even free cache hits: serving
+            // them would accept evidence past the completion deadline.
+            if (this.isUsableCachedOCSP(cached)) {
+                if (budget.isElapsed()) throw budget.exhaustionError();
+                return cached;
+            }
+            // Rejected cached evidence is refetched once under the normal
+            // operation budget; the fresh bytes overwrite the entry below.
             getLogger().debug(
                 "ValidationSession: rejecting unusable cached OCSP evidence; refetching once"
             );
         }
 
-        const response = await this.options.fetcher.fetchOCSP(url, request);
+        // A genuine built-in fetcher counts every physical attempt
+        // itself (retries included) through its internal budgeted entry,
+        // so it must not be claimed again here. Anything without that
+        // entry -- custom fetchers -- is caller-counted as one attempt
+        // per call with returned bytes counted (an approximation for
+        // opaque I/O). The probe is capability (typeof), never
+        // constructor identity: the supported ESM/CJS mixing gives
+        // genuine instances different constructors, and the internal
+        // entry self-checks for subclass overrides in its own realm
+        // (falling back to the custom path itself, overrides invoked).
+        // The closure hands the fetcher a fresh signal-only object, never
+        // the internal live-budget context (R19).
+        const fetcher = this.options.fetcher;
+        const internal = fetcher as unknown as InternalBudgetedFetcher;
+        const response =
+            typeof internal.fetchOCSPWithBudget === "function"
+                ? await internal.fetchOCSPWithBudget(url, request, budget)
+                : await budget.countCustomFetch(
+                      "OCSP",
+                      DEFAULT_OCSP_CONFIG.maxResponseBytes,
+                      ({ signal }) => fetcher.fetchOCSP(url, request, { signal })
+                  );
         this.options.cache.setOCSP(url, request, response);
 
         return response;
     }
 
-    private async fetchCRLWithCache(url: string): Promise<Uint8Array> {
+    private async fetchCRLWithCache(url: string, budget: OperationBudget): Promise<Uint8Array> {
         const cached = this.options.cache.getCRL(url);
         if (cached) {
-            if (this.isUsableCachedCRL(cached)) return cached;
-            // Rejected cached evidence is refetched once; the fresh bytes
-            // overwrite the poisoned entry below. T08 budgets this refetch.
+            // Elapsed exhaustion refuses even free cache hits (see the
+            // OCSP site).
+            if (this.isUsableCachedCRL(cached)) {
+                if (budget.isElapsed()) throw budget.exhaustionError();
+                return cached;
+            }
+            // Rejected cached evidence is refetched once under the normal
+            // operation budget; the fresh bytes overwrite the entry below.
             getLogger().debug(
                 "ValidationSession: rejecting unusable cached CRL evidence; refetching once"
             );
         }
 
-        const response = await this.options.fetcher.fetchCRL(url);
+        // Capability probe, mirroring fetchOCSPWithCache (see above).
+        const fetcher = this.options.fetcher;
+        const internal = fetcher as unknown as InternalBudgetedFetcher;
+        const response =
+            typeof internal.fetchCRLWithBudget === "function"
+                ? await internal.fetchCRLWithBudget(url, budget)
+                : await budget.countCustomFetch(
+                      "CRL",
+                      DEFAULT_CRL_CONFIG.maxResponseBytes,
+                      ({ signal }) => fetcher.fetchCRL(url, { signal })
+                  );
         this.options.cache.setCRL(url, response);
 
         return response;

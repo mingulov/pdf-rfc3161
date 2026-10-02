@@ -59,12 +59,21 @@ jobs:
       # mandated behavior is ~25-55 bytes (diagnostic string trimming
       # only). Per-breach ruling with independent reviewer verification;
       # T19 still owns bundle efficiency.
-      - name: Enforce ESM bundle size budget (<= 237 KiB)
+      # R18 (T08): 249 KiB. The T08 aggregate OperationBudget tracker and
+      # its LTV/session/fetch/breaker threading grew the main entry by
+      # +11602 bytes (242563 -> 254165); the budget must live on the
+      # main signing path, so unlike T06/T07 it cannot be tree-shaken
+      # into advanced-only. Bundle-diff verified the growth is the new
+      # module plus call-site threading (no duplicated modules, no
+      # accidental heavy imports); realistic compaction is ~2 KiB at
+      # most, an order of magnitude short. Per-breach ruling;
+      # T19 still owns bundle efficiency.
+      - name: Enforce ESM bundle size budget (<= 249 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=242688
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 237 KiB)"
+          MAX=254976
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 249 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 237 KiB (242688 bytes) budget"
+            echo "::error::ESM bundle exceeds 249 KiB (254976 bytes) budget"
             exit 1
           fi

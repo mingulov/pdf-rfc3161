@@ -236,6 +236,37 @@ describe("Circuit Breaker", () => {
             // We can't easily test this without exposing internal config
             expect(breaker).toBeDefined();
         });
+
+        it("should cap storage at 256 entries by default (T08/R13)", () => {
+            for (let index = 0; index < 300; index++) {
+                map.getBreaker(`https://t08-budget.example.com/${index.toString()}`);
+            }
+
+            expect(map.getUrls()).toHaveLength(256);
+        });
+
+        it("should evict least-recently-used entries under a small cap (T08/R13)", () => {
+            const small = new CircuitBreakerMap({}, 2);
+            small.getBreaker("url-a");
+            small.getBreaker("url-b");
+            small.getBreaker("url-a");
+            small.getBreaker("url-c");
+
+            expect(small.getUrls()).toHaveLength(2);
+            expect(small.getState("url-b")).toBeUndefined();
+            expect(small.getState("url-a")).toBeDefined();
+            expect(small.getState("url-c")).toBeDefined();
+        });
+
+        it("should keep service maps independent across reset (T08/S22)", () => {
+            const other = new CircuitBreakerMap({ failureThreshold: 1 });
+            map.getBreaker("shared-url").setState(CircuitState.OPEN);
+
+            expect(other.getState("shared-url")).toBeUndefined();
+            map.reset();
+            expect(map.getState("shared-url")).toBeUndefined();
+            expect(other.getUrls()).toHaveLength(0);
+        });
     });
 
     describe("CircuitBreakerError", () => {

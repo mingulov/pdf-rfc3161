@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DefaultFetcher } from "../../../core/src/pki/fetchers/default-fetcher.js";
 import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
+import { getOCSPCircuitState, resetOCSPCircuits } from "../../../core/src/pki/ocsp-client.js";
+import { getCRLCircuitState, resetCRLCircuits } from "../../../core/src/pki/crl-client.js";
+import { CircuitState } from "../../../core/src/utils/circuit-breaker.js";
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -62,6 +65,10 @@ describe("DefaultFetcher", () => {
         globalThis.fetch = mockFetch;
         vi.clearAllMocks();
         vi.useFakeTimers();
+        // Default fetchers share the OCSP/CRL singleton breaker maps (S22),
+        // so every case starts from a clean slate.
+        resetOCSPCircuits();
+        resetCRLCircuits();
         fetcher = new DefaultFetcher();
     });
 
@@ -476,6 +483,43 @@ describe("DefaultFetcher", () => {
             const result = await fetcher.fetchCRL("http://test.com");
 
             expect(result).toBeInstanceOf(Uint8Array);
+        });
+    });
+
+    describe("shared transport policy (T08/S22)", () => {
+        it("reuses the OCSP singleton breaker map with default options", async () => {
+            const url = "http://ocsp.t08-delegation.example.com/";
+            const request = new Uint8Array([0x01, 0x02, 0x03]);
+            mockFetch.mockRejectedValue(new Error("Network error"));
+
+            for (let call = 0; call < 3; call++) {
+                await expectRejected(fetcher.fetchOCSP(url, request));
+            }
+
+            expect(getOCSPCircuitState(url)).toBe(CircuitState.OPEN);
+            // The CRL service map is independent of the OCSP service map.
+            expect(getCRLCircuitState(url)).toBeUndefined();
+            const fetchesBeforeOpen = mockFetch.mock.calls.length;
+            const fourth = await expectRejected(fetcher.fetchOCSP(url, request));
+            expect((fourth as TimestampError).code).toBe(TimestampErrorCode.CIRCUIT_OPEN);
+            expect(mockFetch.mock.calls.length).toBe(fetchesBeforeOpen);
+        });
+
+        it("reuses the CRL singleton breaker map with default options", async () => {
+            const url = "http://crl.t08-delegation.example.com/ca.crl";
+            mockFetch.mockRejectedValue(new Error("Network error"));
+
+            for (let call = 0; call < 3; call++) {
+                await expectRejected(fetcher.fetchCRL(url));
+            }
+
+            expect(getCRLCircuitState(url)).toBe(CircuitState.OPEN);
+            // The OCSP service map is independent of the CRL service map.
+            expect(getOCSPCircuitState(url)).toBeUndefined();
+            const fetchesBeforeOpen = mockFetch.mock.calls.length;
+            const fourth = await expectRejected(fetcher.fetchCRL(url));
+            expect((fourth as TimestampError).code).toBe(TimestampErrorCode.CIRCUIT_OPEN);
+            expect(mockFetch.mock.calls.length).toBe(fetchesBeforeOpen);
         });
     });
 });

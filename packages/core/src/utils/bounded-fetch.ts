@@ -59,6 +59,13 @@ export interface BoundedReadOptions {
      * elapsed time without depending on timer mocking.
      */
     clock?: MonotonicClock;
+    /**
+     * Per-chunk progress hook: invoked with each received chunk's length
+     * as it arrives (the over-cap tipping chunk included), so partial
+     * progress stays observable even when the read later fails, times
+     * out, or aborts. The retry shell counts budget bytes through it.
+     */
+    onChunk?: (bytes: number) => void;
 }
 
 /** Rejects non-positive-safe-integer or over-ceiling caps before reading. */
@@ -123,10 +130,14 @@ export async function readResponseBounded(
             cancelStreamBestEffort(
                 (response as { body?: ReadableStream<Uint8Array> | null }).body ?? null
             );
+            // Zero bytes were read: the untrusted declared length is
+            // reported in the message but never charged as consumed
+            // bytes, so a lying peer cannot exhaust a caller's aggregate
+            // byte budget without sending anything.
             throw new ResponseTooLargeError(
                 `Content-Length ${declaredNum.toString()} exceeds cap ${maxBytes.toString()}`,
                 maxBytes,
-                declaredNum
+                0
             );
         }
     }
@@ -163,13 +174,20 @@ export async function readResponseBounded(
             signal?.throwIfAborted();
             throwIfDeadlineExceeded();
             const { done, value } = await reader.read();
+            // Fulfilled reads are charged before the re-checks: bytes the
+            // peer actually delivered consume budget even when the attempt
+            // already expired (late chunk), while cancellation/timeout
+            // still win as the returned error.
+            if (!done) {
+                total += value.byteLength;
+                options?.onChunk?.(value.byteLength);
+            }
             // Cancel resolves a pending read done:true; re-check first.
             signal?.throwIfAborted();
             throwIfDeadlineExceeded();
             if (done) {
                 break;
             }
-            total += value.byteLength;
             if (total > maxBytes) {
                 // Drop the tipping chunk and stop the source. Initiated,
                 // never awaited: a never-settling cancel() must not hang
