@@ -56,6 +56,12 @@ export function parseCRLInfo(crlBytes: Uint8Array): CRLInfo {
 
         // pkijs v3 holds CRL extensions in an Extensions object, not an
         // array; reading it as an array threw and masked every delta CRL.
+        //
+        // T04 F4 warning: the CRL numbers below come from `valueDec`, a
+        // lossy float extraction (wrong past 2^53, e.g. 9007199254740993
+        // reads back incorrectly). These numbers feed diagnostics only
+        // and must never reach a revocation decision; the strict CRL
+        // validator compares serials by exact byte identity instead.
         const extensions = crl.crlExtensions?.extensions;
         if (extensions) {
             for (const ext of extensions) {

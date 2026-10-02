@@ -6,10 +6,7 @@ import { ValidationSession } from "../../../core/src/pki/validation-session.js";
 import * as validationSessionModule from "../../../core/src/pki/validation-session.js";
 import { MockFetcher } from "../../../core/src/pki/fetchers/mock-fetcher.js";
 import type { RevocationDataFetcher } from "../../../core/src/pki/validation-types.js";
-import {
-    createOcspResponseCandidate,
-    createCrlFixture,
-} from "../fixtures/revocation-material.js";
+import { createOcspResponseCandidate, createCrlFixture } from "../fixtures/revocation-material.js";
 import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
 
 // T04: unauthenticated revocation verdicts are contained. Every case below
@@ -79,9 +76,7 @@ async function createLeafCertificate(options: {
         const cdp = new pkijs.CRLDistributionPoints({
             distributionPoints: [
                 new pkijs.DistributionPoint({
-                    distributionPoint: [
-                        new pkijs.GeneralName({ type: 6, value: options.crlUrl }),
-                    ],
+                    distributionPoint: [new pkijs.GeneralName({ type: 6, value: options.crlUrl })],
                 }),
             ],
         });
@@ -261,16 +256,21 @@ describe("ValidationSession revocation evidence containment (T04)", () => {
         const forged = createCrlFixture({ crlNumber: 7, revokedSerials: [LEAF_SERIAL] });
         const fetcher = new MockFetcher();
         fetcher.setCRLResponse(CRL_URL, forged);
-        const session = new ValidationSession({ fetcher });
+        // The fixture CRL is dated January 2024; check inside its window
+        // so the verdict exercises issuer binding, not staleness.
+        const session = new ValidationSession({
+            fetcher,
+            checkDate: new Date("2024-01-15T00:00:00Z"),
+        });
         session.queueCertificate(leaf, { issuer });
 
         const [result] = await session.validateAll();
         expect(result?.revocationStatus).toBe("unknown");
         expect(result?.isValid).toBe(false);
         expect(result?.sources).toEqual(["CRL"]);
-        // The repaired revokedCertificates read sees the structural entry,
-        // but the unauthenticated evidence still yields no verdict.
-        expect(result?.errors.join("\n")).toContain("structurally listed");
+        // T07: the structural entry is visible, but the forged CRL is not
+        // issued by the verified issuer, so it yields no verdict.
+        expect(result?.errors.join("\n")).toContain("CRL issuer does not match");
     });
 
     it("does not treat a delta CRL as a complete revocation source", async () => {
@@ -365,16 +365,37 @@ describe("crlContainsSerial structural scan (T04)", () => {
 
     it("tolerates DER leading-zero padding on high-bit serials", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
-        // Serial 128 has the high bit set, so its DER encoding is 02 02 00 80
-        // and the parsed CRL entry carries the 00 pad. The leaf side uses the
-        // unpadded byte form so the comparison must tolerate the asymmetry.
+        // Serial 128 has the high bit set, so its minimal DER encoding is
+        // 02 02 00 80 and the parsed CRL entry carries the 00 pad. The
+        // leaf side uses the same minimal form so the comparison matches
+        // on exact numeric identity.
         const leaf = await createLeafCertificate({ serial: 128 });
-        leaf.serialNumber = new asn1js.Integer({ valueHex: Uint8Array.of(0x80).buffer });
+        leaf.serialNumber = new asn1js.Integer({
+            valueHex: Uint8Array.of(0x00, 0x80).buffer,
+        });
         const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [128] });
         expect(validationSessionModule.crlContainsSerial(crl, leaf)).toBe(true);
         // No confusion with serial 0 after stripping the pad byte.
         const zeroLeaf = await createLeafCertificate({ serial: 0 });
         expect(validationSessionModule.crlContainsSerial(crl, zeroLeaf)).toBe(false);
+    });
+
+    it("never conflates serial -128 with serial 128 (T07 exact identity)", async () => {
+        expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
+        // The bare byte 0x80 is the minimal encoding of -128, not an
+        // unpadded 128: exact identity must not match it against the
+        // CRL entry for 128.
+        const negativeLeaf = await createLeafCertificate({ serial: 128 });
+        negativeLeaf.serialNumber = new asn1js.Integer({
+            valueHex: Uint8Array.of(0x80).buffer,
+        });
+        const crl = createCrlFixture({ crlNumber: 7, revokedSerials: [128] });
+        expect(validationSessionModule.crlContainsSerial(crl, negativeLeaf)).toBe(false);
+        // Empty and non-minimal serials never match either.
+        const emptyLeaf = await createLeafCertificate({ serial: 4242 });
+        emptyLeaf.serialNumber = new asn1js.Integer({ valueHex: new Uint8Array(0).buffer });
+        const listed = createCrlFixture({ crlNumber: 7, revokedSerials: [4242] });
+        expect(validationSessionModule.crlContainsSerial(listed, emptyLeaf)).toBe(false);
     });
 
     it("returns false when the serial is absent", async () => {
@@ -387,8 +408,8 @@ describe("crlContainsSerial structural scan (T04)", () => {
     it("returns false for malformed input", async () => {
         expect(typeof validationSessionModule.crlContainsSerial).toBe("function");
         const leaf = await createLeafCertificate({ serial: LEAF_SERIAL });
-        expect(
-            validationSessionModule.crlContainsSerial(new Uint8Array([0xff, 0xff]), leaf)
-        ).toBe(false);
+        expect(validationSessionModule.crlContainsSerial(new Uint8Array([0xff, 0xff]), leaf)).toBe(
+            false
+        );
     });
 });

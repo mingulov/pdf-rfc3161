@@ -127,14 +127,13 @@ yield "unknown" with `isValid` false. Previously most of these cases
 returned `isValid` true, so a forged GOOD response -- or no evidence at
 all -- read as valid.
 
-Until the authenticated OCSP/CRL evaluators land, structural evidence
-alone always yields "unknown", so advanced revocation checks temporarily
-report unknown for every certificate. Treat "unknown" as unknown: do not
-map it to valid, and do not gate signing on it. There is no
-compatibility switch to restore the old `true`, by design. The one-call
-signing path is unaffected: it never consumed these verdicts, and
-optional AIA/OCSP/CRL failures still yield a signed PDF with partial LTV
-material plus diagnostics.
+Both authenticated evaluators have landed since (OCSP, then CRL),
+so evidence that authenticates now yields "good" or "revoked".
+Otherwise treat "unknown" as unknown: do not map it to valid, and do
+not gate signing on it. There is no compatibility switch to restore
+the old `true`, by design. The one-call signing path is unaffected:
+it never consumed these verdicts, and optional AIA/OCSP/CRL failures
+still yield a signed PDF with partial LTV material plus diagnostics.
 
 Two related repairs ship with this change. `parseCRLInfo` (the
 `pdf-rfc3161/internals` entry) now detects delta CRLs via the
@@ -226,8 +225,8 @@ exact request CertID and nonce, and is fresh at the check date;
 anything else -- wrong signer, CertID or nonce mismatch, stale or
 future-dated times, unauthorized responder -- yields "unknown" with a
 diagnostic, and `isValid` stays true only for authenticated "good".
-CRL evidence is still structural (always "unknown") until its own
-authenticator lands. Fetched OCSP bytes are still collected into
+CRL evidence is authenticated too; see the next section. Fetched
+OCSP bytes are still collected into
 `sources`, `ocspResponses`, and `exportLTVData` even when strict
 evaluation stays unknown, so LTV embedding never loses candidate
 material to a strict verdict.
@@ -309,6 +308,134 @@ URL and no CRL distribution points now records one "No revocation
 endpoints attempted" diagnostic in `errors` instead of succeeding
 silently, and the one-call signing path is unchanged -- LTV collection
 stays structural and never depends on nonce echo or strict validation.
+
+### CRL evidence is authenticated
+
+`ValidationSession` (the `pdf-rfc3161/advanced` entry) now
+authenticates CRL evidence instead of reporting "unknown" for every
+certificate. A CRL yields "good" or "revoked" only when it is a
+complete CRL issued directly by the T05-verified issuer key, in scope
+for the certificate distribution point, and fresh at the check date;
+anything else -- wrong key, forged signature, stale/future/missing
+dates, missing cRLSign key usage, unknown critical extensions, scope
+mismatch, indirect/partitioned/delta CRLs, malformed framing -- yields
+"unknown" with a diagnostic, and `isValid` stays true only for
+authenticated "good". Fetched CRL bytes are still collected into
+`sources`, `crls`, and `exportLTVData` even when strict evaluation
+stays unknown, so LTV embedding never loses candidate material to a
+strict verdict; fetching needs only the leaf distribution point, so a
+CRL is fetched and preserved even when no issuer can validate it
+(only the verdict needs the verified issuer).
+
+Revoked means revoked regardless of `revocationDate`: the session
+does not compare the revocation instant against anything, so an
+authenticated, in-scope, fresh CRL that lists the serial yields
+"revoked" whatever instant the entry names. Historical questions --
+whether the certificate was already revoked at some past date -- are
+owned by a later task (T09b) and are not answered here.
+
+Delta CRLs are explicitly deferred, never treated as complete: a CRL
+carrying a DeltaCRLIndicator extension (detected by OID before value
+parsing, at any criticality, even with a garbage value) always yields
+"unknown", and the session moves on to the next CRL URL or falls back
+to OCSP. Full base/delta merging is future work; it lands when a
+follow-up task defines base-CRL selection (matching issuer, scope,
+and CRL numbers across the fetched set), merge ordering and conflict
+semantics, freshness rules for the merged view, and resource bounds
+for the fetch-and-merge fan-out. Until then, point distribution
+points at complete CRLs.
+
+Strict validation additionally rejects any critical extension it
+does not process (only CRL number, authority key identifier, and
+issuing distribution point at CRL level; only reason code,
+certificate issuer, hold instruction code, and invalidity date at
+entry level), requires v1/v2 CRL versions with byte-exact
+version identity (negative and out-of-range versions fail closed)
+and v2 whenever any extension is present, requires a nextUpdate
+horizon (a CRL without one fails closed as unbounded freshness),
+requires inner/outer signature algorithms to agree and suit the
+issuer key family (same RSA/ECDSA rules as OCSP), requires primitive
+octet-aligned signature BIT STRINGs with canonical two-INTEGER ECDSA
+payloads, requires complete schema consumption with an explicit Name
+grammar walk (an empty RDN SET fails while an entirely empty Name
+passes) and 64/256 RDN/attribute caps, compares serial numbers by
+exact numeric identity (no float extraction past 2^53, no -128/128
+conflation, one malformed entry fails the whole CRL), and caps each
+CRL at 2000 revoked entries and 64 extensions per list. Partitioned,
+indirect, and delta CRLs are outside the profile, as are RSA-PSS and
+unrecognized signature OIDs. Anything outside this narrowed profile
+yields "unknown" with a diagnostic. The time policy reuses the T06
+`checkDate` and `clockSkewMs` session options; there is no
+maximum-age fallback for a missing nextUpdate by design.
+
+Entry processing is whole-CRL: every revoked entry's extension list
+is gated before any verdict is selected (scan cap, empty-OID and
+unknown-critical identifiers, recognized-OID duplicates, and the
+payload grammar of every critical recognized extension), because RFC
+5280 5.3 forbids using a CRL for any certificate when a critical
+entry extension cannot be processed -- so an unknown critical
+extension on a non-matching entry now fails the whole CRL (this
+reverses the earlier rule that ignored non-selected entries).
+Duplicate serial numbers reject outright instead of first-match. Only
+non-critical recognized payloads on non-selected entries stay
+verdict-neutral (the selected entry still gets the full grammar).
+
+Entry-issuer scope follows certificateIssuer with the complete
+payload grammar: the GeneralNames value must be nonempty and bounded,
+every name must be a well-formed directoryName in a single-Name [4]
+wrapper (a wrapper carrying trailers fails even when the first Name
+matches), and every directoryName must equal the verified issuer
+subject (a same-issuer scope restates the direct-issuance default and
+is accepted). Any foreign, unbindable, or malformed scope on any entry
+fails the CRL -- there is no per-entry skip, since RFC 5280 5.3.3
+inheritance would propagate a foreign scope to following entries
+without the extension.
+
+Distribution-point scope likewise narrowed: a point carrying
+cRLIssuer is always out of scope for this direct-only profile, even
+one naming the verified issuer, because RFC 5280 6.3.3(b)(1) requires
+a CRL matching such a point to carry an issuing distribution point
+with indirectCRL asserted (conforming CAs MUST omit the redundant
+same-issuer field anyway, RFC 5280 4.2.1.13). OpenSSL 3.5.5 accepts
+same-issuer cRLIssuer with direct CRLs in both default and extended
+modes; this strict profile deliberately does not. Distribution-point
+metadata itself is grammar-checked before scope evaluation (the
+distributionPoint-or-cRLIssuer presence rule, member order and
+uniqueness, single-choice [0] framing, GeneralName wrapper
+completeness, GeneralNames cardinality, directoryName grammar,
+implicit ReasonFlags encoding), and cRLIssuer entries must be
+well-formed directoryNames in single-Name wrappers
+(`DistributionPointMetadata.hasUnbindableCrlIssuer` is retained for
+API compatibility but always false now). otherName, x400Address,
+and ediPartyName wrappers are outside the profile everywhere they
+are walked: their flattened decoder grammar cannot prove complete
+consumption (pkijs matches only leading ORAddress members for [3]),
+so any such wrapper fails the CRL instead of resolving to an
+ignored choice. CRL authority key identifiers carry the same bar:
+[0]/[1]/[2] members must be unique and DER-ordered ([0]/[2]
+primitive), and authorityCertIssuer must be a non-empty GeneralNames
+under the same name profile (no undecidable wrappers, single-Name
+directoryNames with strict Name grammar).
+
+Reason codes are validated against the supported enumeration:
+removeFromCRL (8) is restricted to delta CRLs and fails this
+complete-CRL profile, as do negative and undefined values; every
+other defined reason (0-7, 9, 10) confirms the listing, including
+certificateHold (6), which does NOT soften "revoked" (hold/release
+semantics belong to a later task). Invalidity dates must be canonical
+`YYYYMMDDHHMMSSZ` with a real calendar date (the value itself stays
+unevaluated). The issuer public key is gated before it executes in
+WebCrypto (primitive octet-aligned SPKI framing, canonical two-INTEGER
+RSA payload, NULL-or-absent RSA parameters, named-curve EC
+parameters).
+
+Two smaller changes ride along with the same verdict-vs-corruption
+distinction as OCSP: a cached CRL that fails to parse is still
+refetched once, but a cached CRL that parses and then fails
+authentication yields "unknown" with no refetch; and issuer
+resolution for CRL validation happens after the first fetch, so a
+certificate whose issuer cannot be resolved records one issuer
+diagnostic and stops instead of fetching every remaining URL.
 
 ## 0.2.1 -> 0.2.2
 

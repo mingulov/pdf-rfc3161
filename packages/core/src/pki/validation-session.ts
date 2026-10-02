@@ -13,6 +13,7 @@ import { DefaultFetcher } from "./fetchers/default-fetcher.js";
 import { InMemoryValidationCache } from "./fetchers/memory-cache.js";
 import { createOCSPRequest, getOCSPURI, parseOCSPResponse } from "./ocsp-utils.js";
 import { validateOCSPEvidence } from "./ocsp-validation.js";
+import { validateCRLEvidence } from "./crl-validation.js";
 import { getCRLDistributionPoints } from "./crl-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
 import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./cert-utils.js";
@@ -53,27 +54,38 @@ function combineRevocationEvidence(evidence: RevocationEvidenceResult[]): Revoca
 }
 
 /**
- * Serial number in canonical hex: DER INTEGERs may carry a leading zero
- * pad byte, which must not defeat the comparison.
+ * Serial number in canonical hex: the minimal-DER magnitude bytes, or
+ * null when the encoding is not a non-negative minimal INTEGER. A bare
+ * leading-zero strip would conflate -128 (`80`) with 128 (`00 80`) and
+ * match empty integers, and `valueDec` loses precision past 2^53 --
+ * neither reaches a comparison here or in the strict CRL validator.
  */
-function normalizeSerialNumber(serial: asn1js.Integer): string {
+function normalizeSerialNumber(serial: asn1js.Integer): string | null {
     const bytes = serial.valueBlock.valueHexView;
-    let start = 0;
-    while (start < bytes.length - 1 && bytes[start] === 0) {
-        start += 1;
+    if (bytes.length === 0) return null;
+    const first = bytes[0];
+    if (first === undefined) return null;
+    if (bytes.length > 1) {
+        const second = bytes[1];
+        if (second === undefined) return null;
+        if (first === 0x00 && (second & 0x80) === 0) return null;
+        if (first === 0xff && (second & 0x80) !== 0) return null;
     }
-    return bytesToHex(bytes.subarray(start));
+    if (first >= 0x80) return null;
+    const magnitude = bytes.length > 1 && first === 0x00 ? bytes.subarray(1) : bytes;
+    return bytesToHex(magnitude);
 }
 
 /**
  * Structural check for whether a CRL lists a certificate serial in its
  * revokedCertificates.
  *
- * @internal Unauthenticated structural scan for diagnostics and for the
- * future authenticated CRL evaluator. A match never yields a revoked
- * verdict and a miss never yields a good verdict; malformed input yields
- * false. Delta CRLs are not filtered here; callers must consult
- * parseCRLInfo and never treat a delta CRL as complete.
+ * @internal Unauthenticated structural scan for diagnostics. A match
+ * never yields a revoked verdict and a miss never yields a good
+ * verdict; malformed input yields false. Serial comparison is exact
+ * numeric identity (no lossy `valueDec`, no -128/128 conflation).
+ * Delta CRLs are not filtered here; callers must consult parseCRLInfo
+ * and never treat a delta CRL as complete.
  */
 export function crlContainsSerial(crlBytes: Uint8Array, cert: pkijs.Certificate): boolean {
     try {
@@ -86,9 +98,11 @@ export function crlContainsSerial(crlBytes: Uint8Array, cert: pkijs.Certificate)
         if (!revokedEntries) return false;
 
         const wanted = normalizeSerialNumber(cert.serialNumber);
-        return revokedEntries.some(
-            (entry) => normalizeSerialNumber(entry.userCertificate) === wanted
-        );
+        if (wanted === null) return false;
+        return revokedEntries.some((entry) => {
+            const candidate = normalizeSerialNumber(entry.userCertificate);
+            return candidate !== null && candidate === wanted;
+        });
     } catch {
         return false;
     }
@@ -277,8 +291,8 @@ export class ValidationSession {
      * Execute validation for all queued certificates. Each certificate is
      * evaluated against collected OCSP/CRL revocation evidence; the result
      * carries a revocation status relative to a verified issuing key, not
-     * complete path trust. OCSP evidence is authenticated; CRL evidence
-     * stays structural (always "unknown") until T07.
+     * complete path trust. OCSP and CRL evidence are both authenticated;
+     * anything unauthenticated or unsupported yields "unknown".
      *
      * @returns One `ValidationResult` per queued certificate, in the order
      *   they were queued.
@@ -311,8 +325,9 @@ export class ValidationSession {
      *
      * Attempt order follows `preferOCSP` (false tries CRL then OCSP).
      * Unknown permits fallback to the other source; only an authenticated
-     * decisive result stops the walk. OCSP evidence is authenticated;
-     * CRL evidence stays structural until T07.
+     * decisive result stops the walk. Both OCSP and CRL evidence are
+     * authenticated; revoked dominates and is never overwritten by a
+     * later good.
      */
     private async validateCertificate(
         req: CertificateToValidate,
@@ -334,7 +349,7 @@ export class ValidationSession {
             const evaluated =
                 source === "OCSP"
                     ? await this.evaluateOCSPEvidence(req, result, checkDate)
-                    : await this.evaluateCRLEvidence(req, result);
+                    : await this.evaluateCRLEvidence(req, result, checkDate);
             if (evaluated !== null) {
                 evidence.push(evaluated);
                 if (evaluated.status !== "unknown") {
@@ -429,16 +444,21 @@ export class ValidationSession {
     }
 
     /**
-     * Attempts CRL evidence collection for one certificate.
+     * Attempts CRL evidence evaluation for one certificate.
      *
      * Returns null when the certificate carries no distribution points
-     * (source not attempted). Otherwise collects each fetchable CRL into
-     * `result`, records per-URL diagnostics, and returns an unknown
-     * evidence record: structural CRL contents are unauthenticated.
+     * (source not attempted, feeding the shared no-endpoint diagnostic).
+     * Otherwise resolves the verified issuer once, then collects each
+     * fetchable CRL into `result` and routes the bytes through
+     * validateCRLEvidence: the first decisive CRL stops the walk, while
+     * unknown CRLs record per-URL diagnostics and yield to the next
+     * distribution point. Candidate bytes and sources are preserved even
+     * when strict evaluation stays unknown (C06).
      */
     private async evaluateCRLEvidence(
         req: CertificateToValidate,
-        result: ValidationResult
+        result: ValidationResult,
+        checkDate: Date
     ): Promise<RevocationEvidenceResult | null> {
         const crlUrls = getCRLDistributionPoints(req.cert);
         if (crlUrls.length === 0) {
@@ -449,21 +469,69 @@ export class ValidationSession {
             source: "CRL",
             errors: [],
         };
+        // Lazily resolved on the first fetched CRL: fetching needs only
+        // the leaf distribution point, so bytes and sources are recorded
+        // even when authentication later proves impossible (the T05
+        // preservation contract); only the verdict needs the verified
+        // issuer. Resolution is URL-independent, so one failure stops
+        // the URL loop: no later URL can validate either.
+        let issuerCert: pkijs.Certificate | null = null;
         for (const url of crlUrls) {
-            let message: string;
+            let crl: Uint8Array;
             try {
-                const crl = await this.fetchCRLWithCache(url);
-                // M2: capture the CRL bytes for downstream exportLTVData
-                (result.crls ??= []).push(crl);
-                result.sources.push("CRL");
-                message =
-                    `CRL from ${url}: ` +
-                    `${this.describeCRLStructure(crl, req.cert)}; revocation status unknown`;
+                crl = await this.fetchCRLWithCache(url);
             } catch (e) {
-                message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+                const message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+                evidence.errors.push(message);
+                result.errors.push(message);
+                continue;
             }
-            evidence.errors.push(message);
-            result.errors.push(message);
+            // M2: capture the CRL bytes for downstream exportLTVData
+            (result.crls ??= []).push(crl);
+            result.sources.push("CRL");
+            if (issuerCert === null) {
+                try {
+                    issuerCert = await this.resolveIssuerForCRL(req);
+                } catch (e) {
+                    const message = `CRL failed: ${e instanceof Error ? e.message : String(e)}`;
+                    evidence.errors.push(message);
+                    result.errors.push(message);
+                    break;
+                }
+            }
+            // The scope/freshness/signature profile applies equally to
+            // cached and fetched bytes: validation runs after cache
+            // retrieval either way. No refetch on authentication
+            // failure: an auth outcome is an issuer verdict, not cache
+            // corruption (the T06 verdict-vs-corruption distinction);
+            // structurally poisoned bytes were already refetched once
+            // inside fetchCRLWithCache.
+            let evaluated: RevocationEvidenceResult;
+            try {
+                evaluated = await validateCRLEvidence(crl, {
+                    cert: req.cert,
+                    issuer: issuerCert,
+                    checkDate,
+                    clockSkewMs: this.options.clockSkewMs,
+                });
+            } catch (e) {
+                const message = `CRL from ${url} failed: ${e instanceof Error ? e.message : String(e)}`;
+                evidence.errors.push(message);
+                result.errors.push(message);
+                continue;
+            }
+            if (evaluated.status === "unknown") {
+                for (const diagnostic of evaluated.errors) {
+                    const message = `CRL from ${url}: ${diagnostic}`;
+                    evidence.errors.push(message);
+                    result.errors.push(message);
+                }
+                continue;
+            }
+            evidence.status = evaluated.status;
+            evidence.errors.push(...evaluated.errors);
+            result.errors.push(...evaluated.errors);
+            return evidence;
         }
         return evidence;
     }
@@ -504,6 +572,50 @@ export class ValidationSession {
     }
 
     /**
+     * Resolves the verified issuer for CRL evidence validation. An
+     * explicitly supplied issuer must have issued the target; otherwise
+     * stored chain candidates plus the other queued certificates are
+     * narrowed and signature-verified. The target itself is never its
+     * own issuer. Resolved lazily, once, after the first fetch:
+     * evaluateCRLEvidence records bytes/sources first (the T05
+     * preservation contract) and breaks the URL loop when resolution
+     * fails, since resolution is URL-independent. Pinned by "fetches
+     * but cannot validate when the issuer is missing" and "stops after
+     * the first CRL when the issuer is missing" in
+     * test/unit/crl-authentication.test.ts. (Unlike
+     * resolveIssuerForOCSP, where resolve-before-fetch is genuine:
+     * request building needs the issuer key up front.)
+     */
+    private async resolveIssuerForCRL(req: CertificateToValidate): Promise<pkijs.Certificate> {
+        if (req.issuer) {
+            if (
+                !certificatesByteEqual(req.issuer, req.cert) &&
+                (await verifyIssuance(req.cert, req.issuer))
+            )
+                return req.issuer;
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "Cannot validate CRL evidence: supplied issuer certificate did not issue " +
+                    "the target certificate"
+            );
+        }
+        const queued = this.certificates
+            .map((queued) => queued.cert)
+            .filter((candidate) => !certificatesByteEqual(candidate, req.cert));
+        const verified = await resolveVerifiedIssuer(req.cert, [
+            ...(req.issuerCandidates ?? []),
+            ...queued,
+        ]);
+        if (!verified) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_RESPONSE,
+                "Cannot validate CRL evidence: issuer certificate not found"
+            );
+        }
+        return verified;
+    }
+
+    /**
      * Structural usability check for cached OCSP bytes. Rejects poisoned
      * entries; passing it authenticates nothing (every served response is
      * authenticated after retrieval).
@@ -519,7 +631,8 @@ export class ValidationSession {
 
     /**
      * Structural usability check for cached CRL bytes. Rejects poisoned
-     * entries; passing it authenticates nothing (T07 owns authentication).
+     * entries; passing it authenticates nothing (every served CRL is
+     * authenticated after retrieval).
      */
     private isUsableCachedCRL(crl: Uint8Array): boolean {
         try {
@@ -561,26 +674,6 @@ export class ValidationSession {
         this.options.cache.setCRL(url, response);
 
         return response;
-    }
-
-    /**
-     * Structural CRL description for diagnostics only. Never a verdict:
-     * target issuance, CRL issuer/key/signature, key usage, critical
-     * extensions, scope and freshness are not verified here. A delta CRL is
-     * detected via parseCRLInfo and is never treated as complete.
-     */
-    private describeCRLStructure(crlBytes: Uint8Array, cert: pkijs.Certificate): string {
-        const info = parseCRLInfo(crlBytes);
-        if (!info.parsed) {
-            return "malformed response";
-        }
-        if (info.isDelta) {
-            return "delta CRL is not a complete revocation source";
-        }
-        if (crlContainsSerial(crlBytes, cert)) {
-            return "certificate serial is structurally listed but the CRL is unauthenticated";
-        }
-        return "certificate serial is not structurally listed and the CRL is unauthenticated";
     }
 
     /**
