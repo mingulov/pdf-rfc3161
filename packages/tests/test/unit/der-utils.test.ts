@@ -104,6 +104,22 @@ describe("canonical DER sequence tree validation", () => {
             /INTEGER|ENUMERATED/
         );
     });
+
+    // T11 (0x18): asn1js throws a plain Error on corrupted GeneralizedTime
+    // content; the preflight normalizes it to INVALID_RESPONSE.
+    it("codes undecodable content as INVALID_RESPONSE", () => {
+        const bad = Uint8Array.of(
+            0x30,
+            0x11,
+            0x18,
+            0x0f,
+            ...new TextEncoder().encode("2030010100000!Z")
+        );
+        expectInvalidResponse(
+            () => parseCanonicalDERSequenceTree(bad, "test value"),
+            "test value: ASN.1 parse failed"
+        );
+    });
 });
 
 describe("canonical DER structural budgets (R26)", () => {
@@ -178,6 +194,28 @@ describe("canonical DER shared node budgets", () => {
         );
     });
 
+    // T11 (T03-F8): exhaustion cites the enforced figure -- a custom
+    // budget's own allowance, not the 1M default -- while hand-built
+    // budgets without a recorded allowance keep the default text.
+    it("cites the custom allowance when a small budget exhausts", () => {
+        const budget = createDerDecodeBudget(5);
+        expect(budget.initialNodes).toBe(5);
+        expectInvalidResponse(
+            () => parseCanonicalDERSequenceTree(wideSequence(10), "test value", { budget }),
+            "limit of 5 nodes"
+        );
+    });
+
+    it("falls back to the default figure for budgets without a recorded allowance", () => {
+        expectInvalidResponse(
+            () =>
+                parseCanonicalDERSequenceTree(wideSequence(10), "test value", {
+                    budget: { remainingNodes: 3 },
+                }),
+            "limit of 1000000 nodes"
+        );
+    });
+
     it("reuses one budget across sequential nested decodings", () => {
         const budget = createDerDecodeBudget(12);
         const value = wideSequence(10);
@@ -233,6 +271,16 @@ describe("canonical DER value validation (any root tag)", () => {
         expectInvalidResponse(
             () => parseCanonicalDERValue(Uint8Array.of(0x04, 0x01, 0xaa, 0x00), "test value"),
             "trailing"
+        );
+    });
+
+    // T11 (0x18): asn1js throws a plain Error on corrupted GeneralizedTime
+    // content; the preflight normalizes it to INVALID_RESPONSE.
+    it("codes undecodable content as INVALID_RESPONSE", () => {
+        const bad = Uint8Array.of(0x18, 0x0f, ...new TextEncoder().encode("2030010100000!Z"));
+        expectInvalidResponse(
+            () => parseCanonicalDERValue(bad, "test value"),
+            "test value: ASN.1 parse failed"
         );
     });
 

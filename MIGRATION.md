@@ -464,14 +464,47 @@ then, and nothing about long-term archival policy. Revocation and
 network cache retention plus circuit-breaker TTL clocks stay
 wall-clock by design; only path validity is evaluated historically.
 
-`SimpleTrustStore` inputs are now fully consumed:
-`addCertificate` and `verifyChain` / `verifyChainAtTime` reject
-DER-encoded anchors and chain entries with trailing garbage (or
-unparseable framing) with `INVALID_RESPONSE`. Anchors with trailing
-bytes were previously pinned silently, and malformed chain inputs
-surfaced a raw schema error; `pkijs.Certificate` objects are
-unaffected, and CRLs are still never consulted during path
-validation.
+`SimpleTrustStore` inputs are now fully consumed, and every decode
+failure carries a code: `addCertificate` and `verifyChain` /
+`verifyChainAtTime` reject DER-encoded anchors and chain entries with
+trailing garbage (or unparseable framing) with `INVALID_RESPONSE`.
+Anchors with trailing bytes were previously pinned silently, and
+undecodable inputs (schema mismatch such as `05 00` / `30 00`, or
+corrupted content such as a bad GeneralizedTime) surfaced a raw
+`Error`; all of these now fail closed with `INVALID_RESPONSE`.
+`pkijs.Certificate` objects are unaffected, and CRLs are still never
+consulted during path validation. One bound remains: framing
+strictness is not canonical DER -- indefinite-length, non-minimal, or
+shortened outer lengths still pin (and a shortened framing of an
+otherwise valid anchor still verifies), because the ASN.1 decoder
+consumes them leniently. Tightening acceptance is future work pending
+ecosystem profiling; boundary tests pin the current behavior.
+
+### Parser contracts: request digests, TSTInfo profile, coded decode errors
+
+`createTimestampRequestFromHash` now rejects a precomputed digest whose
+length does not match the hash algorithm (32 bytes for SHA-256, 48 for
+SHA-384, 64 for SHA-512) with `INVALID_ARGUMENT` before serializing;
+callers passing truncated or over-long digests must fix the input
+length. Offset views are measured by the view, not the backing buffer.
+`createTimestampRequest` (which hashes internally) is unaffected.
+
+The strict token parser now enforces the TSTInfo profile: the version
+must be 1 (RFC 3161 defines no v2), unsupported critical extensions
+reject (the library supports none; non-critical unknown extensions
+stay accepted), and message-imprint digest parameters must be absent
+or NULL (RFC 5754: SHA-2 identifiers must accept NULL and generate
+absent). Tokens violating any of these now fail with
+`MALFORMED_RESPONSE` where they previously parsed.
+
+Decode failures that previously surfaced a raw `Error` (asn1js
+"conversion" errors on corrupted GeneralizedTime, pkijs schema
+errors) are now coded `TimestampError`s (`INVALID_RESPONSE` on parse
+paths; EKU/AIA/SKI helpers fail closed to `false` / `null` / no
+match). `TimeStampedData` (RFC 5544) schema failures likewise reject
+with a stable `INVALID_RESPONSE` message instead of embedding
+engine-specific crash text. Callers matching on the old raw messages
+must switch to error codes.
 
 ## 0.2.1 -> 0.2.2
 

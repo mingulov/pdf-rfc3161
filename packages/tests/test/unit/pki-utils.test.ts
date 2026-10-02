@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseTimestampToken } from "../../../core/src/pki/pki-utils.js";
 import { TimestampError } from "../../../core/src/types.js";
+import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
 describe("PKI Utils", () => {
     describe("parseTimestampToken", () => {
@@ -182,6 +183,50 @@ describe("PKI Utils", () => {
             // Long form length
             const longForm = new Uint8Array([0x30, 0x81, 0x01, 0x00]);
             expect(() => parseTimestampToken(longForm)).toThrow(TimestampError);
+        });
+    });
+
+    // T11 (R11): unknown ESSCertIDv2 hash OIDs stay absent/undefined
+    // through an explicit optional lookup -- no cast hides unknown as a
+    // known algorithm. End to end, pkijs never populates the
+    // signingCertificateV2 shape this reads, so real tokens keep absence
+    // (pinned below); the lookup itself is unit-covered directly.
+    describe("ESS certId hash lookup (T11/R11)", () => {
+        type CertIdLookup = (oid: string) => "SHA-256" | "SHA-384" | "SHA-512" | undefined;
+
+        // T06 dynamic-import precedent: on BASE the export does not
+        // exist, so the guard converts absence into an assertion (not a
+        // collection error).
+        async function expectLookup(): Promise<CertIdLookup> {
+            const loaded = await import("../../../core/src/pki/pki-utils.js");
+            const lookup = (loaded as unknown as Record<string, unknown>)[
+                "certIdHashAlgorithmForOid"
+            ];
+            expect(
+                typeof lookup,
+                "certIdHashAlgorithmForOid exists (T11 implementation)"
+            ).toBe("function");
+            return lookup as CertIdLookup;
+        }
+
+        it("maps the named ESS hash OIDs and nothing else", async () => {
+            const lookup = await expectLookup();
+            expect(lookup("2.16.840.1.101.3.4.2.1")).toBe("SHA-256");
+            expect(lookup("2.16.840.1.101.3.4.2.2")).toBe("SHA-384");
+            expect(lookup("2.16.840.1.101.3.4.2.3")).toBe("SHA-512");
+        });
+
+        it("keeps unknown hash OIDs absent without inventing an algorithm", async () => {
+            const lookup = await expectLookup();
+            expect(lookup("1.2.3.4.5.6")).toBeUndefined();
+            expect(lookup("1.2.840.113549.2.5")).toBeUndefined();
+            expect(lookup("")).toBeUndefined();
+        });
+
+        it("keeps certIdHashAlgorithm absent on a real token (absence pin)", async () => {
+            const fixture = await createRFC3161TokenFixture({ form: "raw" });
+            const info = parseTimestampToken(fixture.rawToken);
+            expect(info.certIdHashAlgorithm).toBeUndefined();
         });
     });
 

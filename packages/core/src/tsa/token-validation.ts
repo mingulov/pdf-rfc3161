@@ -145,7 +145,14 @@ function parseCompleteDER(bytes: Uint8Array, message: string): asn1js.BaseBlock 
     if (length !== bytes.length) {
         throw invalidResponse(`${message}: trailing bytes are not permitted`);
     }
-    const parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    // asn1js throws a plain Error on corrupted GeneralizedTime content;
+    // normalize it like every other decode failure on this path.
+    let parsed: ReturnType<typeof asn1js.fromBER>;
+    try {
+        parsed = asn1js.fromBER(toArrayBuffer(bytes));
+    } catch {
+        throw invalidResponse(`${message}: ASN.1 parse failed`);
+    }
     if (parsed.offset === -1) throw invalidResponse(`${message}: ASN.1 parse failed`);
     if (parsed.offset !== bytes.length) {
         throw invalidResponse(`${message}: trailing bytes are not permitted`);
@@ -394,6 +401,22 @@ export function parseTimestampToken(bytes: Uint8Array): ParsedTimestampToken {
     } catch (error) {
         throw malformedResponse("Timestamp TSTInfo is malformed", error);
     }
+    // TSTInfo profile (T11): RFC 3161 S2.4 requires servers to provide
+    // version 1 and requesters to recognize it (no v2 exists), so only
+    // v1 parses. Critical extensions use RFC 5280 S4.2 semantics --
+    // reject what is not supported; this library supports no TSTInfo
+    // extension, so any critical one rejects while non-critical unknown
+    // extensions stay accepted. Digest parameters follow RFC 5754 S2:
+    // SHA-2 AlgorithmIdentifiers MUST accept NULL and generate absent.
+    if (tstInfo.version !== 1) throw malformedResponse("TSTInfo version must be 1");
+    for (const extension of tstInfo.extensions ?? []) {
+        if (extension.critical)
+            throw malformedResponse("TSTInfo has an unsupported critical extension");
+    }
+    const digestParams: unknown = tstInfo.messageImprint.hashAlgorithm.algorithmParams;
+    if (digestParams !== undefined && !(digestParams instanceof asn1js.Null)) {
+        throw malformedResponse("TSTInfo digest parameters must be absent or NULL");
+    }
     return {
         token: classified.token,
         contentInfo: classified.contentInfo,
@@ -497,7 +520,12 @@ function getSubjectKeyIdentifier(certificate: pkijs.Certificate): Uint8Array | u
     if (extensions?.length !== 1) return undefined;
     const extension = extensions[0];
     if (!extension) return undefined;
-    const parsed = asn1js.fromBER(extension.extnValue.valueBlock.valueHexView);
+    let parsed: ReturnType<typeof asn1js.fromBER>;
+    try {
+        parsed = asn1js.fromBER(extension.extnValue.valueBlock.valueHexView);
+    } catch {
+        return undefined;
+    }
     if (
         parsed.offset !== extension.extnValue.valueBlock.valueHexView.length ||
         !(parsed.result instanceof asn1js.OctetString) ||
@@ -972,7 +1000,12 @@ export function hasTimestampingEKU(certificate: pkijs.Certificate): boolean {
     const extension = extensions[0];
     if (!extension?.critical) return false;
     const encoded = extension.extnValue.valueBlock.valueHexView;
-    const parsed = asn1js.fromBER(encoded);
+    let parsed: ReturnType<typeof asn1js.fromBER>;
+    try {
+        parsed = asn1js.fromBER(encoded);
+    } catch {
+        return false;
+    }
     if (
         parsed.offset !== encoded.length ||
         !(parsed.result instanceof asn1js.Sequence) ||

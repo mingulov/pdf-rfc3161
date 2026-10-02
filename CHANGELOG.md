@@ -225,8 +225,32 @@ For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
   `verifyChainAtTime` now reject DER inputs with trailing garbage
   (or unparseable framing) with `INVALID_RESPONSE` instead of
   silently accepting the leading value (anchors) or surfacing a raw
-  schema error (chain inputs). `pkijs.Certificate` objects are
+  schema error (chain inputs); undecodable content (e.g. corrupted
+  GeneralizedTime) is likewise coded now. `pkijs.Certificate` objects
+  are unaffected. BER framing tolerance (indefinite/non-minimal/
+  shortened outer lengths still pin) is unchanged; see MIGRATION.md.
+- **Behavior (request digest lengths, R19):**
+  `createTimestampRequestFromHash` now rejects a precomputed digest
+  whose length does not match the hash algorithm (32/48/64 bytes for
+  SHA-256/384/512) with `INVALID_ARGUMENT` before serializing,
+  measuring offset views by the view. `createTimestampRequest` is
   unaffected. See MIGRATION.md.
+- **Behavior (TSTInfo profile, R19/S19):** the strict token parser now
+  requires TSTInfo version 1, rejects unsupported critical extensions
+  (none are supported; non-critical unknown extensions stay accepted),
+  and requires message-imprint digest parameters to be absent or NULL
+  per RFC 5754. Violating tokens fail with `MALFORMED_RESPONSE`
+  instead of parsing. See MIGRATION.md.
+- **Behavior (deterministic parser rejection, R9/0x18):** decode
+  failures that surfaced a raw `Error` (corrupted GeneralizedTime,
+  schema mismatch) are now coded `TimestampError`s on every parse
+  path, and `TimeStampedData` schema failures reject with a stable
+  `INVALID_RESPONSE` message (the original failure is retained as
+  `cause`). A `TimeStampedData` version that is not an INTEGER now
+  rejects instead of parsing as undefined, and malformed
+  `otherMetaData` attributes are skipped instead of crashing or
+  coercing. DER-budget exhaustion now cites the enforced allowance
+  instead of always citing the 1M default. See MIGRATION.md.
 
 ### Fixed
 

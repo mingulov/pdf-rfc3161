@@ -5,6 +5,24 @@ import { toArrayBuffer } from "../utils.js";
 import { snapshotDateMs } from "../utils/date.js";
 
 /**
+ * Parses DER-encoded certificate bytes, returning undefined when they do
+ * not decode: truncated framing, undecodable content such as corrupted
+ * GeneralizedTime (asn1js throws a plain Error), or schema mismatch
+ * (pkijs throws a plain Error). Callers map undefined to the coded
+ * error for their input kind; BER acceptance of the framing itself is
+ * unchanged (see the boundary pins in trust-store.test.ts).
+ */
+function parseTrustStoreCertificate(bytes: Uint8Array): pkijs.Certificate | undefined {
+    try {
+        const asn1 = asn1js.fromBER(toArrayBuffer(bytes));
+        if (asn1.offset !== bytes.length) return undefined;
+        return new pkijs.Certificate({ schema: asn1.result });
+    } catch {
+        return undefined;
+    }
+}
+
+/**
  * Trust Store for Certificate Chain Validation
  *
  * This module provides TrustStore and SimpleTrustStore for certificate chain validation.
@@ -127,14 +145,14 @@ export class SimpleTrustStore implements TrustStore {
         if (cert instanceof pkijs.Certificate) {
             this.trustedCerts.push(cert);
         } else {
-            const asn1 = asn1js.fromBER(toArrayBuffer(cert));
-            if (asn1.offset !== cert.length) {
+            const parsed = parseTrustStoreCertificate(cert);
+            if (!parsed) {
                 throw new TimestampError(
                     TimestampErrorCode.INVALID_RESPONSE,
                     "Failed to parse trusted certificate"
                 );
             }
-            this.trustedCerts.push(new pkijs.Certificate({ schema: asn1.result }));
+            this.trustedCerts.push(parsed);
         }
     }
 
@@ -174,14 +192,14 @@ export class SimpleTrustStore implements TrustStore {
         // Convert input chain to pkijs.Certificate objects
         const certChain = chain.map((c) => {
             if (c instanceof pkijs.Certificate) return c;
-            const asn1 = asn1js.fromBER(toArrayBuffer(c));
-            if (asn1.offset !== c.length) {
+            const parsed = parseTrustStoreCertificate(c);
+            if (!parsed) {
                 throw new TimestampError(
                     TimestampErrorCode.INVALID_RESPONSE,
                     "Failed to parse chain certificate"
                 );
             }
-            return new pkijs.Certificate({ schema: asn1.result });
+            return parsed;
         });
 
         // Encode each input once; every step below reuses these views.

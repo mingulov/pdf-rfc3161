@@ -89,6 +89,13 @@ export function createTimestampRequestFromHash(
     return buildRequest(toArrayBuffer(hash), hashAlgorithm, options);
 }
 
+// RFC 3161 S2.4.1: the imprint length MUST match the hash algorithm.
+const DIGEST_LENGTHS = {
+    "SHA-256": 32,
+    "SHA-384": 48,
+    "SHA-512": 64,
+};
+
 function buildRequest(
     hashBuffer: ArrayBuffer,
     hashAlgorithm: HashAlgorithm,
@@ -107,6 +114,16 @@ function buildRequest(
         throw new TimestampError(
             TimestampErrorCode.UNSUPPORTED_ALGORITHM,
             `Unsupported hash algorithm: ${hashAlgorithm}`
+        );
+    }
+
+    // Fail fast before serialization. hashBuffer already spans exactly
+    // the caller's view, so offset views measure correctly.
+    const expectedLength = DIGEST_LENGTHS[hashAlgorithm];
+    if (hashBuffer.byteLength !== expectedLength) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            `${hashAlgorithm} digest must be ${expectedLength.toString()} bytes (got ${hashBuffer.byteLength.toString()})`
         );
     }
 
