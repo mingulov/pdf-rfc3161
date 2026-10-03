@@ -45,8 +45,12 @@ function isCertStatusBlock(value: unknown): value is asn1js.Primitive | asn1js.C
     return value instanceof asn1js.Primitive || value instanceof asn1js.Constructed;
 }
 
-function invalidOcspSchema(message: string): TimestampError {
-    return new TimestampError(TimestampErrorCode.INVALID_RESPONSE, `OCSP response: ${message}`);
+function invalidOcspSchema(message: string, cause?: unknown): TimestampError {
+    return new TimestampError(
+        TimestampErrorCode.INVALID_RESPONSE,
+        `OCSP response: ${message}`,
+        cause
+    );
 }
 
 function sequenceChildren(value: asn1js.BaseBlock, description: string): asn1js.BaseBlock[] {
@@ -160,12 +164,17 @@ export function parseBasicOCSPResponse(
     const asn1 = parseCanonicalDERSequenceTree(responseBytes, "OCSP response", { budget });
     const status = validateOcspResponseSchema(asn1);
 
-    const ocspResponse = new pkijs.OCSPResponse({ schema: asn1 });
-    requireSchemaRoundTrip(
-        responseBytes,
-        ocspResponse.toSchema().toBER(false),
-        "OCSP response"
-    );
+    // The exact-grammar precheck above is not airtight against pkijs
+    // schema verification (e.g. a primitive-encoded inner tag still
+    // yields a Sequence-shaped block): normalize a raw AsnError here
+    // instead of leaking the pkijs error type (T16 fuzz-ocsp).
+    let ocspResponse: pkijs.OCSPResponse;
+    try {
+        ocspResponse = new pkijs.OCSPResponse({ schema: asn1 });
+    } catch (error) {
+        throw invalidOcspSchema("OCSPResponse content is malformed", error);
+    }
+    requireSchemaRoundTrip(responseBytes, ocspResponse.toSchema().toBER(false), "OCSP response");
 
     if (status !== OCSPResponseStatus.SUCCESSFUL) {
         const statusNames: Record<number, string> = {
@@ -207,7 +216,16 @@ export function parseBasicOCSPResponse(
             budget,
         }
     );
-    const basicOCSPResponse = new pkijs.BasicOCSPResponse({ schema: responseBytesAsn1 });
+    // The nested content passed canonical framing but not the
+    // BasicOCSPResponse schema: pkijs schema verification can still throw
+    // a raw AsnError (T16 fuzz-ocsp), so normalize it like every other
+    // malformed response instead of leaking the pkijs error type.
+    let basicOCSPResponse: pkijs.BasicOCSPResponse;
+    try {
+        basicOCSPResponse = new pkijs.BasicOCSPResponse({ schema: responseBytesAsn1 });
+    } catch (error) {
+        throw invalidOcspSchema("BasicOCSPResponse content is malformed", error);
+    }
     requireSchemaRoundTrip(
         responseBytesValue,
         basicOCSPResponse.toSchema().toBER(false),

@@ -1,0 +1,23 @@
+{
+    // T16: transpiles the fuzz harnesses AND core sources to unbundled ESM
+    // for Jazzer.js. Direct TypeScript targets are not supported by Jazzer;
+    // the emitted core path below is what the fuzzer instruments (-i).
+    // Output layout mirrors the workspace: fuzz/build/core/src/*.js and
+    // fuzz/build/tests/fuzz/targets/*.js. Never import from fuzz/build in
+    // committed code; it is gitignored regeneration output.
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "noEmit": false,
+        "declaration": false,
+        "declarationMap": false,
+        "sourceMap": false,
+        "outDir": "fuzz/build",
+        "rootDir": "..",
+        "types": ["node"],
+        "preserveSymlinks": false
+    },
+    "include": ["../core/src/**/*.ts", "fuzz/targets/**/*.ts"],
+    "exclude": ["node_modules", "fuzz/build"]
+}

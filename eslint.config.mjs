@@ -82,6 +82,9 @@ export default tseslint.config(
             "coverage/",
             "*.config.ts",
             "*.config.js",
+            // T16 Jazzer pilot regeneration output (transpiled ESM + run workdirs).
+            "packages/tests/fuzz/build/",
+            "packages/tests/fuzz/work/",
             // Node --require preloader; it is intentionally CommonJS and outside tsconfig.
             "packages/tests/test/fixtures/cli-pades/deterministic-webcrypto.cjs",
         ],

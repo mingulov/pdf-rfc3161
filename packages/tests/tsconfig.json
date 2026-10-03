@@ -12,7 +12,8 @@
         "browser/**/*",
         "test/**/*",
         "src/**/*",
-        "scripts/**/*"
+        "scripts/**/*",
+        "fuzz/targets/**/*"
     ],
     "exclude": [
         "node_modules"
