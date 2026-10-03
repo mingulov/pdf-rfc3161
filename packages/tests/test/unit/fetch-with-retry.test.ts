@@ -1234,6 +1234,9 @@ describe("fetchBytesWithRetry", () => {
         });
 
         it("accepts boundary config values", async () => {
+            // Fake timers: the 1 ms timeout must not be able to fire before
+            // the resolved mock wins (T02 follow-up stabilization).
+            useFakeTimers();
             mockFetch.mockResolvedValue(okResponse(new Uint8Array([1])));
             const result = await fetchBytesWithRetry(
                 makeOptions({ retry: 0, retryDelay: 0, timeout: 1, maxResponseBytes: MAX_ABSOLUTE })
