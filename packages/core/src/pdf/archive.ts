@@ -1,4 +1,4 @@
-import { timestampPdf } from "../index.js";
+import { timestampPdf } from "../timestamp-pdf.js";
 import { assertPdfWithinSize, assertValidSignatureSize } from "../constants.js";
 import {
     discoverArchiveTimestamps,

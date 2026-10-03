@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as pkijs from "pkijs";
-import { verifyTimestamp, ExtractedTimestamp } from "../../../core/src/pdf/extract.js";
-import { TimestampInfo } from "../../../core/src/types.js";
+import { verifyTimestamp, type ExtractedTimestamp } from "../../../core/src/pdf/extract.js";
+import type { TimestampInfo } from "../../../core/src/types.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
 describe("Certificate Export", () => {

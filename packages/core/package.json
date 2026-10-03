@@ -24,10 +24,7 @@
     "license": "MIT",
     "author": "Denis Mingulov <denis@mingulov.com>",
     "type": "module",
-    "sideEffects": [
-        "./dist/index.cjs",
-        "./dist/index.js"
-    ],
+    "sideEffects": false,
     "exports": {
         ".": {
             "import": {

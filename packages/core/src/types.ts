@@ -1,4 +1,4 @@
-import { TrustStore } from "./pki/trust-store.js";
+import type { TrustStore } from "./pki/trust-store.js";
 
 /**
  * Configuration for connecting to a Time Stamping Authority (TSA)
