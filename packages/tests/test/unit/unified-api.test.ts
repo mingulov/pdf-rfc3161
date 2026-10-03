@@ -125,13 +125,15 @@ describe("Unified API Tests", () => {
     /* eslint-enable @typescript-eslint/no-deprecated */
 
     it("documents request-binding failures with the public verification error code", () => {
-        const indexSource = readFileSync(
-            new URL("../../../core/src/index.ts", import.meta.url),
+        // The one-call API (and its JSDoc) lives in the internal
+        // timestamp-pdf module; index.ts only re-exports it (audit S1).
+        const oneCallSource = readFileSync(
+            new URL("../../../core/src/timestamp-pdf.ts", import.meta.url),
             "utf8"
         );
-        const timestampPdfDocs = indexSource.slice(
-            indexSource.indexOf("/**\n * Adds an RFC 3161 document timestamp"),
-            indexSource.indexOf("export async function timestampPdf")
+        const timestampPdfDocs = oneCallSource.slice(
+            oneCallSource.indexOf("/**\n * Adds an RFC 3161 document timestamp"),
+            oneCallSource.indexOf("export async function timestampPdf")
         );
 
         expect(timestampPdfDocs).toContain("`VERIFICATION_FAILED` if the TSA response");

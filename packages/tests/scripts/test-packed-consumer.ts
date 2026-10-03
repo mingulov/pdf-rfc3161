@@ -793,8 +793,7 @@ async function checkInstalledConsumer(
         commandSucceeded(shakenRun);
         assert.ok(
             commandOutput(shakenRun.result).includes("TREESHAKE_OK count=1 verified=true"),
-            "tree-shaken bundle did not timestamp and verify: " +
-                commandOutput(shakenRun.result)
+            "tree-shaken bundle did not timestamp and verify: " + commandOutput(shakenRun.result)
         );
         treeShake = "passed";
     } else if (RUNNING_IN_CI) {

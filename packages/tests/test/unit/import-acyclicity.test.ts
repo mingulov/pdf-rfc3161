@@ -38,6 +38,10 @@ export function clauseHasValueBinding(clause: string): boolean {
     if (/^\s*type[\s{]/.exec(clause) !== null) return false;
     const braced = /\{([\s\S]{0,2000})\}/.exec(clause);
     if (braced?.[1] === undefined) return clause.trim().length > 0;
+    // A default binding before the braces (e.g. `Foo` in
+    // `Foo, { type Bar }`) is a runtime binding on its own.
+    const beforeBraces = clause.slice(0, braced.index).replace(",", "").trim();
+    if (beforeBraces.length > 0) return true;
     return braced[1]
         .split(",")
         .map((specifier) => specifier.trim())
@@ -98,6 +102,12 @@ describe("core import acyclicity (S1)", () => {
         expect(clauseHasValueBinding("* as pkijs")).toBe(true);
         expect(clauseHasValueBinding("*")).toBe(true);
         expect(clauseHasValueBinding("PDFDocument")).toBe(true);
+        // A default value binding keeps the edge even when every named
+        // specifier is type-only (M1: `Foo, { type Bar }` used to read false).
+        expect(clauseHasValueBinding("Foo, { type Bar }")).toBe(true);
+        expect(clauseHasValueBinding("Foo, { Bar, type Baz }")).toBe(true);
+        // `import type` with a default binding is still type-only.
+        expect(clauseHasValueBinding("type Foo")).toBe(false);
     });
 
     it("finds entry cycles on synthetic graphs", () => {

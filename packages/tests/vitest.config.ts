@@ -47,6 +47,10 @@ export default defineConfig({
             // against paths relative to this directory. Later work
             // must keep the suite above these floors (R7): raise them
             // when coverage improves, never lower them to fit a drop.
+            // T19: the one-call code (and its 46/49 branches) moved
+            // from index.ts to timestamp-pdf.ts (audit S1); the
+            // per-file floor follows the code at the same value.
+            // index.ts is now a branchless barrel and needs no pin.
             thresholds: {
                 statements: 90.25,
                 branches: 85.39,
@@ -56,7 +60,7 @@ export default defineConfig({
                     lines: 90.72,
                     branches: 87.64,
                 },
-                "../core/src/index.ts": {
+                "../core/src/timestamp-pdf.ts": {
                     branches: 93.87,
                 },
             },

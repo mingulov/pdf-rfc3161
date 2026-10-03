@@ -146,7 +146,7 @@ export async function readResponseBounded(
     // though the DOM type marks it non-optional.
     const body = (response as { body?: ReadableStream<Uint8Array> | null }).body ?? null;
     if (body === null) {
-        return new Uint8Array(0);
+        return new Uint8Array();
     }
 
     const reader = body.getReader();
