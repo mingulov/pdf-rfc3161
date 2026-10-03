@@ -1,6 +1,11 @@
 import { TimestampError, TimestampErrorCode } from "../types.js";
 import { CircuitState, type CircuitBreakerMap } from "./circuit-breaker.js";
-import { validateUrl, formatDiagnosticUrl, sanitizeTransportCause } from "./url.js";
+import {
+    validateUrl,
+    formatDiagnosticUrl,
+    sanitizeTransportCause,
+    sanitizeTransportMessage,
+} from "./url.js";
 import { readResponseBounded, assertResponseCap } from "./bounded-fetch.js";
 import { monotonicNow, type MonotonicClock } from "./clock.js";
 import type { OperationBudget } from "./operation-budget.js";
@@ -363,9 +368,14 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
             if (!response.ok) {
                 discardBody(response);
                 throwIfCallerAborted(abortSignal);
+                // The reason phrase is responder-controlled: sanitize it
+                // like every other transport-attached text so a hostile
+                // endpoint cannot reflect configured-URL secrets into
+                // thrown messages and logs (sol-pr85 I1).
+                const reason = sanitizeTransportMessage(response.statusText);
                 throw new TimestampError(
                     TimestampErrorCode.NETWORK_ERROR,
-                    `${serviceLabel} returned HTTP ${String(status)}: ${response.statusText}`
+                    `${serviceLabel} returned HTTP ${String(status)}: ${reason}`
                 );
             }
 

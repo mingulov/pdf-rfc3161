@@ -252,12 +252,18 @@ lookups normally miss; pre-fetched or custom-cache responses are
 validated against the current request bytes exactly like fetched ones.
 
 One deliberate narrowing of the T05 cache contract rides along: a
-cached entry that fails to parse is still refetched once, but a
-cached entry that parses and then fails authentication -- wrong
-signer, CertID or nonce mismatch, staleness -- yields "unknown" with
-no refetch. An authentication verdict is the responder's answer about
-this request, not cache corruption, so refetching cannot change it;
-retention bounds keep the stale entry from lingering.
+cached entry that fails to parse is refetched once, and so is a
+cached CRL whose nextUpdate has passed the check date (the responder
+may have rotated since the entry was stored). Other parseable-but-
+rejected entries -- wrong signer, CertID or nonce mismatch, a CRL
+without nextUpdate, OCSP staleness -- yield "unknown" with no
+refetch: those verdicts need evaluator context (issuer keys, request
+binding) or restate responder profile, so a refetch would return the
+same answer. Retention differs by implementation: the built-in cache
+expires entries after retentionMs, but a custom ValidationCache has
+no retention bound imposed on it -- bound retention yourself, or
+stale entries linger as fail-closed "unknown" (except a passed CRL
+nextUpdate, which refetches once per validation).
 
 Delegated responders must be issued directly by the certificate issuer,
 carry the `id-kp-OCSPSigning` extended key usage (plus

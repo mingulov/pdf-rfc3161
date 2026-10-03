@@ -825,6 +825,18 @@ function isEncodedTrue(member: asn1js.BaseBlock): boolean {
 }
 
 /**
+ * True when a present nextUpdate has passed the check date (minus skew).
+ * Shared by the evaluator freshness gate below and the session's
+ * cached-entry usability check so both agree on what "stale" means
+ * (sol-pr85 M2). Non-finite inputs are never stale here; the evaluator
+ * rejects those separately with their own diagnostic.
+ */
+export function isCrlNextUpdatePassed(nextUpdate: Date, checkMs: number, skewMs: number): boolean {
+    const nextMs = nextUpdate.getTime();
+    return Number.isFinite(nextMs) && checkMs - skewMs > nextMs;
+}
+
+/**
  * Freshness of the CRL against the check date. Returns a full unknown
  * diagnostic, or null when fresh. Boundary comparisons are inclusive:
  * a timestamp exactly at checkDate plus or minus skew still counts as
@@ -855,7 +867,7 @@ function checkCrlFreshness(
     if (nextMs < thisMs) {
         return "CRL: CRL nextUpdate is before thisUpdate; revocation status unknown";
     }
-    if (checkMs - skewMs > nextMs) {
+    if (isCrlNextUpdatePassed(nextUpdate, checkMs, skewMs)) {
         return "CRL: CRL is stale (nextUpdate has passed); revocation status unknown";
     }
     return null;

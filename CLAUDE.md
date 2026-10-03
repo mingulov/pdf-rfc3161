@@ -52,7 +52,7 @@ packages/
 - ESLint: `typescript-eslint/strict-type-checked` + `eslint-plugin-security`
     - `security/detect-unsafe-regex` is **error** — use bounded quantifiers (`\s{1,100}` not `\s+`) for any regex over untrusted input (PDF bytes)
     - `security/detect-non-literal-regexp` is **warn** — add `// eslint-disable-next-line` only when length is bounded by code, not input
-- `console.warn/error` allowed by lint; prefer `getLogger()` in library code (one offender at `pdf/archive.ts:95` — M5)
+- `console.warn/error` allowed by lint; prefer `getLogger()` in library code (no offenders: `archive.ts` uses `getLogger().warn`; the only `console.*` calls are inside `utils/logger.ts` itself)
 - ASCII-only in source files (historical commit: `use ASCII only characters in source`)
 
 ## Known issues (do not regress)

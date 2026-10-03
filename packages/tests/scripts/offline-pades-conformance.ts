@@ -2800,7 +2800,13 @@ async function sectionClosureC03(
         `${beforeStreams.size.toString()} streams identical`,
         `${beforeStreams.size.toString()} streams identical`
     );
-    const vriStreams = (model: QpdfModel): { certs: Uint8Array[]; crls: Uint8Array[]; ocsps: Uint8Array[] } => {
+    // sol-finalgap O3: the dump path travels with the model explicitly
+    // so a future second call cannot silently pair one revision's object
+    // numbers with another revision's bytes.
+    const vriStreams = (
+        model: QpdfModel,
+        pdfPath: string
+    ): { certs: Uint8Array[]; crls: Uint8Array[]; ocsps: Uint8Array[] } => {
         const catalog = resolveQpdfReference(model.objects, model.trailer["/Root"], "catalog");
         const dss = resolveQpdfReference(model.objects, catalog["/DSS"], "catalog DSS");
         const entry = dss["/VRI"];
@@ -2808,12 +2814,12 @@ async function sectionClosureC03(
         const first = Object.values(entry)[0];
         if (!isRecord(first)) throw new Error("VRI entry is missing");
         return {
-            certs: refObjectNumbers(first["/Cert"]).map((n) => dumpDecoded(withVriPath, n)),
-            crls: refObjectNumbers(first["/CRL"]).map((n) => dumpDecoded(withVriPath, n)),
-            ocsps: refObjectNumbers(first["/OCSP"]).map((n) => dumpDecoded(withVriPath, n)),
+            certs: refObjectNumbers(first["/Cert"]).map((n) => dumpDecoded(pdfPath, n)),
+            crls: refObjectNumbers(first["/CRL"]).map((n) => dumpDecoded(pdfPath, n)),
+            ocsps: refObjectNumbers(first["/OCSP"]).map((n) => dumpDecoded(pdfPath, n)),
         };
     };
-    const vriDecoded = vriStreams(vriModel);
+    const vriDecoded = vriStreams(vriModel, withVriPath);
     assert.deepEqual(
         vriDecoded.certs.map(hexOf).sort(),
         [hexOf(revocation.tsaCertDer), hexOf(rootDer)].sort(),
@@ -2890,6 +2896,33 @@ const REQUIRED_ORACLE_COUNTS = [
     "oracle:library",
 ];
 
+// sol-finalgap O2 (practical close): bare nonzero checks let a removed
+// leg pass silently, so pin every section/oracle minimum at the
+// measured breadth. Leg loss fails loudly; additions stay free -- raise
+// the minimum when breadth grows on purpose, like coverage floors.
+// Full case-name pinning stays deferred: names embed dynamic epochs
+// (validity-boundaries attime values), so it needs a case-identity
+// design first.
+const REQUIRED_MINIMUM_COUNTS: Record<string, number> = {
+    "section:hash-breadth": 69,
+    "section:multi-signature": 23,
+    "section:validity-boundaries": 25,
+    "section:trust-target": 7,
+    "section:resigned-binding": 7,
+    "section:token-rigor": 12,
+    "section:revocation": 26,
+    "section:c03-closure": 12,
+    "oracle:openssl-ts": 51,
+    "oracle:openssl-verify": 10,
+    "oracle:openssl-ocsp": 5,
+    "oracle:openssl-crl": 6,
+    "oracle:qpdf": 15,
+    "oracle:pyhanko": 20,
+    "oracle:verifiedby": 27,
+    "oracle:library": 47,
+};
+const REQUIRED_MINIMUM_TOTAL = 182;
+
 const RECORDED_LIMITATIONS = [
     "OpenSSL 3.0.13 ts -verify -attime treats notAfter as exclusive while the library and pyHanko 0.37.0 (tolerance 0) treat it as inclusive; pinned at the exact na instant in validity-boundaries and token-rigor.",
     "openssl ocsp -respin cannot verify a nonce-bearing response offline (Nonce Verify error even with the matching -reqin); strict-mode OCSP is oracle-qualified structurally (parse plus echoed-nonce hex equality plus Cert Status) while omit-mode carries the full signature verification.",
@@ -2939,11 +2972,16 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
         });
 
         for (const key of [...REQUIRED_SECTION_COUNTS, ...REQUIRED_ORACLE_COUNTS]) {
+            const minimum = REQUIRED_MINIMUM_COUNTS[key] ?? 1;
             assert.ok(
-                ledger.count(key) > 0,
-                `conformance case count for ${key} must be nonzero`
+                ledger.count(key) >= minimum,
+                `conformance case count for ${key} must be at least ${minimum.toString()}`
             );
         }
+        assert.ok(
+            ledger.count("total") >= REQUIRED_MINIMUM_TOTAL,
+            `conformance total must be at least ${REQUIRED_MINIMUM_TOTAL.toString()}`
+        );
 
         const counts: Record<string, number> = {};
         for (const key of [...REQUIRED_SECTION_COUNTS, ...REQUIRED_ORACLE_COUNTS, "total"]) {

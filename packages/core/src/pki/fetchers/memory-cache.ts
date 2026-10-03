@@ -1,3 +1,4 @@
+import { TimestampError, TimestampErrorCode } from "../../types.js";
 import { bytesToHex } from "../../utils.js";
 import type { ValidationCache } from "../validation-types.js";
 
@@ -22,11 +23,20 @@ export const DEFAULT_VALIDATION_CACHE_RETENTION_MS = 300000;
  * optional; omitted fields take the `DEFAULT_VALIDATION_CACHE_*` values.
  */
 export interface InMemoryValidationCacheOptions {
-    /** Maximum retained entries; the oldest entry is evicted first. */
+    /**
+     * Maximum retained entries; the oldest entry is evicted first.
+     * Must be an integer >= 0; zero retains nothing.
+     */
     maxEntries?: number;
-    /** Maximum retained response bytes; oldest entries are evicted first. */
+    /**
+     * Maximum retained response bytes; oldest entries are evicted first.
+     * Must be an integer >= 0; zero retains only empty responses.
+     */
     maxTotalBytes?: number;
-    /** Entry retention in milliseconds; expired entries miss. */
+    /**
+     * Entry retention in milliseconds; expired entries miss.
+     * Must be a finite number >= 0; zero expires entries immediately.
+     */
     retentionMs?: number;
 }
 
@@ -55,9 +65,34 @@ export class InMemoryValidationCache implements ValidationCache {
     private readonly retentionMs: number;
 
     constructor(options: InMemoryValidationCacheOptions = {}) {
-        this.maxEntries = options.maxEntries ?? DEFAULT_VALIDATION_CACHE_MAX_ENTRIES;
-        this.maxTotalBytes = options.maxTotalBytes ?? DEFAULT_VALIDATION_CACHE_MAX_TOTAL_BYTES;
-        this.retentionMs = options.retentionMs ?? DEFAULT_VALIDATION_CACHE_RETENTION_MS;
+        // Non-finite limits silently disable eviction (NaN comparisons
+        // never evict, infinite retention never expires), so reject them
+        // at construction like the operation-budget limits (sol-pr85 M1).
+        // Invalid values throw; they are never normalized.
+        const maxEntries = options.maxEntries ?? DEFAULT_VALIDATION_CACHE_MAX_ENTRIES;
+        if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                `Invalid cache maxEntries ${String(maxEntries)}: integer >= 0`
+            );
+        }
+        const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_VALIDATION_CACHE_MAX_TOTAL_BYTES;
+        if (!Number.isSafeInteger(maxTotalBytes) || maxTotalBytes < 0) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                `Invalid cache maxTotalBytes ${String(maxTotalBytes)}: integer >= 0`
+            );
+        }
+        const retentionMs = options.retentionMs ?? DEFAULT_VALIDATION_CACHE_RETENTION_MS;
+        if (!Number.isFinite(retentionMs) || retentionMs < 0) {
+            throw new TimestampError(
+                TimestampErrorCode.INVALID_ARGUMENT,
+                `Invalid cache retentionMs ${String(retentionMs)}: finite number >= 0`
+            );
+        }
+        this.maxEntries = maxEntries;
+        this.maxTotalBytes = maxTotalBytes;
+        this.retentionMs = retentionMs;
     }
 
     getOCSP(url: string, request: Uint8Array): Uint8Array | null {
