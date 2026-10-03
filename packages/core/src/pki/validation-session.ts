@@ -13,7 +13,7 @@ import { DefaultFetcher } from "./fetchers/default-fetcher.js";
 import { InMemoryValidationCache } from "./fetchers/memory-cache.js";
 import { createOCSPRequest, getOCSPURI, parseOCSPResponse } from "./ocsp-utils.js";
 import { validateOCSPEvidence } from "./ocsp-validation.js";
-import { validateCRLEvidence } from "./crl-validation.js";
+import { isCrlNextUpdatePassed, validateCRLEvidence } from "./crl-validation.js";
 import { getCRLDistributionPoints } from "./crl-utils.js";
 import { parseCRLInfo } from "./crl-client.js";
 import { certificatesByteEqual, resolveVerifiedIssuer, verifyIssuance } from "./cert-utils.js";
@@ -694,13 +694,28 @@ export class ValidationSession {
     }
 
     /**
-     * Structural usability check for cached CRL bytes. Rejects poisoned
-     * entries; passing it authenticates nothing (every served CRL is
-     * authenticated after retrieval).
+     * Usability check for cached CRL bytes. Rejects poisoned entries and
+     * entries whose nextUpdate has passed the frozen check date (using
+     * the evaluator's own staleness predicate, so both agree); those
+     * take the once-refetch path in case the responder has rotated
+     * since. Passing it authenticates nothing (every served CRL is
+     * authenticated after retrieval), and other evaluator rejections
+     * (missing nextUpdate, bad signature, scope) stay terminal: a
+     * refetch cannot change a responder-profile verdict (sol-pr85 M2).
      */
-    private isUsableCachedCRL(crl: Uint8Array): boolean {
+    private isUsableCachedCRL(crl: Uint8Array, checkMs: number, skewMs: number): boolean {
         try {
-            return parseCRLInfo(crl).parsed;
+            const info = parseCRLInfo(crl);
+            if (!info.parsed) {
+                return false;
+            }
+            if (
+                info.nextUpdate !== undefined &&
+                isCrlNextUpdatePassed(info.nextUpdate, checkMs, skewMs)
+            ) {
+                return false;
+            }
+            return true;
         } catch {
             return false;
         }
@@ -758,7 +773,13 @@ export class ValidationSession {
         if (cached) {
             // Elapsed exhaustion refuses even free cache hits (see the
             // OCSP site).
-            if (this.isUsableCachedCRL(cached)) {
+            if (
+                this.isUsableCachedCRL(
+                    cached,
+                    budget.checkTime.getTime(),
+                    this.options.clockSkewMs
+                )
+            ) {
                 if (budget.isElapsed()) throw budget.exhaustionError();
                 return cached;
             }

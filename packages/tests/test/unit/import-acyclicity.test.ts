@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as ts from "typescript";
 
 // Audit S1: `src/index.ts` <-> `src/pdf/archive.ts` used to import each
 // other at value level (index re-exports archiveTimestamp; archive called
@@ -31,37 +32,84 @@ function coreSources(): string[] {
     return files.sort();
 }
 
-// True when an import/export clause carries at least one runtime binding.
-// `import type ...` / `export type ...` and all-inline-type braces are
-// erased, so they contribute no runtime graph edge.
-export function clauseHasValueBinding(clause: string): boolean {
-    if (/^\s*type[\s{]/.exec(clause) !== null) return false;
-    const braced = /\{([\s\S]{0,2000})\}/.exec(clause);
-    if (braced?.[1] === undefined) return clause.trim().length > 0;
-    // A default binding before the braces (e.g. `Foo` in
-    // `Foo, { type Bar }`) is a runtime binding on its own.
-    const beforeBraces = clause.slice(0, braced.index).replace(",", "").trim();
-    if (beforeBraces.length > 0) return true;
-    return braced[1]
-        .split(",")
-        .map((specifier) => specifier.trim())
-        .some((specifier) => specifier.length > 0 && /^(type|typeof)\s/.exec(specifier) === null);
+// True when an import declaration carries a runtime edge. Side-effect
+// imports (`import "./x.js"`, `import {} from "./x.js"`) evaluate the
+// target module, so they count. `import type` and all-inline-type
+// braces are erased and contribute no edge.
+function isValueImport(node: ts.ImportDeclaration): boolean {
+    const clause = node.importClause;
+    if (clause === undefined) return true;
+    // `isTypeOnly` is deprecated in favor of `phaseModifier`, but the
+    // tests' TypeScript 6.0.2 runtime never populates `phaseModifier`,
+    // so the deprecated read is the correct one here.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    if (clause.isTypeOnly) return false;
+    // A default binding (`Foo` in `Foo, { type Bar }`) is a runtime
+    // binding on its own.
+    if (clause.name !== undefined) return true;
+    const bindings = clause.namedBindings;
+    if (bindings === undefined) return true;
+    if (ts.isNamespaceImport(bindings)) return true;
+    if (bindings.elements.length === 0) return true;
+    return bindings.elements.some((element) => !element.isTypeOnly);
+}
+
+// True when a re-export declaration carries a runtime edge. `export
+// *`, `export {}`, and any non-type-only specifier load the target;
+// `export type` and all-inline-type braces are erased.
+function isValueReexport(node: ts.ExportDeclaration): boolean {
+    if (node.moduleSpecifier === undefined) return false;
+    if (node.isTypeOnly) return false;
+    const clause = node.exportClause;
+    if (clause === undefined) return true;
+    if (!ts.isNamedExports(clause)) return true;
+    if (clause.elements.length === 0) return true;
+    return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+function edgeTarget(
+    specifier: string,
+    sourcePath: string,
+    knownFiles: Set<string>,
+    targets: string[]
+): void {
+    if (!specifier.endsWith(".js")) return;
+    const resolved = resolve(dirname(sourcePath), specifier.slice(0, -3) + ".ts");
+    if (knownFiles.has(resolved)) targets.push(resolved);
+}
+
+// Value-level relative targets of one source text, resolved to paths.
+// Parsed with the TypeScript parser (not a line regex) so side-effect
+// imports, indented statements, and inline `type` specifiers all
+// classify correctly (sol-finalgap M2).
+export function valueImportTargetsInText(
+    text: string,
+    sourcePath: string,
+    knownFiles: Set<string>
+): string[] {
+    const source = ts.createSourceFile(sourcePath, text, ts.ScriptTarget.Latest, true);
+    const targets: string[] = [];
+    for (const statement of source.statements) {
+        if (ts.isImportDeclaration(statement)) {
+            if (!isValueImport(statement)) continue;
+            const specifier = statement.moduleSpecifier;
+            if (ts.isStringLiteral(specifier) && specifier.text.startsWith(".")) {
+                edgeTarget(specifier.text, sourcePath, knownFiles, targets);
+            }
+        } else if (ts.isExportDeclaration(statement)) {
+            if (!isValueReexport(statement)) continue;
+            const specifier = statement.moduleSpecifier;
+            if (specifier !== undefined && ts.isStringLiteral(specifier) && specifier.text.startsWith(".")) {
+                edgeTarget(specifier.text, sourcePath, knownFiles, targets);
+            }
+        }
+    }
+    return targets;
 }
 
 // Value-level relative targets of one source file, resolved to paths.
 export function valueImportTargets(sourcePath: string, knownFiles: Set<string>): string[] {
-    const text = readFileSync(sourcePath, "utf8");
-    const targets: string[] = [];
-    const statement = /^(?:import|export)\b([^;]{1,2000}?)\bfrom\s{1,10}(["'])(\.[^"']{1,200})\2/gm;
-    for (const match of text.matchAll(statement)) {
-        const clause = match[1] ?? "";
-        const specifier = match[3] ?? "";
-        if (!clauseHasValueBinding(clause)) continue;
-        if (!specifier.endsWith(".js")) continue;
-        const resolved = resolve(dirname(sourcePath), specifier.slice(0, -3) + ".ts");
-        if (knownFiles.has(resolved)) targets.push(resolved);
-    }
-    return targets;
+    return valueImportTargetsInText(readFileSync(sourcePath, "utf8"), sourcePath, knownFiles);
 }
 
 // A cycle path through `entry` (entry listed first and last), or undefined
@@ -94,20 +142,46 @@ export function findCycleThroughEntry(
 }
 
 describe("core import acyclicity (S1)", () => {
+    const FIXTURE_SOURCE = "/repo/core/src/a.ts";
+    const FIXTURE_TARGET = "/repo/core/src/b.ts";
+    const FIXTURE_KNOWN = new Set([FIXTURE_SOURCE, FIXTURE_TARGET]);
+
+    function fixtureTargets(text: string): string[] {
+        return valueImportTargetsInText(text, FIXTURE_SOURCE, FIXTURE_KNOWN);
+    }
+
     it("classifies value vs type-only clauses", () => {
-        expect(clauseHasValueBinding("{ timestampPdf }")).toBe(true);
-        expect(clauseHasValueBinding("{ type TimestampOptions }")).toBe(false);
-        expect(clauseHasValueBinding("{ TimestampError, type TSAConfig }")).toBe(true);
-        expect(clauseHasValueBinding("type { TrustStore }")).toBe(false);
-        expect(clauseHasValueBinding("* as pkijs")).toBe(true);
-        expect(clauseHasValueBinding("*")).toBe(true);
-        expect(clauseHasValueBinding("PDFDocument")).toBe(true);
+        expect(fixtureTargets('import { timestampPdf } from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('import { type T } from "./b.js";')).toEqual([]);
+        expect(fixtureTargets('import { E, type T } from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('import type { T } from "./b.js";')).toEqual([]);
+        expect(fixtureTargets('import * as ns from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('import D from "./b.js";')).toEqual([FIXTURE_TARGET]);
         // A default value binding keeps the edge even when every named
-        // specifier is type-only (M1: `Foo, { type Bar }` used to read false).
-        expect(clauseHasValueBinding("Foo, { type Bar }")).toBe(true);
-        expect(clauseHasValueBinding("Foo, { Bar, type Baz }")).toBe(true);
+        // specifier is type-only.
+        expect(fixtureTargets('import D, { type T } from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('import D, { E, type T } from "./b.js";')).toEqual([FIXTURE_TARGET]);
         // `import type` with a default binding is still type-only.
-        expect(clauseHasValueBinding("type Foo")).toBe(false);
+        expect(fixtureTargets('import type D from "./b.js";')).toEqual([]);
+        expect(fixtureTargets('export { E } from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('export { type T } from "./b.js";')).toEqual([]);
+        expect(fixtureTargets('export * from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('export type { T } from "./b.js";')).toEqual([]);
+        // Non-relative and extensionless specifiers are out of scope.
+        expect(fixtureTargets('import { E } from "pkijs";')).toEqual([]);
+        expect(fixtureTargets('import { E } from "./b";')).toEqual([]);
+    });
+
+    it("counts side-effect imports as edges (sol-finalgap M2)", () => {
+        expect(fixtureTargets('import "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('import {} from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('export {} from "./b.js";')).toEqual([FIXTURE_TARGET]);
+    });
+
+    it("counts indented imports and re-exports as edges (sol-finalgap M2)", () => {
+        expect(fixtureTargets('    import { E } from "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('\timport "./b.js";')).toEqual([FIXTURE_TARGET]);
+        expect(fixtureTargets('  export { E } from "./b.js";')).toEqual([FIXTURE_TARGET]);
     });
 
     it("finds entry cycles on synthetic graphs", () => {

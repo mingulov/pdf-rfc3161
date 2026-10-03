@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { InMemoryValidationCache } from "../../../core/src/pki/fetchers/memory-cache.js";
+import { TimestampError, TimestampErrorCode } from "../../../core/src/types.js";
 import { ValidationSession } from "../../../core/src/pki/validation-session.js";
 import { createOCSPRequest } from "../../../core/src/pki/ocsp-utils.js";
 import type {
@@ -11,6 +12,11 @@ import type {
 import { toArrayBuffer } from "../../../core/src/utils.js";
 import { generateRSAKeyPair, importKeyForCertificate } from "../utils/crypto.js";
 import { createCrlFixture, createOcspResponseCandidate } from "../fixtures/revocation-material.js";
+import {
+    createSignedCRL,
+    createTestCA,
+    createTestLeaf,
+} from "../fixtures/signed-revocation-material.js";
 
 // T05: the validation cache uses exact byte identity (full request bytes
 // scoped by exact URL), copies bytes on insertion and retrieval, and honors
@@ -351,8 +357,15 @@ describe("ValidationSession cache revalidation (T05)", () => {
         const { leaf } = await createSignedPair({ crlUrl: CRL_URL });
         const cache = new InMemoryValidationCache();
         const fetcher = recordingFetcher({ crl: createCrlFixture({ crlNumber: 3 }) });
+        // The fixture CRL spans 2024-01-01..2024-02-01; freeze the check
+        // date inside so the entry is genuinely live (a wall-clock check
+        // date makes it stale, which now refetches once by design).
         for (let index = 0; index < 2; index++) {
-            const session = new ValidationSession({ cache, fetcher });
+            const session = new ValidationSession({
+                cache,
+                fetcher,
+                checkDate: new Date("2024-01-15T00:00:00Z"),
+            });
             session.queueCertificate(leaf);
             await session.validateAll();
         }
@@ -369,6 +382,141 @@ describe("ValidationSession cache revalidation (T05)", () => {
             await session.validateAll();
         }
         expect(fetcher.crlCalls).toBe(2);
+    });
+
+    it("refetches once when a custom cache serves a stale CRL (sol-pr85 M2)", async () => {
+        const ca = await createTestCA("M2 Stale CA");
+        const leaf = await createTestLeaf(ca, { crlUrls: [CRL_URL] });
+        const checkDate = new Date("2026-06-01T00:00:00Z");
+        const stale = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-01-01T00:00:00Z"),
+            nextUpdate: new Date("2026-02-01T00:00:00Z"),
+        });
+        const fresh = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-05-01T00:00:00Z"),
+            nextUpdate: new Date("2026-12-01T00:00:00Z"),
+        });
+        let stored: Uint8Array | undefined;
+        const cache: ValidationCache = {
+            getOCSP: () => null,
+            setOCSP: () => {},
+            getCRL: () => stale,
+            setCRL: (_url: string, response: Uint8Array) => {
+                stored = response;
+            },
+            clear: () => {},
+        };
+        const fetcher = recordingFetcher({ crl: fresh });
+        const session = new ValidationSession({ cache, fetcher, checkDate, clockSkewMs: 60000 });
+        session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+        const [result] = await session.validateAll();
+        expect(fetcher.crlCalls).toBe(1);
+        expect(result?.sources).toEqual(["CRL"]);
+        expect(result?.revocationStatus).toBe("good");
+        expect(stored).toEqual(fresh);
+    });
+
+    it("refetches only once when the responder CRL is also stale", async () => {
+        const ca = await createTestCA("M2 Double Stale CA");
+        const leaf = await createTestLeaf(ca, { crlUrls: [CRL_URL] });
+        const checkDate = new Date("2026-06-01T00:00:00Z");
+        const stale = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-01-01T00:00:00Z"),
+            nextUpdate: new Date("2026-02-01T00:00:00Z"),
+        });
+        const cache: ValidationCache = {
+            getOCSP: () => null,
+            setOCSP: () => {},
+            getCRL: () => stale,
+            setCRL: () => {},
+            clear: () => {},
+        };
+        const fetcher = recordingFetcher({ crl: stale });
+        const session = new ValidationSession({ cache, fetcher, checkDate, clockSkewMs: 60000 });
+        session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+        const [result] = await session.validateAll();
+        expect(fetcher.crlCalls).toBe(1);
+        expect(result?.revocationStatus).toBe("unknown");
+        expect((result?.errors ?? []).join("\n")).toContain("stale");
+    });
+
+    it("serves a cached CRL whose nextUpdate is exactly at the freshness edge", async () => {
+        const ca = await createTestCA("M2 Edge CA");
+        const leaf = await createTestLeaf(ca, { crlUrls: [CRL_URL] });
+        const checkDate = new Date("2026-06-01T00:00:00Z");
+        // Inclusive boundary: checkMs - skewMs == nextMs is fresh.
+        const edge = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-05-01T00:00:00Z"),
+            nextUpdate: new Date(checkDate.getTime() - 60000),
+        });
+        const cache: ValidationCache = {
+            getOCSP: () => null,
+            setOCSP: () => {},
+            getCRL: () => edge,
+            setCRL: () => {},
+            clear: () => {},
+        };
+        const fetcher = recordingFetcher({ crl: edge });
+        const session = new ValidationSession({ cache, fetcher, checkDate, clockSkewMs: 60000 });
+        session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+        const [result] = await session.validateAll();
+        expect(fetcher.crlCalls).toBe(0);
+        expect(result?.revocationStatus).toBe("good");
+    });
+
+    it("refetches a cached CRL whose nextUpdate is one millisecond past the edge", async () => {
+        const ca = await createTestCA("M2 Past Edge CA");
+        const leaf = await createTestLeaf(ca, { crlUrls: [CRL_URL] });
+        const checkDate = new Date("2026-06-01T00:00:00Z");
+        const pastEdge = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-05-01T00:00:00Z"),
+            nextUpdate: new Date(checkDate.getTime() - 60001),
+        });
+        const fresh = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-05-01T00:00:00Z"),
+            nextUpdate: new Date("2026-12-01T00:00:00Z"),
+        });
+        const cache: ValidationCache = {
+            getOCSP: () => null,
+            setOCSP: () => {},
+            getCRL: () => pastEdge,
+            setCRL: () => {},
+            clear: () => {},
+        };
+        const fetcher = recordingFetcher({ crl: fresh });
+        const session = new ValidationSession({ cache, fetcher, checkDate, clockSkewMs: 60000 });
+        session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+        const [result] = await session.validateAll();
+        expect(fetcher.crlCalls).toBe(1);
+        expect(result?.revocationStatus).toBe("good");
+    });
+
+    it("serves a cached CRL without nextUpdate instead of refetching it", async () => {
+        const ca = await createTestCA("M2 No NextUpdate CA");
+        const leaf = await createTestLeaf(ca, { crlUrls: [CRL_URL] });
+        const checkDate = new Date("2026-06-01T00:00:00Z");
+        const unbounded = await createSignedCRL(ca, {
+            thisUpdate: new Date("2026-05-01T00:00:00Z"),
+        });
+        const cache: ValidationCache = {
+            getOCSP: () => null,
+            setOCSP: () => {},
+            getCRL: () => unbounded,
+            setCRL: () => {},
+            clear: () => {},
+        };
+        const fetcher = recordingFetcher({ crl: unbounded });
+        const session = new ValidationSession({ cache, fetcher, checkDate, clockSkewMs: 60000 });
+        session.queueCertificate(leaf.cert, { issuer: ca.cert });
+
+        const [result] = await session.validateAll();
+        expect(fetcher.crlCalls).toBe(0);
+        expect(result?.revocationStatus).toBe("unknown");
+        expect((result?.errors ?? []).join("\n")).toContain("no nextUpdate");
     });
 });
 
@@ -411,5 +559,56 @@ describe("InMemoryValidationCache Buffer copy guarantees (T05 fix round 2)", () 
         if (first) first[0] = 0x09;
         const second = cache.getCRL(CRL_URL);
         expect(second ? new Uint8Array(second) : second).toEqual(new Uint8Array([7, 8, 9]));
+    });
+});
+
+describe("InMemoryValidationCache constructor limits (sol-pr85 M1)", () => {
+    function constructThrows(options: Record<string, number>): TimestampError {
+        try {
+            new InMemoryValidationCache(options);
+        } catch (error) {
+            expect(error).toBeInstanceOf(TimestampError);
+            const coded = error as TimestampError;
+            expect(coded.code).toBe(TimestampErrorCode.INVALID_ARGUMENT);
+            return coded;
+        }
+        throw new Error("expected the constructor to reject invalid limits");
+    }
+
+    it.each([
+        [{ maxEntries: Number.NaN }, "maxEntries"],
+        [{ maxEntries: 1.5 }, "maxEntries"],
+        [{ maxEntries: -1 }, "maxEntries"],
+        [{ maxEntries: Number.POSITIVE_INFINITY }, "maxEntries"],
+        [{ maxTotalBytes: Number.NaN }, "maxTotalBytes"],
+        [{ maxTotalBytes: 2.5 }, "maxTotalBytes"],
+        [{ maxTotalBytes: -100 }, "maxTotalBytes"],
+        [{ maxTotalBytes: Number.POSITIVE_INFINITY }, "maxTotalBytes"],
+        [{ retentionMs: Number.NaN }, "retentionMs"],
+        [{ retentionMs: -1 }, "retentionMs"],
+        [{ retentionMs: Number.POSITIVE_INFINITY }, "retentionMs"],
+    ])("rejects %o without normalizing", (options, field) => {
+        const error = constructThrows(options);
+        expect(error.message).toContain(`Invalid cache ${field}`);
+    });
+
+    it("retains nothing with maxEntries 0", () => {
+        const cache = new InMemoryValidationCache({ maxEntries: 0 });
+        cache.setCRL(CRL_URL, new Uint8Array([1, 2, 3]));
+        expect(cache.getCRL(CRL_URL)).toBeNull();
+    });
+
+    it("retains only empty responses with maxTotalBytes 0", () => {
+        const cache = new InMemoryValidationCache({ maxTotalBytes: 0 });
+        cache.setCRL(CRL_URL, new Uint8Array([1, 2, 3]));
+        expect(cache.getCRL(CRL_URL)).toBeNull();
+        cache.setCRL(CRL_URL, new Uint8Array(0));
+        expect(cache.getCRL(CRL_URL)).toEqual(new Uint8Array(0));
+    });
+
+    it("expires entries immediately with retentionMs 0", () => {
+        const cache = new InMemoryValidationCache({ retentionMs: 0 });
+        cache.setCRL(CRL_URL, new Uint8Array([1, 2, 3]));
+        expect(cache.getCRL(CRL_URL)).toBeNull();
     });
 });

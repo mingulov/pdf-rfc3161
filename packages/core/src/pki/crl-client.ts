@@ -33,6 +33,11 @@ export interface CRLInfo {
     crlNumber?: number;
     /** Delta CRL number if present */
     deltaCrlNumber?: number;
+    /**
+     * TBSCertList nextUpdate when the CRL parsed and carries one; feeds
+     * the session's cached-entry staleness check.
+     */
+    nextUpdate?: Date;
 }
 
 /**
@@ -87,13 +92,20 @@ export function parseCRLInfo(crlBytes: Uint8Array): CRLInfo {
             }
         }
 
-        return {
+        const info: CRLInfo = {
             crl: crlBytes,
             parsed: true,
             isDelta,
             crlNumber,
             deltaCrlNumber,
         };
+        // nextUpdate feeds the session's cached-entry staleness check
+        // (M2). A throw here fails closed as unparsed through the catch
+        // below.
+        if (crl.nextUpdate !== undefined) {
+            info.nextUpdate = crl.nextUpdate.value;
+        }
+        return info;
     } catch {
         return { crl: crlBytes, parsed: false, isDelta: false };
     }

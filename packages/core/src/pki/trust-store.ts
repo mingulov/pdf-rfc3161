@@ -29,10 +29,11 @@ function parseTrustStoreCertificate(bytes: Uint8Array): pkijs.Certificate | unde
  *
  * NOTE: chain validation is caller-owned trust policy, not a default. RFC 3161
  * timestamp verification without a trust store checks cryptographic integrity of the
- * timestamp token itself, not the TSA's certificate chain:
- * 1. TSA certificates are typically validated by the TLS connection to the TSA
- * 2. Trust validation requirements vary significantly between jurisdictions (e.g., eIDAS, FIPS)
- * 3. Users may have custom trust requirements (private PKI, specific CAs, etc.)
+ * timestamp token itself, not the TSA's certificate chain. (The TLS connection
+ * to a TSA authenticates only the endpoint's TLS certificate; it says nothing
+ * about the token signer's chain.)
+ * 1. Trust validation requirements vary significantly between jurisdictions (e.g., eIDAS, FIPS)
+ * 2. Users may have custom trust requirements (private PKI, specific CAs, etc.)
  *
  * If you need chain validation, you can:
  * 1. Use the TrustStore API directly: `trustStore.verifyChain(chain)`

@@ -51,14 +51,19 @@ export default defineConfig({
             // from index.ts to timestamp-pdf.ts (audit S1); the
             // per-file floor follows the code at the same value.
             // index.ts is now a branchless barrel and needs no pin.
+            // sol-pr85 fix round 2026-10-03, vitest 5.0.2 on Node
+            // 24.21.0, suite 2146 passed / 51 skipped / 2 todo:
+            // statements 90.33, branches 85.52, functions 96.73,
+            // lines 92.31; validation-session lines 90.9 / branches
+            // 88.06; timestamp-pdf branches unchanged at 93.87.
             thresholds: {
-                statements: 90.25,
-                branches: 85.39,
-                functions: 96.72,
-                lines: 92.24,
+                statements: 90.33,
+                branches: 85.52,
+                functions: 96.73,
+                lines: 92.31,
                 "../core/src/pki/validation-session.ts": {
-                    lines: 90.72,
-                    branches: 87.64,
+                    lines: 90.9,
+                    branches: 88.06,
                 },
                 "../core/src/timestamp-pdf.ts": {
                     branches: 93.87,
