@@ -946,10 +946,24 @@ describe("TSTInfo profile (T11/R19/S19)", () => {
 // TimestampError, and SKI selection fails closed (no match) instead of
 // letting the decode throw escape.
 describe("corrupted GeneralizedTime normalization (T11/0x18)", () => {
+    // GeneralizedTime content shape: "YYYYMMDDHHMMSSZ" (14 ASCII
+    // digits plus "Z"). Random signature bytes can contain an
+    // accidental 0x18 0x0f pair (~2% per fixture); requiring the
+    // content shape keeps the locator on the real TSTInfo genTime.
+    function isGeneralizedTimeShape(token: Uint8Array, at: number): boolean {
+        for (let offset = 0; offset < 14; offset += 1) {
+            const byte = token[at + offset];
+            if (byte === undefined || byte < 0x30 || byte > 0x39) return false;
+        }
+        return token[at + 14] === 0x5a;
+    }
+
     function corruptOnlyGeneralizedTime(token: Uint8Array): Uint8Array {
         const hits: number[] = [];
         for (let at = 0; at + 17 <= token.length; at++) {
-            if (token[at] === 0x18 && token[at + 1] === 0x0f) hits.push(at);
+            if (token[at] === 0x18 && token[at + 1] === 0x0f && isGeneralizedTimeShape(token, at + 2)) {
+                hits.push(at);
+            }
         }
         // The fixture token carries exactly one GeneralizedTime (the
         // TSTInfo genTime); anything else means the harness is stale.
@@ -970,6 +984,57 @@ describe("corrupted GeneralizedTime normalization (T11/0x18)", () => {
             return;
         }
         throw new Error("expected the strict parser to reject a corrupted genTime");
+    });
+
+    it("locates the real genTime past accidental 0x18 0x0f byte pairs", () => {
+        const token = new Uint8Array([
+            ...new Array<number>(10).fill(0xaa),
+            0x18,
+            0x0f,
+            ...new TextEncoder().encode("20300101000000Z"),
+            ...new Array<number>(5).fill(0xbb),
+            // Accidental pair in would-be signature bytes: non-digit content.
+            0x18,
+            0x0f,
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06,
+            0x07,
+            0x08,
+            0x09,
+            0x0a,
+            0x0b,
+            0x0c,
+            0x0d,
+            0x0e,
+            0x0f,
+            ...new Array<number>(5).fill(0xcc),
+            // Accidental pair with 14 digits but no trailing Z.
+            0x18,
+            0x0f,
+            ...new TextEncoder().encode("20300101000000"),
+            0x00,
+            ...new Array<number>(10).fill(0xdd),
+        ]);
+        const corrupted = corruptOnlyGeneralizedTime(token);
+        expect(corrupted.slice(12, 27)).toEqual(new TextEncoder().encode("2060010100000!Z"));
+        expect(corrupted.slice(0, 12)).toEqual(token.slice(0, 12));
+        expect(corrupted.slice(27)).toEqual(token.slice(27));
+    });
+
+    it("still fails closed when no GeneralizedTime-shaped pair exists", () => {
+        const token = new Uint8Array([
+            ...new Array<number>(40).fill(0xaa),
+            0x18,
+            0x0f,
+            0x01,
+            0x02,
+            ...new Array<number>(40).fill(0xbb),
+        ]);
+        expect(() => corruptOnlyGeneralizedTime(token)).toThrow();
     });
 
     it("selects no signer (coded) when the SKI extension is undecodable", () => {
