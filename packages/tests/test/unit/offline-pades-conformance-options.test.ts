@@ -55,4 +55,21 @@ describe("offline interoperability artifact options", () => {
         expect(result.status).toBe(2);
         expect(commandOutput(result)).toContain("Output directory must not already exist");
     });
+
+    it("ignores the pnpm -- separator before --help", () => {
+        const result = runScript(["--", "--help"]);
+
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(0);
+        expect(commandOutput(result)).toContain("Usage:");
+    });
+
+    it("ignores the pnpm -- separator before --output-dir", () => {
+        const existingDirectory = temporaryDirectory();
+        const result = runScript(["--", "--output-dir", existingDirectory]);
+
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(2);
+        expect(commandOutput(result)).toContain("Output directory must not already exist");
+    });
 });

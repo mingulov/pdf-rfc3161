@@ -14,3 +14,6 @@ overrides:
   '@typescript-eslint/types': 8.71.0
   eslint: 10.11.0
   typescript-eslint: 8.71.0
+  # @stryker-mutator 10.0.0 (latest) pulls qs 6.15.1 via typed-rest-client;
+  # force the patched 6.16.0 so `pnpm audit --audit-level=moderate` passes.
+  qs: 6.16.0

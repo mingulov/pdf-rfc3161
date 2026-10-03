@@ -2982,7 +2982,10 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
 }
 
 async function main(): Promise<void> {
-    const options = parseArguments(process.argv.slice(2));
+    // pnpm forwards its own `--` separator to the script (as in the
+    // `test:interoperability -- --output-dir ...` CI invocation); drop it
+    // the same way the packed/browser consumer runners do.
+    const options = parseArguments(process.argv.slice(2).filter((argument) => argument !== "--"));
     if (options.help) {
         printHelp();
         return;
