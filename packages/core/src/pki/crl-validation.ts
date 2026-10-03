@@ -84,6 +84,16 @@ const OID_RSA_ENCRYPTION = "1.2.840.113549.1.1.1";
 const OID_EC_PUBLIC_KEY = "1.2.840.10045.2.1";
 const OID_RSASSA_PSS = "1.2.840.113549.1.1.10";
 
+/**
+ * Shared unknown-status diagnostics for malformed CRL scoping extensions.
+ * Each is returned from three nearby sites; the single spelling keeps the
+ * pinned wording identical everywhere it surfaces.
+ */
+const MALFORMED_AKI_MESSAGE =
+    "CRL: CRL authority key identifier is malformed; revocation status unknown";
+const MALFORMED_IDP_MESSAGE =
+    "CRL: CRL issuing distribution point is malformed; revocation status unknown";
+
 /** RSASSA-PKCS1-v1_5 signature OIDs (SHA-1/256/384/512). */
 const RSA_PKCS1V15_SIGNATURE_OIDS: ReadonlySet<string> = new Set([
     "1.2.840.113549.1.1.5",
@@ -638,7 +648,7 @@ function checkCrlNumber(extension: pkijs.Extension, budget: DerDecodeBudget): st
  * when the framing is complete.
  */
 function checkAkiFraming(parsed: asn1js.BaseBlock): string | null {
-    const malformed = "CRL: CRL authority key identifier is malformed; revocation status unknown";
+    const malformed = MALFORMED_AKI_MESSAGE;
     if (!(parsed instanceof asn1js.Sequence)) return malformed;
     let seen = -1;
     for (const member of parsed.valueBlock.value) {
@@ -701,7 +711,7 @@ function checkCrlAuthorityKeyIdentifier(
         const raw = new Uint8Array(extension.extnValue.valueBlock.valueHexView);
         parsed = parseCanonicalDERValue(raw, "CRL authority key identifier", { budget });
     } catch {
-        return "CRL: CRL authority key identifier is malformed; revocation status unknown";
+        return MALFORMED_AKI_MESSAGE;
     }
     const framing = checkAkiFraming(parsed);
     if (framing !== null) return framing;
@@ -709,7 +719,7 @@ function checkCrlAuthorityKeyIdentifier(
     try {
         aki = new pkijs.AuthorityKeyIdentifier({ schema: parsed });
     } catch {
-        return "CRL: CRL authority key identifier is malformed; revocation status unknown";
+        return MALFORMED_AKI_MESSAGE;
     }
     const keyIdentifier = aki.keyIdentifier;
     if (keyIdentifier === undefined) {
@@ -769,12 +779,12 @@ function checkIssuingDistributionPoint(
         const raw = new Uint8Array(extension.extnValue.valueBlock.valueHexView);
         parsed = parseCanonicalDERValue(raw, "CRL issuing distribution point", { budget });
     } catch {
-        return "CRL: CRL issuing distribution point is malformed; revocation status unknown";
+        return MALFORMED_IDP_MESSAGE;
     }
     if (!(parsed instanceof asn1js.Sequence)) {
-        return "CRL: CRL issuing distribution point is malformed; revocation status unknown";
+        return MALFORMED_IDP_MESSAGE;
     }
-    const malformed = "CRL: CRL issuing distribution point is malformed; revocation status unknown";
+    const malformed = MALFORMED_IDP_MESSAGE;
     for (const member of parsed.valueBlock.value) {
         if (member.idBlock.tagClass !== 3) return malformed;
         const tag = member.idBlock.tagNumber;

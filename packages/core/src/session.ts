@@ -152,7 +152,7 @@ export class TimestampSession {
      */
     dispose(): void {
         this.disposed = true;
-        this.pdfBytes = new Uint8Array(0);
+        this.pdfBytes = new Uint8Array();
         this.prepared = null;
         this.currentRequestContext = null;
         this.ltvErrors = [];
