@@ -37,13 +37,13 @@ vi.mock(
     }
 );
 
-vi.mock("../../../core/src/index.js", () => ({
+vi.mock("../../../core/src/timestamp-pdf.js", () => ({
     timestampPdf: vi.fn(),
 }));
 
 import { archiveTimestamp } from "../../../core/src/pdf/archive.js";
 import { extractTimestamps } from "../../../core/src/pdf/extract.js";
-import { timestampPdf } from "../../../core/src/index.js";
+import { timestampPdf } from "../../../core/src/timestamp-pdf.js";
 import type { TimestampOptions } from "../../../core/src/types.js";
 
 async function createPdfWithExistingDssAndVri(): Promise<Uint8Array> {

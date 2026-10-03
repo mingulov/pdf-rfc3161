@@ -1,6 +1,6 @@
 import * as pkijs from "pkijs";
 import * as asn1js from "asn1js";
-import {
+import type {
     CertificateToValidate,
     RevocationDataFetcher,
     RevocationEvidenceResult,

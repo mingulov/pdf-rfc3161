@@ -1,6 +1,8 @@
 // Packs the public packages, installs them into a throwaway consumer, and
 // checks the published contract end to end: tarball contents, ESM/CJS/type
-// resolution, a browser bundle, the CLI binary, and one real timestamping call.
+// resolution, a browser bundle, the CLI binary, one real timestamping call,
+// one real archive renewal through each entry load order, and a tree-shaken
+// bundle that timestamps and verifies while dropping unused APIs.
 //
 // Usage: test:package [-- <core.tgz> <cli.tgz>] [--receipt <path>]. Without
 // tarball arguments both packages are packed fresh; with them, the exact
@@ -88,6 +90,8 @@ interface InstalledVersions {
     coreVersion: string;
     cliVersion: string;
     timestampBehavior: string;
+    archiveBothOrders: string;
+    treeShake: string;
 }
 
 interface PackageManifest {
@@ -228,6 +232,7 @@ function writeConsumerPackage(consumerDirectory: string, artifacts: PackedArtifa
                 },
                 devDependencies: {
                     "@types/node": "25.9.1",
+                    esbuild: "0.28.2",
                     typescript: "5.9.3",
                     vite: "8.2.2",
                 },
@@ -449,6 +454,253 @@ function writeTimestampCheck(consumerDirectory: string, inputPath: string): stri
     return checkPath;
 }
 
+/**
+ * Writes the consumer-side archive check. It runs inside the temporary
+ * consumer so it exercises the installed tarball, timestamping once and
+ * then renewing via `archiveTimestamp` -- the audit-S1 path that used to
+ * close the index <-> archive value cycle.
+ *
+ * ARCHIVE_ORDER selects which entry format loads first in the process:
+ * "esm-first" imports `pdf-rfc3161` before requiring it, "cjs-first"
+ * requires before importing. The behavior flow runs through the
+ * first-loaded namespace while both namespaces are asserted usable, so
+ * the two orders together prove packed ESM/CJS cycle safety.
+ */
+function writeArchiveCheck(consumerDirectory: string, inputPath: string): string {
+    const checkPath = join(consumerDirectory, "check-archive.mjs");
+    writeFileSync(
+        checkPath,
+        [
+            'import { spawnSync } from "node:child_process";',
+            'import { readFileSync, writeFileSync } from "node:fs";',
+            'import { join } from "node:path";',
+            "",
+            "const tsaDirectory = process.env.TSA_DIRECTORY;",
+            "const tsaConfig = process.env.TSA_CONFIG;",
+            "const order = process.env.ARCHIVE_ORDER;",
+            "const input = new Uint8Array(readFileSync(" + JSON.stringify(inputPath) + "));",
+            "",
+            "let api;",
+            'if (order === "esm-first") {',
+            '    const esm = await import("pdf-rfc3161");',
+            '    const { createRequire } = await import("node:module");',
+            '    const cjs = createRequire(import.meta.url)("pdf-rfc3161");',
+            '    if (typeof cjs.archiveTimestamp !== "function") {',
+            '        throw new Error("CJS namespace unusable after ESM-first load");',
+            "    }",
+            "    api = esm;",
+            '} else if (order === "cjs-first") {',
+            '    const { createRequire } = await import("node:module");',
+            '    const cjs = createRequire(import.meta.url)("pdf-rfc3161");',
+            '    const esm = await import("pdf-rfc3161");',
+            '    if (typeof esm.archiveTimestamp !== "function") {',
+            '        throw new Error("ESM namespace unusable after CJS-first load");',
+            "    }",
+            "    api = cjs;",
+            "} else {",
+            '    throw new Error("ARCHIVE_ORDER must be esm-first or cjs-first");',
+            "}",
+            'if (typeof api.archiveTimestamp !== "function") {',
+            '    throw new Error("first-loaded namespace has no archiveTimestamp");',
+            "}",
+            "",
+            "globalThis.fetch = async (_url, options) => {",
+            "    if (!(options?.body instanceof ArrayBuffer)) {",
+            '        throw new Error("expected the TSA request as an ArrayBuffer");',
+            "    }",
+            '    const requestPath = join(tsaDirectory, "packed-consumer-archive.tsq");',
+            '    const responsePath = join(tsaDirectory, "packed-consumer-archive.tsr");',
+            "    writeFileSync(requestPath, new Uint8Array(options.body));",
+            "    const reply = spawnSync(",
+            '        "openssl",',
+            '        ["ts", "-reply", "-queryfile", requestPath, "-config", tsaConfig, "-out", responsePath],',
+            '        { encoding: "utf8" }',
+            "    );",
+            "    if (reply.status !== 0) {",
+            '        throw new Error("openssl ts -reply failed: " + (reply.stderr ?? reply.error?.message));',
+            "    }",
+            "    return new Response(new Uint8Array(readFileSync(responsePath)), {",
+            '        headers: { "content-type": "application/timestamp-reply" },',
+            "    });",
+            "};",
+            "",
+            'const tsa = { url: "http://tsa.invalid/packed-consumer", retry: 0 };',
+            "const first = await api.timestampPdf({ pdf: input, tsa, enableLTV: false });",
+            "if (!(first.pdf instanceof Uint8Array) || first.pdf.length <= input.length) {",
+            '    throw new Error("timestampPdf did not append a revision");',
+            "}",
+            "const renewed = await api.archiveTimestamp({ pdf: first.pdf, tsa });",
+            "if (!(renewed.pdf instanceof Uint8Array) || renewed.pdf.length <= first.pdf.length) {",
+            '    throw new Error("archiveTimestamp did not append a revision");',
+            "}",
+            "const found = await api.extractTimestamps(renewed.pdf);",
+            "if (!Array.isArray(found) || found.length < 2) {",
+            '    throw new Error("renewed PDF does not carry both timestamps");',
+            "}",
+            'if (!found.some((entry) => entry.fieldName === "ArchiveTimestamp")) {',
+            '    throw new Error("renewed PDF has no ArchiveTimestamp field");',
+            "}",
+        ].join("\n"),
+        "utf8"
+    );
+    return checkPath;
+}
+
+const TREE_SHAKE_EXTERNALS = ["pdf-lib-incremental-save", "pkijs", "asn1js"];
+
+// Identifiers that must be absent from a bundle importing only
+// `verifyPdfTimestamps`: archive renewal, the one-call/session signing
+// path, DSS collection, placeholder preparation, the TSA client, and the
+// TimeStampedData envelope API.
+const VERIFY_PROBE_ABSENT = [
+    "ArchiveTimestamp",
+    "calculateOptimalSize",
+    "completeLTVData",
+    "preparePdfForTimestamp",
+    "optimizePlaceholder",
+    "sendTimestampRequest",
+    "createTimeStampedData",
+    "TimestampSession",
+];
+
+// Identifiers that must be absent from a bundle importing only
+// `timestampPdf` + `verifyPdfTimestamps`: renewal, the envelope and CMS
+// profile APIs, and the multi-TSA wrapper.
+const EXECUTABLE_PROBE_ABSENT = [
+    "ArchiveTimestamp",
+    "createTimeStampedData",
+    "validateRFC8933Compliance",
+    "timestampPdfMultiple",
+];
+
+/**
+ * Writes the verify-only tree-shaking probe entry. Bundling it must drop
+ * every signing/renewal/envelope code path from the main entry while
+ * keeping verification working.
+ */
+function writeTreeShakeProbe(consumerDirectory: string): string {
+    const entryPath = join(consumerDirectory, "treeshake-probe.mjs");
+    writeFileSync(
+        entryPath,
+        [
+            'import { verifyPdfTimestamps } from "pdf-rfc3161";',
+            'if (typeof verifyPdfTimestamps !== "function") throw new Error("missing verify export");',
+            "",
+        ].join("\n"),
+        "utf8"
+    );
+    return entryPath;
+}
+
+/**
+ * Writes the executable tree-shaken entry: it timestamps the input PDF
+ * against the fixture TSA and verifies the result. A bundle that cannot
+ * do both end to end proves nothing about the `sideEffects` claim.
+ */
+function writeTreeShakeRun(consumerDirectory: string): string {
+    const entryPath = join(consumerDirectory, "treeshake-run.mjs");
+    writeFileSync(
+        entryPath,
+        [
+            'import { spawnSync } from "node:child_process";',
+            'import { readFileSync, writeFileSync } from "node:fs";',
+            'import { join } from "node:path";',
+            'import { timestampPdf, verifyPdfTimestamps } from "pdf-rfc3161";',
+            "",
+            "const tsaDirectory = process.env.TSA_DIRECTORY;",
+            "const tsaConfig = process.env.TSA_CONFIG;",
+            "const input = new Uint8Array(readFileSync(process.env.INPUT_PDF));",
+            "",
+            "globalThis.fetch = async (_url, options) => {",
+            "    if (!(options?.body instanceof ArrayBuffer)) {",
+            '        throw new Error("expected the TSA request as an ArrayBuffer");',
+            "    }",
+            '    const requestPath = join(tsaDirectory, "packed-consumer-shake.tsq");',
+            '    const responsePath = join(tsaDirectory, "packed-consumer-shake.tsr");',
+            "    writeFileSync(requestPath, new Uint8Array(options.body));",
+            "    const reply = spawnSync(",
+            '        "openssl",',
+            '        ["ts", "-reply", "-queryfile", requestPath, "-config", tsaConfig, "-out", responsePath],',
+            '        { encoding: "utf8" }',
+            "    );",
+            "    if (reply.status !== 0) {",
+            '        throw new Error("openssl ts -reply failed: " + (reply.stderr ?? reply.error?.message));',
+            "    }",
+            "    return new Response(new Uint8Array(readFileSync(responsePath)), {",
+            '        headers: { "content-type": "application/timestamp-reply" },',
+            "    });",
+            "};",
+            "",
+            "const out = await timestampPdf({",
+            "    pdf: input,",
+            '    tsa: { url: "http://tsa.invalid/packed-consumer", retry: 0 },',
+            "    enableLTV: false,",
+            "});",
+            "const found = await verifyPdfTimestamps(out.pdf);",
+            "const first = found[0];",
+            'console.log("TREESHAKE_OK count=" + found.length + " verified=" + String(first?.verified));',
+        ].join("\n"),
+        "utf8"
+    );
+    return entryPath;
+}
+
+function bundleTreeShakeEntry(
+    consumerDirectory: string,
+    entryPath: string,
+    bundleName: string
+): string {
+    const bundlePath = join(consumerDirectory, bundleName);
+    commandSucceeded(
+        runPnpm(
+            PNPM_ENTRYPOINT,
+            [
+                "exec",
+                "esbuild",
+                entryPath,
+                "--bundle",
+                "--platform=node",
+                "--format=esm",
+                ...TREE_SHAKE_EXTERNALS.map((external) => "--external:" + external),
+                "--outfile=" + bundlePath,
+            ],
+            consumerDirectory
+        )
+    );
+    return bundlePath;
+}
+
+function assertTreeShaken(
+    bundlePath: string,
+    fullBytes: number,
+    absent: readonly string[],
+    present: readonly string[]
+): void {
+    const bundleBytes = readFileSync(bundlePath);
+    const text = bundleBytes.toString("utf8");
+    assert.ok(
+        bundleBytes.length < fullBytes,
+        bundlePath +
+            " is " +
+            bundleBytes.length.toString() +
+            " bytes, expected fewer than the full entry (" +
+            fullBytes.toString() +
+            ")"
+    );
+    for (const marker of absent) {
+        assert.ok(
+            !text.includes(marker),
+            `shaken bundle ${bundlePath} retains unused API marker ${marker}`
+        );
+    }
+    for (const marker of present) {
+        assert.ok(
+            text.includes(marker),
+            `shaken bundle ${bundlePath} dropped used API marker ${marker}`
+        );
+    }
+}
+
 function assertResolvedInsideConsumer(consumerDirectory: string, resolvedPath: string): void {
     const consumerRoot = realpathSync(consumerDirectory);
     const relativePath = relative(consumerRoot, realpathSync(resolvedPath));
@@ -485,27 +737,74 @@ async function checkInstalledConsumer(
     // -- skip this one check rather than failing the documented `pnpm
     // test:full` on the very platform the xref fix targets. Never skip in CI.
     let timestampBehavior = "skipped: openssl has no ts subcommand";
+    let archiveBothOrders = "skipped: openssl has no ts subcommand";
+    let treeShake = "skipped: openssl has no ts subcommand";
     if (opensslTimestampAvailable()) {
         const tsaDirectory = join(temporaryDirectory, "tsa");
         mkdirSync(tsaDirectory, { recursive: true });
         const tsa = createLocalTsa(tsaDirectory);
-        const timestampCheck = writeTimestampCheck(
-            consumerDirectory,
-            await writeXrefStreamInput(consumerDirectory)
-        );
-        commandSucceeded(
-            run(process.execPath, [timestampCheck], consumerDirectory, {
-                ...env,
-                TSA_DIRECTORY: tsaDirectory,
-                TSA_CONFIG: tsa.config,
-            })
-        );
+        const tsaEnv = {
+            ...env,
+            TSA_DIRECTORY: tsaDirectory,
+            TSA_CONFIG: tsa.config,
+        };
+        const inputPath = await writeXrefStreamInput(consumerDirectory);
+        const timestampCheck = writeTimestampCheck(consumerDirectory, inputPath);
+        commandSucceeded(run(process.execPath, [timestampCheck], consumerDirectory, tsaEnv));
         timestampBehavior = "passed";
+        // S1 cycle safety: the same archive renewal through the packed
+        // entry with each module format loading first.
+        const archiveCheck = writeArchiveCheck(consumerDirectory, inputPath);
+        for (const order of ["esm-first", "cjs-first"]) {
+            commandSucceeded(
+                run(process.execPath, [archiveCheck], consumerDirectory, {
+                    ...tsaEnv,
+                    ARCHIVE_ORDER: order,
+                })
+            );
+        }
+        archiveBothOrders = "passed";
+        // S12 tree-shaking proof: a verify-only bundle must drop every
+        // unused main-entry API, and a timestamp+verify bundle must both
+        // drop its unused APIs and execute end to end.
+        const fullEntryBytes = readFileSync(join(coreDirectory, "dist", "index.js")).length;
+        const verifyBundle = bundleTreeShakeEntry(
+            consumerDirectory,
+            writeTreeShakeProbe(consumerDirectory),
+            "treeshake-probe.bundle.mjs"
+        );
+        assertTreeShaken(verifyBundle, fullEntryBytes, VERIFY_PROBE_ABSENT, [
+            "verifyPdfTimestamps",
+        ]);
+        const executableBundle = bundleTreeShakeEntry(
+            consumerDirectory,
+            writeTreeShakeRun(consumerDirectory),
+            "treeshake-run.bundle.mjs"
+        );
+        assertTreeShaken(executableBundle, fullEntryBytes, EXECUTABLE_PROBE_ABSENT, [
+            "timestampPdf",
+            "verifyPdfTimestamps",
+            "TimestampSession",
+        ]);
+        const shakenRun = run(process.execPath, [executableBundle], consumerDirectory, {
+            ...tsaEnv,
+            INPUT_PDF: inputPath,
+        });
+        commandSucceeded(shakenRun);
+        assert.ok(
+            commandOutput(shakenRun.result).includes("TREESHAKE_OK count=1 verified=true"),
+            "tree-shaken bundle did not timestamp and verify: " +
+                commandOutput(shakenRun.result)
+        );
+        treeShake = "passed";
     } else if (RUNNING_IN_CI) {
         timestampBehavior = "failed: openssl ts subcommand missing in CI";
+        archiveBothOrders = "failed: openssl ts subcommand missing in CI";
+        treeShake = "failed: openssl ts subcommand missing in CI";
         failures.push(
-            "openssl is missing the `ts` subcommand: the packed-consumer timestamp check cannot " +
-                "run, and CI must not skip it (all CI jobs are ubuntu-24.04 with full OpenSSL)"
+            "openssl is missing the `ts` subcommand: the packed-consumer timestamp, archive, " +
+                "and tree-shake checks cannot run, and CI must not skip them (all CI jobs " +
+                "are ubuntu-24.04 with full OpenSSL)"
         );
     } else {
         process.stdout.write(
@@ -624,6 +923,8 @@ async function checkInstalledConsumer(
         coreVersion: manifestVersion(coreDirectory),
         cliVersion: manifestVersion(cliDirectory),
         timestampBehavior,
+        archiveBothOrders,
+        treeShake,
     };
 }
 
@@ -693,6 +994,8 @@ async function main(): Promise<void> {
                 cliVersion: "passed",
                 cliHelp: "passed",
                 timestampBehavior: installed.timestampBehavior,
+                archiveBothOrders: installed.archiveBothOrders,
+                treeShake: installed.treeShake,
             },
         };
         if (parsed.receiptPath !== undefined) {

@@ -1,12 +1,9 @@
 import {
     DEFAULT_TSA_CONFIG,
     MAX_PDF_SIZE,
-    MAX_SIGNATURE_SIZE,
     DEFAULT_SIGNATURE_SIZE,
     LTV_SIGNATURE_SIZE,
-    assertPdfWithinSize,
 } from "./constants.js";
-import { PlaceholderTooSmallError } from "./pdf/embed.js";
 
 import {
     createTimestampRequest,
@@ -23,14 +20,7 @@ import {
     type ExtractInputOptions,
 } from "./pdf/extract.js";
 
-import {
-    extractLTVData,
-    completeLTVData,
-    addDSS,
-    type LTVData,
-    type CompletedLTVData,
-    type LTVSettings,
-} from "./pdf/ltv.js";
+import { type LTVData, type LTVSettings } from "./pdf/ltv.js";
 
 import { archiveTimestamp, timestampPdfLTA, type ArchiveTimestampOptions } from "./pdf/archive.js";
 
@@ -56,7 +46,7 @@ import {
 export { getLogger, setLogger, disableLogging } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 
-import { TrustStore, SimpleTrustStore } from "./pki/trust-store.js";
+import { type TrustStore, SimpleTrustStore } from "./pki/trust-store.js";
 
 // ValidationSession, DefaultFetcher, MockFetcher, InMemoryValidationCache, and
 // the CircuitBreaker family are reachable via the `pdf-rfc3161/advanced`
@@ -138,274 +128,7 @@ export type { VerificationOptions, ParsedTimestampResponse };
 // CircuitBreaker / CircuitBreakerMap / CircuitState / CircuitBreakerError
 // have moved to the `pdf-rfc3161/advanced` subpath.
 
-/**
- * Adds an RFC 3161 document timestamp to a PDF.
- *
- * This is the one-call API: prepare the PDF, send a TimeStampReq to the
- * TSA, embed the TimeStampResp as a Document Timestamp (DocTimeStamp /
- * ETSI.RFC3161) signature, and optionally collect Long-Term Validation
- * (LTV) data into the PDF's Document Security Store (DSS).
- * Cryptographic self-consistency does not establish TSA trust; reliance on
- * a timestamp remains a caller-owned trust policy.
- *
- * @param options - {@link TimestampOptions}: the PDF bytes, TSA config,
- *   and tuning flags. Only `pdf` and `tsa` are required.
- * @returns A {@link TimestampResult} with the timestamped PDF bytes,
- *   parsed {@link TimestampInfo}, optional `ltvData`, and optional
- *   `ltvErrors` collection diagnostics (present only when LTV collection
- *   ran and reported errors; never signing-fatal).
- *
- * @throws {TimestampError} with `code`:
- *   - `PDF_ERROR` if the input PDF can't be parsed or exceeds `maxSize`,
- *     or the token never fits the reservation cap
- *     (`PlaceholderTooSmallError`).
- *   - `INVALID_ARGUMENT` if `requestCertificate` is false (use
- *     `TimestampSession` for that shape), or a `maxSize`,
- *     `signatureSize`, `retry`, `retryDelay`, or `timeout` option is
- *     out of range.
- *   - `TSA_ERROR` if the TSA returns any non-granted status.
- *   - `NETWORK_ERROR` if the TSA URL fails {@link validateUrl} (SSRF),
- *     exceeds the response size cap, or all retries are exhausted.
- *   - `TIMEOUT` if the per-attempt deadline is exhausted.
- *   - `CIRCUIT_OPEN` if the per-URL circuit breaker is open.
- *   - `INVALID_RESPONSE` / `MALFORMED_RESPONSE` if the TSA response
- *     cannot be parsed.
- *   - `VERIFICATION_FAILED` if the TSA response fails pre-embed request
- *     binding or CMS profile verification (for example, nonce or digest mismatch).
- *
- * LTV collection failures never throw: they are returned in
- * `TimestampResult.ltvErrors` alongside the signed bytes. Caller
- * `revocationData` is silently ignored when `enableLTV` is false.
- *
- * @example
- * Minimal usage:
- * ```typescript
- * import { timestampPdf, KNOWN_TSA_URLS } from "pdf-rfc3161";
- * const { pdf, timestamp } = await timestampPdf({
- *     pdf: bytes,
- *     tsa: { url: KNOWN_TSA_URLS.FREETSA },
- * });
- * console.log("Timestamped at:", timestamp.genTime);
- * ```
- *
- * @example
- * With LTV embedding:
- * ```typescript
- * const result = await timestampPdf({
- *     pdf: bytes,
- *     tsa: { url: KNOWN_TSA_URLS.DIGICERT },
- *     enableLTV: true,
- * });
- * // result.ltvData contains the embedded certs/CRLs/OCSP responses.
- * ```
- */
-// Terminal reservation-cap exhaustion shared by the optimization probe and
-// the retry loop. The token can never fit the cap, so surfacing this error
-// must not cost another TSA request or an identical-repeat reservation.
-function capError(size: number): PlaceholderTooSmallError {
-    return new PlaceholderTooSmallError(
-        size,
-        `Timestamp token requires at least ${size.toString()} bytes but the signature reservation cap of ${MAX_SIGNATURE_SIZE.toString()} bytes was reached.`
-    );
-}
-
-export async function timestampPdf(options: TimestampOptions): Promise<TimestampResult> {
-    const {
-        pdf,
-        tsa,
-        enableLTV = true,
-        signatureSize,
-        optimizePlaceholder,
-        maxSize,
-        revocationData,
-    } = options;
-    assertPdfWithinSize(pdf, maxSize);
-
-    if (tsa.requestCertificate === false) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_ARGUMENT,
-            "timestampPdf requires tsa.requestCertificate=true; use TimestampSession.embedTimestampToken(..., { signerCertificates }) for certReq=false responses"
-        );
-    }
-
-    // Config for retries
-    let currentSignatureSize = signatureSize ?? 0; // 0 will use default in Session
-    const MAX_RETRIES = 3;
-
-    // Optimization phase: if enabled, determine optimal size first
-    if (optimizePlaceholder) {
-        try {
-            // Use session to handle defaults and preparation
-            const session = new TimestampSession(pdf, {
-                enableLTV,
-                prepareOptions: { ...options, signatureSize: currentSignatureSize },
-                hashAlgorithm: tsa.hashAlgorithm,
-            });
-
-            const request = await session.createTimestampRequest({
-                hashAlgorithm: tsa.hashAlgorithm,
-                ...(tsa.policy !== undefined && { policy: tsa.policy }),
-                requestCertificate: true,
-            });
-
-            // We need to fetch a real token to know its size
-            const responseBytes = await sendTimestampRequest(request, tsa);
-            const token = parseTimestampResponse(responseBytes).token;
-            currentSignatureSize = TimestampSession.calculateOptimalSize(token);
-            if (token.length > MAX_SIGNATURE_SIZE) throw capError(token.length);
-        } catch (e) {
-            // Terminal cap exhaustion escapes the optimization fallback.
-            if (e instanceof PlaceholderTooSmallError) throw e;
-            // If optimization probe fails, proceed with standard logic
-        }
-    }
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        let tsResponse: ParsedTimestampResponse | undefined;
-        try {
-            const session = new TimestampSession(pdf, {
-                enableLTV: false, // We handle LTV manually to capture the data for the return value
-                prepareOptions: {
-                    ...options,
-                    signatureSize: currentSignatureSize,
-                },
-                hashAlgorithm: tsa.hashAlgorithm,
-            });
-
-            const request = await session.createTimestampRequest({
-                hashAlgorithm: tsa.hashAlgorithm,
-                ...(tsa.policy !== undefined && { policy: tsa.policy }),
-                requestCertificate: true,
-            });
-            const responseBytes = await sendTimestampRequest(request, tsa);
-            tsResponse = parseTimestampResponse(responseBytes);
-
-            // Preserve the complete response for the session's mandatory
-            // validator; never downgrade the one-call path to a raw token.
-            let finalPdf = await session.embedTimestampToken(responseBytes);
-
-            let ltvData: TimestampResult["ltvData"] = undefined;
-            let ltvErrors: string[] | undefined;
-            if (enableLTV) {
-                const extracted = extractLTVData(tsResponse.token);
-
-                let completed: CompletedLTVData;
-                if (revocationData) {
-                    // Use pre-fetched revocation data instead of network fetching
-                    completed = {
-                        data: {
-                            certificates: revocationData.certificates ?? extracted.certificates,
-                            crls: revocationData.crls ?? [],
-                            ocspResponses: revocationData.ocspResponses ?? [],
-                        },
-                        errors: [],
-                    };
-                } else {
-                    // Collect structural revocation candidate material for the DSS.
-                    completed = await completeLTVData(extracted);
-                }
-
-                // Assigned only when non-empty, so the spread below can
-                // test truthiness to decide key presence.
-                if (completed.errors.length > 0) ltvErrors = completed.errors;
-                ltvData = {
-                    certificates: completed.data.certificates,
-                    crls: completed.data.crls,
-                    ocspResponses: completed.data.ocspResponses,
-                };
-
-                finalPdf = await addDSS(finalPdf, completed.data);
-            }
-
-            return {
-                pdf: finalPdf,
-                timestamp: tsResponse.info,
-                ltvData,
-                ...(ltvErrors && { ltvErrors }),
-            };
-        } catch (error) {
-            // Retry placeholder exhaustion by type, never by message text: an
-            // unrelated error that merely mentions the placeholder must not
-            // trigger another TSA request.
-            if (error instanceof PlaceholderTooSmallError && attempt < MAX_RETRIES) {
-                // Use the optimal size for the token we just received if available
-                const nextSize = tsResponse?.token
-                    ? TimestampSession.calculateOptimalSize(tsResponse.token)
-                    : (currentSignatureSize || DEFAULT_SIGNATURE_SIZE) * 2;
-                // Cap automatic growth and never repeat an identical too-small
-                // reservation or issue an extra TSA request past the cap.
-                const cappedSize = Math.min(nextSize, MAX_SIGNATURE_SIZE);
-                if (cappedSize <= currentSignatureSize) {
-                    if (
-                        nextSize > MAX_SIGNATURE_SIZE ||
-                        currentSignatureSize >= MAX_SIGNATURE_SIZE
-                    ) {
-                        throw capError(error.requiredSignatureSize);
-                    }
-                    throw error;
-                }
-                currentSignatureSize = cappedSize;
-                continue;
-            }
-            throw error;
-        }
-    }
-    throw new TimestampError(TimestampErrorCode.PDF_ERROR, "Failed to timestamp after retries");
-}
-
-/**
- * Timestamps a PDF with multiple TSAs in sequence. Each TSA produces a
- * separate signed timestamp; the resulting PDF carries all of them.
- *
- * @example
- * ```typescript
- * const result = await timestampPdfMultiple({
- *     pdf,
- *     tsaList: [
- *         { url: KNOWN_TSA_URLS.FREETSA },
- *         { url: KNOWN_TSA_URLS.DIGICERT },
- *     ],
- * });
- * console.log(`Embedded ${result.timestamps.length} timestamps`);
- * ```
- */
-export async function timestampPdfMultiple(
-    options: { pdf: Uint8Array; tsaList: TSAConfig[] } & Omit<TimestampOptions, "pdf" | "tsa">
-): Promise<{
-    pdf: Uint8Array;
-    timestamps: TimestampInfo[];
-    ltvData?: TimestampResult["ltvData"][];
-}> {
-    const { pdf, tsaList, ...rest } = options;
-
-    if (tsaList.length === 0) {
-        throw new TimestampError(
-            TimestampErrorCode.INVALID_ARGUMENT,
-            "At least one TSA must be specified"
-        );
-    }
-
-    let currentPdf = pdf;
-    const timestamps: TimestampInfo[] = [];
-    const ltvDataList: TimestampResult["ltvData"][] = [];
-
-    for (const tsa of tsaList) {
-        const result = await timestampPdf({
-            ...rest,
-            pdf: currentPdf,
-            tsa,
-        });
-
-        currentPdf = result.pdf;
-        timestamps.push(result.timestamp);
-        if (result.ltvData) {
-            ltvDataList.push(result.ltvData);
-        }
-    }
-
-    return {
-        pdf: currentPdf,
-        timestamps,
-        ltvData: ltvDataList.length > 0 ? ltvDataList : undefined,
-    };
-}
+// The one-call API lives in `./timestamp-pdf.js` (audit S1): archive renewal
+// drives it, so defining it here created an index <-> archive value cycle.
+// Export locations are unchanged.
+export { timestampPdf, timestampPdfMultiple } from "./timestamp-pdf.js";

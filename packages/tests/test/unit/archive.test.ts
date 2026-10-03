@@ -47,7 +47,7 @@ vi.mock("../../../core/src/pdf/ltv.js", () => ({
     completeLTVData: vi.fn(),
 }));
 
-vi.mock("../../../core/src/index.js", () => ({
+vi.mock("../../../core/src/timestamp-pdf.js", () => ({
     timestampPdf: vi.fn(),
 }));
 
@@ -74,7 +74,7 @@ import {
     verifyTimestampsWithSharedIndex,
 } from "../../../core/src/pdf/extract.js";
 import { addDSS, completeLTVData, extractLTVData } from "../../../core/src/pdf/ltv.js";
-import { timestampPdf } from "../../../core/src/index.js";
+import { timestampPdf } from "../../../core/src/timestamp-pdf.js";
 
 describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
     beforeEach(() => {

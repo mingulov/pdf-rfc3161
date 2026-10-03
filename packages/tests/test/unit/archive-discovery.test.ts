@@ -18,7 +18,7 @@ import {
 } from "../../../core/src/types.js";
 import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
-vi.mock("../../../core/src/index.js", () => ({ timestampPdf: vi.fn() }));
+vi.mock("../../../core/src/timestamp-pdf.js", () => ({ timestampPdf: vi.fn() }));
 
 const warnSpy = vi.fn();
 vi.mock("../../../core/src/utils/logger.js", async (importOriginal: <T = unknown>() => Promise<T>) => {
@@ -34,7 +34,7 @@ vi.mock("../../../core/src/utils/logger.js", async (importOriginal: <T = unknown
     };
 });
 
-import { timestampPdf } from "../../../core/src/index.js";
+import { timestampPdf } from "../../../core/src/timestamp-pdf.js";
 
 type MalformedDocumentTimestampShape =
     | "all-zero-placeholder"

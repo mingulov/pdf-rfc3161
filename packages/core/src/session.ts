@@ -1,4 +1,4 @@
-import { preparePdfForTimestamp, PreparedPDF, PrepareOptions } from "./pdf/prepare.js";
+import { preparePdfForTimestamp, type PreparedPDF, type PrepareOptions } from "./pdf/prepare.js";
 import { extractBytesToHash } from "./pdf/embed.js";
 import { createTimestampRequest } from "./tsa/index.js";
 import { embedTimestampToken } from "./pdf/embed.js";
