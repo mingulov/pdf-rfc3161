@@ -17,6 +17,9 @@ const EXCLUDE_DIRS = [
     // Generated, gitignored external-validation cache; not repository source.
     ".pades-oracles",
     "docs",
+    // T16 Jazzer pilot regeneration output (transpiled ESM + run workdirs).
+    "build",
+    "work",
 ];
 const EXCLUDE_FILES = ["dummy_token.der"]; // Specific binary fixtures or third-party files
 

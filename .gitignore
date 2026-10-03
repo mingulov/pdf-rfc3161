@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 packages/cli/.build-manifest.json
+# T16 Jazzer pilot regeneration output (transpiled ESM + run workdirs)
+packages/tests/fuzz/build/
+packages/tests/fuzz/work/
 
 # IDE
 .idea/

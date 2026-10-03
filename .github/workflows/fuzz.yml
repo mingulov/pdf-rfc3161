@@ -1,0 +1,110 @@
+name: Fuzz (Jazzer.js pilot)
+
+# T16: locked Jazzer.js 4.0.0 over transpiled unbundled ESM. Corpus replay
+# is REQUIRED on PRs; bounded exploration is OPTIONAL (scheduled + manual,
+# continue-on-error) until broader gating is justified by measured cost.
+on:
+    push:
+        branches: [main]
+        paths:
+            - "packages/core/src/**"
+            - "packages/tests/fuzz/**"
+            - "packages/tests/tsconfig.fuzz.json"
+            - "packages/tests/package.json"
+            - "pnpm-lock.yaml"
+            - ".github/workflows/fuzz.yml"
+    pull_request:
+        branches: [main]
+        paths:
+            - "packages/core/src/**"
+            - "packages/tests/fuzz/**"
+            - "packages/tests/tsconfig.fuzz.json"
+            - "packages/tests/package.json"
+            - "pnpm-lock.yaml"
+            - ".github/workflows/fuzz.yml"
+    schedule:
+        - cron: "0 3 * * 1" # Weekly exploration on Mondays
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    replay:
+        name: Corpus replay (required)
+        runs-on: ubuntu-24.04
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+            - name: Setup Node.js 24
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 24
+                  cache: "pnpm"
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Prove Jazzer native-addon load
+              run: >
+                  node --input-type=module -e "
+                  import { createRequire } from 'module';
+                  const req = createRequire(process.cwd() + '/packages/tests/package.json');
+                  const corePath = req.resolve('@jazzer.js/core/package.json');
+                  const req2 = createRequire(corePath);
+                  req2('@jazzer.js/fuzzer/dist/addon.js');
+                  console.log('addon load OK on ' + process.version + ' ' + process.platform + '-' + process.arch);
+                  "
+
+            - name: Build fuzz targets (harness + core to unbundled ESM)
+              run: pnpm --filter pdf-rfc3161-tests fuzz:build
+
+            - name: Replay corpus with coverage proof
+              run: pnpm --filter pdf-rfc3161-tests fuzz:replay
+
+            - name: Upload replay logs and coverage
+              if: always()
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+              with:
+                  name: fuzz-replay
+                  path: packages/tests/fuzz/work/replay/
+                  retention-days: 14
+
+    explore:
+        name: Bounded exploration (optional)
+        # Optional gate: findings fail the step (and upload artifacts) but never
+        # block the PR. Adopt broader gating only after measured feasibility.
+        continue-on-error: true
+        runs-on: ubuntu-24.04
+        timeout-minutes: 25
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+            - name: Setup Node.js 24
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 24
+                  cache: "pnpm"
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build fuzz targets (harness + core to unbundled ESM)
+              run: pnpm --filter pdf-rfc3161-tests fuzz:build
+
+            - name: Explore (60 s per target, contract budgets)
+              run: pnpm --filter pdf-rfc3161-tests fuzz:explore
+
+            - name: Upload exploration runs and findings
+              if: always()
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+              with:
+                  name: fuzz-explore
+                  path: packages/tests/fuzz/work/explore/
+                  retention-days: 30
