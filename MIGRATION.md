@@ -2,7 +2,7 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
-## Unreleased
+## 0.2.2 -> 0.3.0
 
 ### HTTP transport rejects redirects, fails fast on 4xx, and bounds bodies
 
