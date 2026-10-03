@@ -33,6 +33,12 @@ export default defineConfig({
     webServer: {
         command: 'pnpm run dev',
         url: 'http://127.0.0.1:5173',
+        // Loaded CI runners can exceed the 60s default after the signing
+        // gate; pipe the server output so the next slow-start failure
+        // shows what vite was doing instead of bare silence.
+        timeout: 120000,
+        stdout: 'pipe',
+        stderr: 'pipe',
         reuseExistingServer: !process.env.CI,
         cwd: './'
     },

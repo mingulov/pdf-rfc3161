@@ -45,6 +45,14 @@ export default defineConfig({
         },
     },
     server: {
+        // Pin the exact loopback the Playwright webServer polls: the
+        // default 'localhost' host depends on resolver order (::1-first
+        // systems bind IPv6 only and the 127.0.0.1 readiness poll never
+        // succeeds). strictPort fails fast instead of silently drifting
+        // to another port the tests do not poll.
+        host: "127.0.0.1",
+        port: 5173,
+        strictPort: true,
         fs: {
             allow: [".."],
         },
