@@ -1,0 +1,9 @@
+{
+    "_comment": "T17 mutation pilot: checker-only project covering core sources. Referenced by root stryker.config.mjs tsconfigFile. Not used by any build or typecheck script.",
+    "extends": "./tsconfig.base.json",
+    "compilerOptions": {
+        "noEmit": true
+    },
+    "include": ["packages/core/src/**/*"],
+    "exclude": ["node_modules", "packages/core/dist"]
+}
