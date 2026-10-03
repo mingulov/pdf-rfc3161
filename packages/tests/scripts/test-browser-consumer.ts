@@ -583,8 +583,10 @@ async function handleTsaRequest(
 function createTsaServer(world: TsaWorld): Server {
     return createServer((request, response) => {
         handleTsaRequest(world, request, response).catch((error: unknown) => {
+            // Opaque by design: never send error text to the client (stack-trace exposure).
+            console.error("TSA request failed:", error);
             if (!response.headersSent) response.writeHead(500);
-            response.end(String(error));
+            response.end("tsa: internal error");
         });
     });
 }
@@ -787,8 +789,9 @@ function createForwardProxy(): ForwardProxy {
             }
         );
         upstream.on("error", (error: unknown) => {
+            console.error("proxy: upstream failed:", error);
             if (!response.headersSent) response.writeHead(502);
-            response.end(`proxy: upstream failed: ${String(error)}`);
+            response.end("proxy: upstream failed");
         });
         // Propagate downstream cancellation upstream so a browser
         // timeout does not leave the TSA-side connection alive until
