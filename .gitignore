@@ -43,3 +43,7 @@ robustness-summary.md
 
 # Per-package changelogs (use root CHANGELOG.md only)
 packages/*/CHANGELOG.md
+
+# T17 Stryker mutation pilot (sandbox + published reports)
+.stryker-tmp/
+reports/mutation/
