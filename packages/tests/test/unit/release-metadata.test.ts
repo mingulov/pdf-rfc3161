@@ -42,7 +42,7 @@ async function loadReleaseMetadataModule(): Promise<ReleaseMetadataModule | unde
 }
 
 describe("release finalization metadata", () => {
-    it("extracts one finalized version while requiring an empty Unreleased section", async () => {
+    it("extracts one finalized version while accepting an empty Unreleased section", async () => {
         const releaseMetadata = await loadReleaseMetadataModule();
         if (releaseMetadata === undefined) return;
         const changelog = [
@@ -78,6 +78,32 @@ describe("release finalization metadata", () => {
                 "- Safer releases.",
                 "",
             ].join("\n"),
+            tag: "v1.2.3",
+            title: "pdf-rfc3161 v1.2.3",
+        });
+    });
+
+    it("finalizes when the optional Unreleased section is absent", async () => {
+        const releaseMetadata = await loadReleaseMetadataModule();
+        if (releaseMetadata === undefined) return;
+        const changelog = [
+            "# Changelog",
+            "",
+            "## [1.2.3]",
+            "",
+            "- Safer releases.",
+            "",
+        ].join("\n");
+
+        expect(
+            releaseMetadata.prepareReleaseMetadata({
+                changelog,
+                cliVersion: "1.2.3",
+                coreVersion: "1.2.3",
+                version: "1.2.3",
+            })
+        ).toEqual({
+            notes: ["## [1.2.3]", "", "- Safer releases.", ""].join("\n"),
             tag: "v1.2.3",
             title: "pdf-rfc3161 v1.2.3",
         });

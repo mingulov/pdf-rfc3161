@@ -63,17 +63,20 @@ export function prepareReleaseMetadata(options: ReleaseMetadataOptions): Release
     const lines = changelog.split("\n");
     const unreleasedStart = lines.indexOf("## [Unreleased]");
     const releaseStart = releaseSectionStart(lines, version);
-    if (unreleasedStart === -1) {
-        throw new Error("CHANGELOG.md must contain an Unreleased section");
-    }
     if (releaseStart === -1) {
         throw new Error("CHANGELOG.md has no " + version + " release section");
     }
-    if (unreleasedStart >= releaseStart) {
-        throw new Error("Unreleased section must precede the finalized release");
-    }
-    if (lines.slice(unreleasedStart + 1, releaseStart).some((line) => line.trim().length > 0)) {
-        throw new Error("Unreleased section must be empty before finalizing a release");
+    if (unreleasedStart !== -1) {
+        if (unreleasedStart >= releaseStart) {
+            throw new Error("Unreleased section must precede the finalized release");
+        }
+        if (
+            lines
+                .slice(unreleasedStart + 1, releaseStart)
+                .some((line) => line.trim().length > 0)
+        ) {
+            throw new Error("Unreleased section must be empty before finalizing a release");
+        }
     }
 
     const nextRelease = lines.findIndex(

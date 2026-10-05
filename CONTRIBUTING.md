@@ -172,7 +172,7 @@ gh run watch
 ```
 
 The finalizer verifies that both package manifests and the release's changelog section match the
-requested version, the `Unreleased` section is empty, the referenced Release run
+requested version, an `Unreleased` section, if present, is empty, the referenced Release run
 succeeded for the exact current commit, and both npm packages are public. It then creates
 `v0.2.0` at that commit and publishes the GitHub Release using the
 `0.2.0` changelog section. It cannot stage, approve, or publish npm packages.
