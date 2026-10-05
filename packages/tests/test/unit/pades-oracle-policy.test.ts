@@ -191,7 +191,7 @@ describe("offline PAdES validation-tool policy", () => {
         expect(workflow).toContain("run: pnpm lint");
         expect(workflow).toContain("name: Audit packed package contents");
         expect(workflow).toContain("Unexpected file in pdf-rfc3161 tarball");
-        expect(workflow).toContain("Expected 27 files in pdf-rfc3161 tarball");
+        expect(workflow).toContain("Expected 29 files in pdf-rfc3161 tarball");
         expect(workflow).toContain("required_core=(");
         expect(workflow).toContain("dist/[a-z][a-z0-9-]{0,63}-[A-Za-z0-9_-]{8}");
         expect(workflow).toContain("workspace:");

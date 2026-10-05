@@ -150,8 +150,8 @@ jobs:
 
                   core_entries=$(tar -tzf "${core_archives[0]}" | LC_ALL=C sort)
                   core_count=$(printf '%s\n' "$core_entries" | wc -l)
-                  if [[ $core_count -ne 27 ]]; then
-                    echo "Expected 27 files in pdf-rfc3161 tarball, found $core_count" >&2
+                  if [[ $core_count -ne 29 ]]; then
+                    echo "Expected 29 files in pdf-rfc3161 tarball, found $core_count" >&2
                     exit 1
                   fi
 
