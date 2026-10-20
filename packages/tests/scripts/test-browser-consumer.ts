@@ -79,6 +79,7 @@ import type {
     TransportObservation,
     TrustTargetOutcome,
 } from "../browser/signer.spec.js";
+import { flippedNonce } from "./browser-nonce-fixture";
 import { parseTimestampToken } from "../../core/src/tsa/token-validation.js";
 import {
     createRFC3161TokenFixtureFromRequest,
@@ -374,13 +375,6 @@ async function createTrustTargetMaterial(): Promise<{
     };
 }
 
-function flippedNonce(nonce: Uint8Array): Uint8Array {
-    if (nonce.length === 0) return new Uint8Array([1]);
-    const copy = new Uint8Array(nonce);
-    const first = ((copy[0] ?? 0) ^ 1) & 0x7f;
-    copy[0] = first === 0 ? 1 : first;
-    return copy;
-}
 
 async function craftedResponse(
     body: Uint8Array,
