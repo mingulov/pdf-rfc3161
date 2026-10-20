@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
-    extractTimestamps,
-    verifyTimestamp,
+    verifyPdfTimestamps,
     validateTimestampTokenRFC8933Compliance,
     type ExtractedTimestamp,
 } from "pdf-rfc3161";
@@ -36,11 +35,7 @@ export default function VerifyPanel() {
             const buffer = await f.arrayBuffer();
             const pdfBytes = new Uint8Array(buffer);
 
-            const extracted = await extractTimestamps(pdfBytes);
-
-            const verifiedResults = await Promise.all(
-                extracted.map((ts) => verifyTimestamp(ts, { pdf: pdfBytes }))
-            );
+            const verifiedResults = await verifyPdfTimestamps(pdfBytes);
 
             setTimestamps(verifiedResults);
 

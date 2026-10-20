@@ -1,0 +1,850 @@
+{
+  "checkedOn": "2026-10-20",
+  "baseCommit": "432e02fbc6ab4f6a9c09b8f0fee742ad45632bf9",
+  "nodeRuntime": {
+    "before": ">=22.12.0",
+    "after": ">=22.18.0",
+    "reason": "Explicit maintainer-approved compatibility change; migration guide and exact runtime-floor CI updated."
+  },
+  "npmDirectDependencies": [
+    {
+      "package": "@arethetypeswrong/cli",
+      "registryPackage": "@arethetypeswrong/cli",
+      "before": "0.18.5",
+      "after": "0.18.5",
+      "latest": "0.18.5",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@changesets/cli",
+      "registryPackage": "@changesets/cli",
+      "before": "^3.0.3",
+      "after": "^3.0.3",
+      "latest": "3.0.3",
+      "workspaces": [
+        "package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@eslint/js",
+      "registryPackage": "@eslint/js",
+      "before": "^10.0.1",
+      "after": "^10.0.1",
+      "latest": "10.0.1",
+      "workspaces": [
+        "package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@jazzer.js/core",
+      "registryPackage": "@jazzer.js/core",
+      "before": "4.0.0",
+      "after": "4.0.0",
+      "latest": "4.0.0",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@playwright/test",
+      "registryPackage": "@playwright/test",
+      "before": "^1.63.0",
+      "after": "^1.64.1",
+      "latest": "1.64.1",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "@stryker-mutator/core",
+      "registryPackage": "@stryker-mutator/core",
+      "before": "10.0.0",
+      "after": "10.0.0",
+      "latest": "10.0.0",
+      "workspaces": [
+        "package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@stryker-mutator/typescript-checker",
+      "registryPackage": "@stryker-mutator/typescript-checker",
+      "before": "10.0.0",
+      "after": "10.0.0",
+      "latest": "10.0.0",
+      "workspaces": [
+        "package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@stryker-mutator/vitest-runner",
+      "registryPackage": "@stryker-mutator/vitest-runner",
+      "before": "10.0.0",
+      "after": "10.0.0",
+      "latest": "10.0.0",
+      "workspaces": [
+        "package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@types/node",
+      "registryPackage": "@types/node",
+      "before": "^26.6.3",
+      "after": "^26.6.5",
+      "latest": "26.6.5",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "@types/react",
+      "registryPackage": "@types/react",
+      "before": "^19.3.0",
+      "after": "^19.3.0",
+      "latest": "19.3.0",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@types/react-dom",
+      "registryPackage": "@types/react-dom",
+      "before": "^19.3.0",
+      "after": "^19.3.0",
+      "latest": "19.3.0",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@typescript/native",
+      "registryPackage": "typescript",
+      "before": "npm:typescript@7.0.2",
+      "after": "npm:typescript@7.0.2",
+      "latest": "7.0.2",
+      "workspaces": [
+        "package.json",
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "@vitejs/plugin-react",
+      "registryPackage": "@vitejs/plugin-react",
+      "before": "^6.1.1",
+      "after": "^6.1.2",
+      "latest": "6.1.2",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "@vitest/coverage-v8",
+      "registryPackage": "@vitest/coverage-v8",
+      "before": "^5.0.2",
+      "after": "^5.0.5",
+      "latest": "5.0.5",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "asn1js",
+      "registryPackage": "asn1js",
+      "before": "^3.0.10",
+      "after": "^3.1.0",
+      "latest": "4.0.0",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Updated compatible 3.x; 4.0.0 is inside the 24-hour release-age cooldown and outside PKIjs 3.4.1 asn1js ^3.0.6 contract."
+    },
+    {
+      "package": "commander",
+      "registryPackage": "commander",
+      "before": "^15.0.0",
+      "after": "^15.0.0",
+      "latest": "15.0.0",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "esbuild",
+      "registryPackage": "esbuild",
+      "before": "0.28.2",
+      "after": "0.28.2",
+      "latest": "0.28.2",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "eslint",
+      "registryPackage": "eslint",
+      "before": "^10.11.0",
+      "after": "^10.13.0",
+      "latest": "10.13.0",
+      "workspaces": [
+        "package.json",
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "eslint-plugin-react-hooks",
+      "registryPackage": "eslint-plugin-react-hooks",
+      "before": "^7.1.1",
+      "after": "^7.1.1",
+      "latest": "7.1.1",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "eslint-plugin-react-refresh",
+      "registryPackage": "eslint-plugin-react-refresh",
+      "before": "^0.5.7",
+      "after": "^0.5.7",
+      "latest": "0.5.7",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "eslint-plugin-security",
+      "registryPackage": "eslint-plugin-security",
+      "before": "^4.1.0",
+      "after": "^4.2.0",
+      "latest": "4.2.0",
+      "workspaces": [
+        "package.json",
+        "packages/core/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "fast-check",
+      "registryPackage": "fast-check",
+      "before": "4.10.2",
+      "after": "4.10.2",
+      "latest": "4.10.2",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "globals",
+      "registryPackage": "globals",
+      "before": "^17.12.0",
+      "after": "^17.13.0",
+      "latest": "17.13.0",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "lucide-react",
+      "registryPackage": "lucide-react",
+      "before": "^1.49.0",
+      "after": "^1.59.0",
+      "latest": "1.60.0",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated latest release accepted by pnpm 24-hour cooldown; newest registry version is still younger than 24 hours."
+    },
+    {
+      "package": "pdf-lib",
+      "registryPackage": "pdf-lib",
+      "before": "^1.17.1",
+      "after": "^1.17.1",
+      "latest": "1.17.1",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "pdf-lib-incremental-save",
+      "registryPackage": "pdf-lib-incremental-save",
+      "before": "1.17.4",
+      "after": "1.17.4",
+      "latest": "1.17.4",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/core/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "pkijs",
+      "registryPackage": "pkijs",
+      "before": "^3.4.1",
+      "after": "^3.4.1",
+      "latest": "3.4.1",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "playwright",
+      "registryPackage": "playwright",
+      "before": "^1.63.0",
+      "after": "^1.64.1",
+      "latest": "1.64.1",
+      "workspaces": [
+        "packages/tests/package.json",
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "pnpm",
+      "before": "12.3.4",
+      "after": "12.14.0",
+      "latest": "12.14.0",
+      "decision": "Updated pinned package manager and lockfile."
+    },
+    {
+      "package": "prettier",
+      "registryPackage": "prettier",
+      "before": "^3.9.9",
+      "after": "^3.9.10",
+      "latest": "3.9.10",
+      "workspaces": [
+        "package.json",
+        "packages/core/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "publint",
+      "registryPackage": "publint",
+      "before": "0.3.25",
+      "after": "0.3.25",
+      "latest": "0.3.25",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "pvutils",
+      "registryPackage": "pvutils",
+      "before": "^1.2.0",
+      "after": null,
+      "latest": null,
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Removed unused direct dependency; upstream transitive requirements are retained."
+    },
+    {
+      "package": "react",
+      "registryPackage": "react",
+      "before": "^19.3.0",
+      "after": "^19.3.1",
+      "latest": "19.3.1",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "react-dom",
+      "registryPackage": "react-dom",
+      "before": "^19.3.0",
+      "after": "^19.3.1",
+      "latest": "19.3.1",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "terser",
+      "registryPackage": "terser",
+      "before": "^5.51.2",
+      "after": "^5.51.2",
+      "latest": "5.51.2",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "tsup",
+      "registryPackage": "tsup",
+      "before": "^8.5.1",
+      "after": "^9.0.0",
+      "latest": "9.0.0",
+      "workspaces": [
+        "package.json",
+        "packages/core/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "tsx",
+      "registryPackage": "tsx",
+      "before": "^4.23.15",
+      "after": "^4.23.15",
+      "latest": "4.23.15",
+      "workspaces": [
+        "package.json",
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "typescript",
+      "registryPackage": "@typescript/typescript6",
+      "before": "npm:@typescript/typescript6@6.0.2",
+      "after": "npm:@typescript/typescript6@6.0.2",
+      "latest": "6.0.2",
+      "workspaces": [
+        "package.json",
+        "packages/tests/package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json",
+        "packages/cli/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "typescript-eslint",
+      "registryPackage": "typescript-eslint",
+      "before": "^8.71.0",
+      "after": "^8.71.2",
+      "latest": "8.72.0",
+      "workspaces": [
+        "package.json",
+        "packages/core/package.json",
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated latest release accepted by pnpm 24-hour cooldown; newest registry version is still younger than 24 hours."
+    },
+    {
+      "package": "verifiedby",
+      "registryPackage": "verifiedby",
+      "before": "0.1.0",
+      "after": "0.1.0",
+      "latest": "0.1.0",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Already current compatible release."
+    },
+    {
+      "package": "vite",
+      "registryPackage": "vite",
+      "before": "^8.3.1",
+      "after": "^8.3.4",
+      "latest": "8.3.4",
+      "workspaces": [
+        "packages/demo/package.json"
+      ],
+      "decision": "Updated to current release."
+    },
+    {
+      "package": "vitest",
+      "registryPackage": "vitest",
+      "before": "^5.0.2",
+      "after": "^5.0.5",
+      "latest": "5.0.5",
+      "workspaces": [
+        "packages/tests/package.json"
+      ],
+      "decision": "Updated to current release."
+    }
+  ],
+  "githubActions": [
+    {
+      "action": "actions/checkout",
+      "before": [
+        {
+          "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "label": "v7.0.1"
+        }
+      ],
+      "after": [
+        {
+          "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "label": "v7.0.1"
+        }
+      ]
+    },
+    {
+      "action": "actions/deploy-pages",
+      "before": [
+        {
+          "sha": "368f82528645a54fb793d4d04e342629a3f51346",
+          "label": "v5.0.1"
+        }
+      ],
+      "after": [
+        {
+          "sha": "368f82528645a54fb793d4d04e342629a3f51346",
+          "label": "v5.0.1"
+        }
+      ]
+    },
+    {
+      "action": "actions/download-artifact",
+      "before": [
+        {
+          "sha": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "label": "v8.0.1"
+        }
+      ],
+      "after": [
+        {
+          "sha": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+          "label": "v8.0.2"
+        }
+      ]
+    },
+    {
+      "action": "actions/setup-node",
+      "before": [
+        {
+          "sha": "820762786026740c76f36085b0efc47a31fe5020",
+          "label": "v7.0.0"
+        }
+      ],
+      "after": [
+        {
+          "sha": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "label": "v7.1.0"
+        }
+      ]
+    },
+    {
+      "action": "actions/setup-python",
+      "before": [
+        {
+          "sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+          "label": "v7.0.0"
+        }
+      ],
+      "after": [
+        {
+          "sha": "5fda3b95a4ea91299a34e894583c3862153e4b97",
+          "label": "v7.0.0"
+        }
+      ]
+    },
+    {
+      "action": "actions/upload-artifact",
+      "before": [
+        {
+          "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "label": "v4"
+        },
+        {
+          "sha": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+          "label": "v7.0.1"
+        }
+      ],
+      "after": [
+        {
+          "sha": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "label": "v7.0.2"
+        }
+      ]
+    },
+    {
+      "action": "actions/upload-pages-artifact",
+      "before": [
+        {
+          "sha": "fc324d3547104276b827a68afc52ff2a11cc49c9",
+          "label": "v5.0.0"
+        }
+      ],
+      "after": [
+        {
+          "sha": "fc324d3547104276b827a68afc52ff2a11cc49c9",
+          "label": "v5.0.0"
+        }
+      ]
+    },
+    {
+      "action": "astral-sh/setup-uv",
+      "before": [
+        {
+          "sha": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
+          "label": "v10.2.0"
+        }
+      ],
+      "after": [
+        {
+          "sha": "1c37ad07a6a961277cf70c0d37d6f313000f5884",
+          "label": "v10.3.0"
+        }
+      ]
+    },
+    {
+      "action": "codecov/codecov-action",
+      "before": [
+        {
+          "sha": "303a32d7a59b442fa8d48b6a1cc6825c09c847a5",
+          "label": "v7.1.1"
+        }
+      ],
+      "after": [
+        {
+          "sha": "303a32d7a59b442fa8d48b6a1cc6825c09c847a5",
+          "label": "v7.1.1"
+        }
+      ]
+    },
+    {
+      "action": "github/codeql-action/analyze",
+      "before": [
+        {
+          "sha": "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+          "label": "v4.38.2"
+        }
+      ],
+      "after": [
+        {
+          "sha": "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee",
+          "label": "v4.39.0"
+        }
+      ]
+    },
+    {
+      "action": "github/codeql-action/autobuild",
+      "before": [
+        {
+          "sha": "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+          "label": "v4.38.2"
+        }
+      ],
+      "after": [
+        {
+          "sha": "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee",
+          "label": "v4.39.0"
+        }
+      ]
+    },
+    {
+      "action": "github/codeql-action/init",
+      "before": [
+        {
+          "sha": "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+          "label": "v4.38.2"
+        }
+      ],
+      "after": [
+        {
+          "sha": "6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee",
+          "label": "v4.39.0"
+        }
+      ]
+    },
+    {
+      "action": "pnpm/action-setup",
+      "before": [
+        {
+          "sha": "ea17c68df8912ef543352723c149a84f56e3d413",
+          "label": "v6.1.0"
+        }
+      ],
+      "after": [
+        {
+          "sha": "ea17c68df8912ef543352723c149a84f56e3d413",
+          "label": "v6.1.0"
+        }
+      ]
+    },
+    {
+      "action": "snyk/actions/node",
+      "before": [
+        {
+          "sha": "b075801f26076be9bb50521154cafab73f44da0c",
+          "label": "pinned master"
+        }
+      ],
+      "after": [
+        {
+          "sha": "11b673cfb4b0dc0d860a1323caa199d54950dcce",
+          "label": "pinned master (2026-10-07)"
+        }
+      ]
+    }
+  ],
+  "pythonLock": [
+    {
+      "package": "aiohappyeyeballs",
+      "before": "2.7.1",
+      "after": "2.7.1"
+    },
+    {
+      "package": "aiohttp",
+      "before": "3.14.3",
+      "after": "3.14.5"
+    },
+    {
+      "package": "aiosignal",
+      "before": "1.4.0",
+      "after": "1.4.0"
+    },
+    {
+      "package": "asn1crypto",
+      "before": "1.5.1",
+      "after": "1.5.1"
+    },
+    {
+      "package": "attrs",
+      "before": "26.1.0",
+      "after": "26.1.0"
+    },
+    {
+      "package": "certifi",
+      "before": "2026.7.22",
+      "after": "2026.10.19"
+    },
+    {
+      "package": "cffi",
+      "before": "2.1.1",
+      "after": "2.1.1"
+    },
+    {
+      "package": "cryptography",
+      "before": "50.0.1",
+      "after": "50.0.2"
+    },
+    {
+      "package": "frozenlist",
+      "before": "1.8.0",
+      "after": "1.8.0"
+    },
+    {
+      "package": "idna",
+      "before": "3.19",
+      "after": "3.20"
+    },
+    {
+      "package": "lxml",
+      "before": "6.1.3",
+      "after": "6.1.3"
+    },
+    {
+      "package": "multidict",
+      "before": "6.7.1",
+      "after": "7.1.0"
+    },
+    {
+      "package": "oscrypto",
+      "before": "1.3.0",
+      "after": "1.3.0"
+    },
+    {
+      "package": "propcache",
+      "before": "0.5.2",
+      "after": "0.5.4"
+    },
+    {
+      "package": "pycparser",
+      "before": "3.0",
+      "after": "3.11"
+    },
+    {
+      "package": "pyhanko",
+      "before": "0.37.0",
+      "after": "0.38.0"
+    },
+    {
+      "package": "pyhanko-certvalidator",
+      "before": "0.32.0",
+      "after": "0.33.0"
+    },
+    {
+      "package": "typing-extensions",
+      "before": "4.16.0",
+      "after": "4.16.0"
+    },
+    {
+      "package": "tzlocal",
+      "before": "5.4.4",
+      "after": "5.4.4"
+    },
+    {
+      "package": "uritools",
+      "before": "6.1.3",
+      "after": "6.1.3"
+    },
+    {
+      "package": "yarl",
+      "before": "1.24.5",
+      "after": "1.25.1"
+    }
+  ],
+  "externalTools": [
+    {
+      "tool": "Python",
+      "before": "3.12.14",
+      "after": "3.12.15"
+    },
+    {
+      "tool": "uv",
+      "before": "0.12.10",
+      "after": "0.13.3"
+    },
+    {
+      "tool": "Ubuntu OpenSSL/libssl",
+      "before": "3.0.13-0ubuntu3.12",
+      "after": "3.0.13-0ubuntu3.16"
+    },
+    {
+      "tool": "Ubuntu qpdf",
+      "before": "11.9.0-1.1ubuntu0.1",
+      "after": "11.9.0-1.1ubuntu0.1",
+      "reason": "Latest pinned Noble package; verified snapshot artifacts."
+    }
+  ]
+}

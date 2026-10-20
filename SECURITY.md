@@ -12,8 +12,8 @@ We support the latest released minor version. Security fixes ship as patch relea
 
 | Version | Supported |
 |---|---|
-| 0.2.x   | ✓ (current) |
-| 0.1.x   | — please upgrade |
+| 0.3.x   | ✓ (current) |
+| 0.2.x and earlier | — please upgrade |
 
 The 0.2.0 line closed multiple high-severity findings from an internal audit (`REVIEW-2026-02-09.md`) and incorporated CRITICAL findings from post-redesign red-team audits. 0.1.x is **not** maintained.
 

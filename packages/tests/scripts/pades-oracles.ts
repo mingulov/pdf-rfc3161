@@ -11,7 +11,7 @@ export interface PadesOracleArtifact {
     sha256: string;
 }
 
-const UBUNTU_SNAPSHOT = "20260825T000000Z";
+const UBUNTU_SNAPSHOT = "20261020T000000Z";
 const UBUNTU_SNAPSHOT_BASE_URL = `https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}`;
 
 /**
@@ -23,7 +23,7 @@ export const PADES_ORACLE_POLICY = {
     ubuntuRunner: "ubuntu-24.04",
     ubuntuSnapshot: UBUNTU_SNAPSHOT,
     architecture: "amd64",
-    pythonVersion: "3.12.14",
+    pythonVersion: "3.12.15",
     qpdf: {
         package: "qpdf",
         packageVersion: "11.9.0-1.1ubuntu0.1",
@@ -49,25 +49,25 @@ export const PADES_ORACLE_POLICY = {
     },
     openssl: {
         package: "openssl",
-        packageVersion: "3.0.13-0ubuntu3.12",
+        packageVersion: "3.0.13-0ubuntu3.16",
         commandVersion: "3.0.13",
         artifact: {
             package: "openssl",
-            packageVersion: "3.0.13-0ubuntu3.12",
-            filename: "openssl_3.0.13-0ubuntu3.12_amd64.deb",
-            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb`,
-            sha256: "321b30ad5a1c3783cb3d73ae439f824f6d3874d76a93a62f4a984959b490aa7b",
+            packageVersion: "3.0.13-0ubuntu3.16",
+            filename: "openssl_3.0.13-0ubuntu3.16_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.16_amd64.deb`,
+            sha256: "675b84971ffd4467707008c25ef7520f90ea7c23ef27b7a76b0dccf1d7c4dc3f",
         },
     },
     opensslRuntime: {
         package: "libssl3t64",
-        packageVersion: "3.0.13-0ubuntu3.12",
+        packageVersion: "3.0.13-0ubuntu3.16",
         artifact: {
             package: "libssl3t64",
-            packageVersion: "3.0.13-0ubuntu3.12",
-            filename: "libssl3t64_3.0.13-0ubuntu3.12_amd64.deb",
-            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb`,
-            sha256: "6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b",
+            packageVersion: "3.0.13-0ubuntu3.16",
+            filename: "libssl3t64_3.0.13-0ubuntu3.16_amd64.deb",
+            url: `${UBUNTU_SNAPSHOT_BASE_URL}/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.16_amd64.deb`,
+            sha256: "219f43b1cd836a4da550938db5fda93160d269d39a4edcf1f1ce698a470db797",
         },
     },
 } as const;

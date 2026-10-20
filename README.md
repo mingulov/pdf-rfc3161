@@ -597,7 +597,7 @@ Reader observation, use [manual-acrobat-validation.md](./docs/manual-acrobat-val
 
 ## Requirements
 
-- Node.js 22.12.0 or later
+- Node.js 22.18.0 or later
 - Modern browsers with Web Crypto API support
 - Edge runtimes: Cloudflare Workers, Vercel Edge, Deno Deploy
 

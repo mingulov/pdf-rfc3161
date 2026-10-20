@@ -39,20 +39,20 @@
         "prepack": "pnpm run build"
     },
     "dependencies": {
-        "asn1js": "^3.0.10",
+        "asn1js": "^3.1.0",
         "commander": "^15.0.0",
         "pdf-rfc3161": "workspace:*",
         "pkijs": "^3.4.1"
     },
     "devDependencies": {
-        "@types/node": "^26.6.3",
+        "@types/node": "^26.6.5",
         "@typescript/native": "npm:typescript@7.0.2",
-        "eslint": "^10.11.0",
-        "tsup": "^8.5.1",
+        "eslint": "^10.13.0",
+        "tsup": "^9.0.0",
         "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2"
     },
     "engines": {
-        "node": ">=22.12.0"
+        "node": ">=22.18.0"
     }
 }

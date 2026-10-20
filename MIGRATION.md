@@ -2,6 +2,21 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
+## 0.3.0 -> next minor (unreleased)
+
+The minimum supported Node.js version is now **22.18.0**. Node.js 22.12 through
+22.17 are no longer supported. Upgrade Node.js before installing the next
+minor release. The public API and ESM/CJS entry points are unchanged.
+
+The repository now uses tsup 9. Contributors should use Node 26 from `.nvmrc`,
+or a compatible development runtime: Node 22.18.0+, Node 24.11.0+, or Node 26+.
+The exact Node 22.18.0 runtime is exercised by a packed-consumer CI gate.
+
+Timestamp verification also rejects inconsistent CMS signature algorithm
+identifiers and unsupported parameters before cryptographic verification.
+PDF metadata is encoded as literal text, not pre-escaped PDF syntax; callers
+should pass the intended text directly, including parentheses and backslashes.
+
 ## 0.2.2 -> 0.3.0
 
 ### HTTP transport rejects redirects, fails fast on 4xx, and bounds bodies

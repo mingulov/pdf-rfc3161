@@ -25,19 +25,54 @@ export function base64ToUint8Array(base64: string) {
 }
 
 /**
+ * Quote one literal argument for a POSIX shell. In particular, certificate
+ * URLs are untrusted data, not shell syntax.
+ */
+function quoteShellArgument(value: string): string {
+    return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+/**
+ * Generate a curl command for a POSIX shell (sh/bash/zsh), never PowerShell.
+ * Invalid/non-HTTP URLs produce an explanatory comment, not a command.
+ */
+export function generateCurlCommand(
+    url: string,
+    outputFilename: string,
+    requestFilename?: string,
+    contentType: string = "application/timestamp-query"
+): string {
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return "# Invalid URL: only HTTP(S) URLs are supported.";
+        }
+    } catch {
+        return "# Invalid URL: only HTTP(S) URLs are supported.";
+    }
+    const args = ["curl", "--globoff"];
+    if (requestFilename !== undefined) {
+        args.push("-H", quoteShellArgument(`Content-Type: ${contentType}`));
+        args.push("--data-binary", quoteShellArgument(`@${requestFilename}`));
+    }
+    args.push("--output", quoteShellArgument(outputFilename), "--", quoteShellArgument(url));
+    return args.join(" ");
+}
+
+/**
  * Generates a JavaScript fetch script for TSA/OCSP/CRL requests to be run in the browser console.
  */
 export function generateFetchConsoleScript(url: string, bodyBytes?: Uint8Array, label: string = "Response", contentType: string = "application/timestamp-query") {
     const method = bodyBytes ? "POST" : "GET";
-    const headers = contentType ? `headers: { "Content-Type": "${contentType}" }, ` : "";
+    const headers = contentType ? `headers: { "Content-Type": ${JSON.stringify(contentType)} }, ` : "";
     const bodyText = bodyBytes ? `body: new Uint8Array([${Array.from(bodyBytes).join(',')}]) ` : "";
 
-    return `fetch("${url}", {
+    return `fetch(${JSON.stringify(url)}, {
     method: "${method}",
     ${headers}${bodyText}
 }).then(r => r.arrayBuffer()).then(b => {
     const b64 = btoa(String.fromCharCode(...new Uint8Array(b)));
-    console.log("${label} Base64:");
+    console.log(${JSON.stringify(`${label} Base64:`)});
     console.log(b64);
     try { 
         navigator.clipboard.writeText(b64); 
@@ -53,9 +88,9 @@ export function generateFetchConsoleScript(url: string, bodyBytes?: Uint8Array, 
  */
 export function generateFetchConsoleScriptOneLiner(url: string, bodyBytes?: Uint8Array, contentType: string = "application/timestamp-query") {
     const method = bodyBytes ? "POST" : "GET";
-    const headers = contentType ? `headers: { "Content-Type": "${contentType}" }, ` : "";
+    const headers = contentType ? `headers: { "Content-Type": ${JSON.stringify(contentType)} }, ` : "";
     const bodyText = bodyBytes ? `body: new Uint8Array([${Array.from(bodyBytes).join(',')}]) ` : "";
 
-    return `fetch("${url}", { method: "${method}", ${headers}${bodyText} }).then(r => r.arrayBuffer()).then(b => { const b64 = btoa(String.fromCharCode(...new Uint8Array(b))); console.log(b64); try { navigator.clipboard.writeText(b64); } catch(e){console.log("Copy manually");} })`;
+    return `fetch(${JSON.stringify(url)}, { method: "${method}", ${headers}${bodyText} }).then(r => r.arrayBuffer()).then(b => { const b64 = btoa(String.fromCharCode(...new Uint8Array(b))); console.log(b64); try { navigator.clipboard.writeText(b64); } catch(e){console.log("Copy manually");} })`;
 }
 

@@ -9,7 +9,7 @@ import {
 } from "pdf-rfc3161";
 import FileDrop from "./FileDrop";
 import { Download, AlertCircle, Check, Loader2, FileCheck, Code, Copy } from "lucide-react";
-import { downloadBlob, base64ToUint8Array, generateFetchConsoleScript, generateFetchConsoleScriptOneLiner } from "../utils";
+import { downloadBlob, base64ToUint8Array, generateCurlCommand, generateFetchConsoleScript, generateFetchConsoleScriptOneLiner } from "../utils";
 
 export default function TimestampPanel() {
     const [file, setFile] = useState<File | null>(null);
@@ -344,10 +344,10 @@ export default function TimestampPanel() {
 
                     <div className="mb4">
                         <div className="mb1 bold text-sm">
-                            2. Send to TSA (using curl in terminal):
+                            2. Send to TSA (using curl in sh/bash/zsh, not PowerShell):
                         </div>
                         <div className="code" role="presentation">
-                            curl -H "Content-Type: application/timestamp-query" --data-binary @request.tsq --output response.tsr {tsaUrl}
+                            {generateCurlCommand(tsaUrl, "response.tsr", "request.tsq")}
                         </div>
                         {showConsole && (
                             <div className="console-opt mt2 pt2 border-t">

@@ -418,7 +418,7 @@ describe("offline PAdES validation-tool policy", () => {
             "utf8"
         );
         expect(validationTools).toContain(`pyHanko ${pyHankoVersion}`);
-        expect(validationTools).toContain("pdf_signer.py#L2626-L2630");
+        expect(validationTools).toContain("pdf_signer.py#L2643-L2647");
     });
 
     it("keeps the normal CLI PAdES regression independent from ambient OpenSSL", () => {

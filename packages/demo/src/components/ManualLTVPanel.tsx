@@ -23,7 +23,7 @@ import {
     Upload,
     PenTool,
 } from "lucide-react";
-import { downloadBlob } from "../utils";
+import { downloadBlob, generateCurlCommand } from "../utils";
 
 interface ValidationCommand {
     type: "OCSP" | "CRL" | "CERT";
@@ -125,7 +125,10 @@ export function ManualLTVPanel() {
                         commands.push({
                             type: "OCSP",
                             url: ocspUrl,
-                            command: `curl -H "Content-Type: application/ocsp-request" --data-binary @ocsp_req.der --output ocsp_resp.der ${ocspUrl}`,
+                            command: generateCurlCommand(
+                                ocspUrl, "ocsp_resp.der", "ocsp_req.der",
+                                "application/ocsp-request"
+                            ),
                             filename: "ocsp_resp.der",
                             requestFilename: "ocsp_req.der",
                             requestBytes: new Uint8Array(ocspReq),
@@ -138,7 +141,7 @@ export function ManualLTVPanel() {
                         commands.push({
                             type: "CRL",
                             url: url,
-                            command: `curl --output crl.der ${url}`,
+                            command: generateCurlCommand(url, "crl.der"),
                             filename: "crl.der",
                         });
                     }
@@ -149,7 +152,7 @@ export function ManualLTVPanel() {
                         commands.push({
                             type: "CERT",
                             url: url,
-                            command: `curl --output extra_cert.der ${url}`,
+                            command: generateCurlCommand(url, "extra_cert.der"),
                             filename: "extra_cert.der",
                         });
                     }
@@ -311,10 +314,9 @@ export function ManualLTVPanel() {
                             </div>
 
                             <div className="section mb4">
-                                <div className="bold mb1">B. Run Curl Command (Terminal):</div>
+                                <div className="bold mb1">B. Run Curl Command (sh/bash/zsh):</div>
                                 <div className="code mb2" role="presentation">
-                                    curl -H "Content-Type: application/timestamp-query"
-                                    --data-binary @request.tsq --output response.tsr {tsaUrl}
+                                    {generateCurlCommand(tsaUrl, "response.tsr", "request.tsq")}
                                 </div>
                                 {(tsaUrl.includes("ai.moda") || tsaUrl.includes("localhost")) && (
                                     <div className="mt2">
@@ -375,6 +377,7 @@ export function ManualLTVPanel() {
                             <h3>Step 3 & 4: Fetch & Upload Validation Data</h3>
                             <p className="mb4 text-sm">
                                 We analyzed the timestamp. Fetch revocation data if needed.
+                                Commands below are for a POSIX shell (sh/bash/zsh), not PowerShell.
                             </p>
 
                             {validationCommands.length === 0 ? (
