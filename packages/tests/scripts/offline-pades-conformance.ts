@@ -66,8 +66,8 @@ const PINNED_ORACLE_INSTALLATION_GUIDANCE =
     "Run pnpm --filter pdf-rfc3161-tests run install:pades-oracles.";
 const PYHANKO_INSTALL_GUIDANCE =
     "Install hash-locked pyHanko with uv pip install --system --require-hashes -r packages/tests/python/requirements.lock.";
-const EXPECTED_PYHANKO_VERSION = "0.37.0";
-const EXPECTED_CERTVALIDATOR_VERSION = "0.32.0";
+const EXPECTED_PYHANKO_VERSION = "0.38.0";
+const EXPECTED_CERTVALIDATOR_VERSION = "0.33.0";
 const EXPECTED_VERIFIEDBY_VERSION = "0.1.0";
 const ID_SIGNED_DATA = "1.2.840.113549.1.7.2";
 const OCSP_URL = "http://ocsp.example.com/";
@@ -2924,7 +2924,7 @@ const REQUIRED_MINIMUM_COUNTS: Record<string, number> = {
 const REQUIRED_MINIMUM_TOTAL = 182;
 
 const RECORDED_LIMITATIONS = [
-    "OpenSSL 3.0.13 ts -verify -attime treats notAfter as exclusive while the library and pyHanko 0.37.0 (tolerance 0) treat it as inclusive; pinned at the exact na instant in validity-boundaries and token-rigor.",
+    "OpenSSL 3.0.13 ts -verify -attime treats notAfter as exclusive while the library and pyHanko 0.38.0 (tolerance 0) treat it as inclusive; pinned at the exact na instant in validity-boundaries and token-rigor.",
     "openssl ocsp -respin cannot verify a nonce-bearing response offline (Nonce Verify error even with the matching -reqin); strict-mode OCSP is oracle-qualified structurally (parse plus echoed-nonce hex equality plus Cert Status) while omit-mode carries the full signature verification.",
     "verifiedby 0.1.0 authentic excludes documentMatches by construction; covered-byte tampering is signaled by documentMatches=false plus top-level mismatch.",
     "Live-Sectigo remainder (M2): this gate adds owned local-fixture breadth (RSA/EC signers, fixed instants, revocation material); main-only qualification still needs a captured Sectigo TSQ/TSR/PDF fixture with fixed genTime and its recorded anchored baseline.",

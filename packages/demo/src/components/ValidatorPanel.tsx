@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
-    extractTimestamps,
-    verifyTimestamp,
+    verifyPdfTimestamps,
     TimestampInfo,
 } from "pdf-rfc3161";
 import { getDSSInfo, extractLTVData } from "pdf-rfc3161/internals";
@@ -58,12 +57,14 @@ export default function ValidatorPanel() {
             const dss = await getDSSInfo(pdfBytes);
             setDssInfo(dss);
 
-            // 2. Extract Timestamps
-            const extracted = await extractTimestamps(pdfBytes);
+            // 2. Verify once under the PDF-level aggregate resource budget.
+            const verifiedTimestamps = await verifyPdfTimestamps(pdfBytes, {
+                strictESSValidation: false, // Preserve the demo's existing inspection policy.
+            });
 
             const validationResults: ValidationResult[] = [];
 
-            for (const ts of extracted) {
+            for (const ts of verifiedTimestamps) {
                 const errors: string[] = [];
                 let isValid = false;
                 let info: TimestampInfo | null = null;
@@ -71,13 +72,7 @@ export default function ValidatorPanel() {
 
                 // Verify
                 try {
-                    const verification = await verifyTimestamp(ts, {
-                        pdf: pdfBytes,
-                        strictESSValidation: false // Allow loose for demo to show content
-                    });
-                    // verifyTimestamp returns TimestampResult... wait, verifyTimestamp signature in extract.ts
-                    // It returns Promise<TimestampVerifyResult> which has { status: 'valid' | 'invalid', info: ..., error?: ... }
-                    // Actually checking index.ts exports: 'verifyTimestamp'.
+                    const verification = ts;
 
                     if (verification.verified && verification.info) {
                         isValid = true;

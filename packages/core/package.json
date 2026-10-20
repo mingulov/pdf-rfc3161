@@ -93,23 +93,23 @@
         "prepack": "pnpm run build"
     },
     "dependencies": {
-        "asn1js": "^3.0.10",
+        "asn1js": "^3.1.0",
         "pdf-lib-incremental-save": "1.17.4",
         "pkijs": "^3.4.1"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
-        "@types/node": "^26.6.3",
+        "@types/node": "^26.6.5",
         "@typescript/native": "npm:typescript@7.0.2",
-        "eslint": "^10.11.0",
-        "eslint-plugin-security": "^4.1.0",
-        "prettier": "^3.9.9",
-        "tsup": "^8.5.1",
+        "eslint": "^10.13.0",
+        "eslint-plugin-security": "^4.2.0",
+        "prettier": "^3.9.10",
+        "tsup": "^9.0.0",
         "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
-        "typescript-eslint": "^8.71.0"
+        "typescript-eslint": "^8.71.2"
     },
     "engines": {
-        "node": ">=22.12.0"
+        "node": ">=22.18.0"
     }
 }

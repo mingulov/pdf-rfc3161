@@ -45,6 +45,30 @@ function readRepositoryFile(path: string): string {
 }
 
 describe("supply-chain runtime policy", () => {
+    it("does not reintroduce the October 2026 vulnerable transitive packages", () => {
+        const lockfile = readRepositoryFile("pnpm-lock.yaml");
+        const minimumVersions = {
+            "shell-quote": [1, 11, 0],
+            "source-map-js": [1, 2, 2],
+        };
+
+        for (const [name, minimum] of Object.entries(minimumVersions)) {
+            const versions = lockfile
+                .split("\n")
+                .filter((line) => line.startsWith(`  ${name}@`))
+                .map((line) => line.slice(`  ${name}@`.length).split(":")[0]?.split("(")[0]);
+            expect(versions.length, `${name} must be represented in the lockfile`).toBeGreaterThan(0);
+            for (const version of versions) {
+                expect(version).toMatch(/^\d{1,5}\.\d{1,5}\.\d{1,5}$/);
+                const parts = String(version).split(".").map(Number);
+                const comparison = parts
+                    .map((part, index) => part - (minimum[index] ?? 0))
+                    .find((difference) => difference !== 0);
+                expect(comparison ?? 0, `${name}@${version}`).toBeGreaterThanOrEqual(0);
+            }
+        }
+    });
+
     it("requires supported Node, pnpm, and workflow declarations", () => {
         const manifests = packageFiles.map(
             (path) =>
@@ -79,6 +103,9 @@ describe("supply-chain runtime policy", () => {
             expect(workflow).toMatch(/node: \[22, 24, 26\]/);
             expect(workflow).not.toContain("node: [20");
         }
+        expect(ciWorkflow).toContain("  node-runtime-floor:");
+        expect(ciWorkflow).toContain("node-version: '22.18.0'");
+        expect(ciWorkflow).toContain("runtime-floor-receipt.json");
 
         for (const path of nonMatrixWorkflowFiles) {
             expect(readRepositoryFile(path)).not.toMatch(/node-version:\s{1,20}["']?24/);

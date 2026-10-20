@@ -170,7 +170,7 @@ exit status, and the tested file hash. Activate the same locally extracted
 qpdf/OpenSSL binaries that the interoperability gate checked:
 
 ```bash
-PADES_ROOT="$PWD/packages/tests/.pades-oracles/amd64-qpdf-11.9.0-1.1ubuntu0.1-openssl-3.0.13-0ubuntu3.12/rootfs"
+PADES_ROOT="$PWD/packages/tests/.pades-oracles/amd64-qpdf-11.9.0-1.1ubuntu0.1-openssl-3.0.13-0ubuntu3.16/rootfs"
 PATH="$PADES_ROOT/usr/bin:$PATH"
 LD_LIBRARY_PATH="$PADES_ROOT/usr/lib/x86_64-linux-gnu"
 PYTHON=/tmp/pdf-rfc3161-pades-python/bin/python

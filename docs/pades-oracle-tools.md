@@ -14,10 +14,10 @@ changed, and neither host OpenSSL nor host qpdf is downgraded or replaced.
 
 | Package      | Ubuntu 24.04 revision | Artifact                                                                                                                                                      | SHA-256                                                            |
 | ------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| qpdf         | `11.9.0-1.1ubuntu0.1` | [qpdf_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb)             | `b50d1aca530cd8f7b68214f8b19bdf348c6c01b7110ca1c335e6662cdb442af8` |
-| libqpdf29t64 | `11.9.0-1.1ubuntu0.1` | [libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb) | `8ffa418e72ab62013d7bd97b737f6eac8311853e50e4972b3db414c6fdbab445` |
-| OpenSSL      | `3.0.13-0ubuntu3.12`  | [openssl_3.0.13-0ubuntu3.12_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.12_amd64.deb)          | `321b30ad5a1c3783cb3d73ae439f824f6d3874d76a93a62f4a984959b490aa7b` |
-| libssl3t64   | `3.0.13-0ubuntu3.12`  | [libssl3t64_3.0.13-0ubuntu3.12_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20260825T000000Z/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.12_amd64.deb)    | `6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b` |
+| qpdf         | `11.9.0-1.1ubuntu0.1` | [qpdf_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20261020T000000Z/pool/universe/q/qpdf/qpdf_11.9.0-1.1ubuntu0.1_amd64.deb)             | `b50d1aca530cd8f7b68214f8b19bdf348c6c01b7110ca1c335e6662cdb442af8` |
+| libqpdf29t64 | `11.9.0-1.1ubuntu0.1` | [libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20261020T000000Z/pool/main/q/qpdf/libqpdf29t64_11.9.0-1.1ubuntu0.1_amd64.deb) | `8ffa418e72ab62013d7bd97b737f6eac8311853e50e4972b3db414c6fdbab445` |
+| OpenSSL      | `3.0.13-0ubuntu3.16`  | [openssl_3.0.13-0ubuntu3.16_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20261020T000000Z/pool/main/o/openssl/openssl_3.0.13-0ubuntu3.16_amd64.deb)          | `675b84971ffd4467707008c25ef7520f90ea7c23ef27b7a76b0dccf1d7c4dc3f` |
+| libssl3t64   | `3.0.13-0ubuntu3.16`  | [libssl3t64_3.0.13-0ubuntu3.16_amd64.deb](https://snapshot.ubuntu.com/ubuntu/20261020T000000Z/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.16_amd64.deb)    | `219f43b1cd836a4da550938db5fda93160d269d39a4edcf1f1ce698a470db797` |
 
 The installer exports the local `usr/bin` directory through `GITHUB_PATH` and
 the local library directory through `GITHUB_ENV` for subsequent workflow
@@ -37,7 +37,7 @@ Sources and licenses:
   [artifact SHA-256](https://packages.ubuntu.com/noble-updates/amd64/qpdf/download),
   [runtime-library SHA-256](https://packages.ubuntu.com/noble-updates/amd64/libqpdf29t64/download),
   [OpenSSL package metadata](https://packages.ubuntu.com/noble-updates/openssl),
-  and [OpenSSL runtime SHA-256](https://packages.ubuntu.com/noble/amd64/libssl3t64/download).
+  and [OpenSSL runtime SHA-256](https://packages.ubuntu.com/noble-updates/amd64/libssl3t64/download).
 - [QPDF licensing](https://qpdf.sourceforge.io/) is Apache License 2.0.
   [OpenSSL 3 licensing](https://www.openssl.org/source/license.html) is Apache
   License 2.0. Ubuntu packaging metadata and copyright files remain applicable
@@ -46,7 +46,7 @@ Sources and licenses:
 ## Run from a clean checkout
 
 The pinned binary installer supports an Ubuntu 24.04 AMD64 runner. The runner
-must already provide Node.js 26 with pnpm and `uv` 0.12.10; CI installs
+must already provide Node.js 26 with pnpm and `uv` 0.13.3; CI installs
 those exact prerequisites before this recipe. Verify them first, then install
 the locked Python environment and binary artifacts. `test:interoperability`
 deliberately fails if the required tools are missing or have different
@@ -57,8 +57,8 @@ node --version
 pnpm --version
 uv --version
 pnpm install --frozen-lockfile
-uv python install 3.12.14
-uv venv --python 3.12.14 /tmp/pdf-rfc3161-pades-python
+uv python install 3.12.15
+uv venv --python 3.12.15 /tmp/pdf-rfc3161-pades-python
 uv pip install --python /tmp/pdf-rfc3161-pades-python/bin/python \
   --require-hashes -r packages/tests/python/requirements.lock
 pnpm --filter pdf-rfc3161-tests run install:pades-oracles

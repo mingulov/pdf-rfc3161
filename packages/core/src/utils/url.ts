@@ -247,11 +247,13 @@ export function validateUrl(urlString: string, options: ValidateUrlOptions = {})
     let url: URL;
     try {
         url = new URL(urlString);
-    } catch (error) {
+    } catch {
+        // Native URL errors retain the complete input (for example in
+        // Node's cause.input), so neither the input nor that cause is safe
+        // to expose when parsing failed and secrets cannot be stripped.
         throw new TimestampError(
             TimestampErrorCode.NETWORK_ERROR,
-            `Invalid URL: ${urlString}`,
-            error
+            "Invalid URL: [unparseable URL]"
         );
     }
 
@@ -266,7 +268,7 @@ export function validateUrl(urlString: string, options: ValidateUrlOptions = {})
     if (!rawHost) {
         throw new TimestampError(
             TimestampErrorCode.NETWORK_ERROR,
-            `Invalid URL: missing hostname in ${urlString}`
+            "Invalid URL: missing hostname"
         );
     }
     if (rawHost.length > MAX_HOSTNAME_LENGTH) {

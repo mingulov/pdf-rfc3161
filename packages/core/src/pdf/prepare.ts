@@ -17,10 +17,7 @@ import {
     assertValidSignatureSize,
 } from "../constants.js";
 import { TimestampError, TimestampErrorCode } from "../types.js";
-import {
-    MAX_FIELD_HIERARCHY_DEPTH,
-    MAX_FIELD_HIERARCHY_NODES,
-} from "./field-traversal.js";
+import { MAX_FIELD_HIERARCHY_DEPTH, MAX_FIELD_HIERARCHY_NODES } from "./field-traversal.js";
 import {
     applyLastRevisionXrefFormat,
     assertIncrementalWriterHeadroom,
@@ -30,7 +27,7 @@ import {
 
 /**
  * L5: caps how long a single user-supplied PDF string (reason / location /
- * contactInfo) may be. Anything past this is rejected. 2048 is what most
+ * contactInfo / signatureFieldName) may be. Anything past this is rejected. 2048 is what most
  * PDF viewers accept comfortably; longer strings serve no signal purpose
  * and bloat the incremental update.
  */
@@ -51,6 +48,19 @@ function sanitizePdfString(value: string, fieldName: string): string {
         throw pdfError(`${fieldName} contains embedded NUL character`);
     }
     return value;
+}
+
+/**
+ * PDFString.of serializes raw PDF syntax, not arbitrary text. Escape literal
+ * delimiters and backslashes for printable ASCII; use a UTF-16BE hex string
+ * for Unicode/control characters so text cannot change the surrounding object.
+ */
+function pdfTextString(value: string, fieldName: string): PDFString | PDFHexString {
+    const text = sanitizePdfString(value, fieldName);
+    if (/[^\x20-\x7e]/.test(text)) {
+        return PDFHexString.fromText(text);
+    }
+    return PDFString.of(text.replace(/[\\()]/g, "\\$&"));
 }
 
 /**
@@ -89,6 +99,7 @@ export interface PrepareOptions {
     /**
      * Optional requested base name for the signature field (default: "Timestamp").
      * A numeric suffix may be added to avoid an existing fully qualified field name.
+     * The final name must not contain NUL or exceed 2048 characters.
      */
     signatureFieldName?: string;
     /** Whether to omit the modification time (/M) from the signature dictionary (default: true) */
@@ -323,26 +334,18 @@ function registerFrozenSignatureDictionary(
     newByteRangeArr.push(PDFNumber.of(111111111111));
     newByteRangeArr.push(PDFNumber.of(111111111111));
 
-    // L5: sanitize and length-cap user-supplied PDF strings before passing them
-    // to pdf-lib. pdf-lib's PDFString.of handles encoding, but rejects nothing
-    // up front: extremely long strings bloat the signature dictionary and
-    // embedded NULs / control chars confuse some PDF readers.
+    // Treat caller-supplied values as text, never as pre-escaped PDF syntax.
+    // PDFString.of does not escape delimiters or encode arbitrary Unicode.
     if (options.reason !== undefined) {
-        newSigDict.set(
-            PDFName.of("Reason"),
-            PDFString.of(sanitizePdfString(options.reason, "reason"))
-        );
+        newSigDict.set(PDFName.of("Reason"), pdfTextString(options.reason, "reason"));
     }
     if (options.location !== undefined) {
-        newSigDict.set(
-            PDFName.of("Location"),
-            PDFString.of(sanitizePdfString(options.location, "location"))
-        );
+        newSigDict.set(PDFName.of("Location"), pdfTextString(options.location, "location"));
     }
     if (options.contactInfo !== undefined) {
         newSigDict.set(
             PDFName.of("ContactInfo"),
-            PDFString.of(sanitizePdfString(options.contactInfo, "contactInfo"))
+            pdfTextString(options.contactInfo, "contactInfo")
         );
     }
 
@@ -430,7 +433,8 @@ export async function preparePdfForTimestamp(
         acroForm = { value: newAcroForm, ref: newAcroFormRef };
     } else {
         const rawSigFlags = acroForm.value.get(PDFName.of("SigFlags"));
-        const resolved = rawSigFlags instanceof PDFRef ? sigContext.lookup(rawSigFlags) : rawSigFlags;
+        const resolved =
+            rawSigFlags instanceof PDFRef ? sigContext.lookup(rawSigFlags) : rawSigFlags;
         const existing = resolved instanceof PDFNumber ? resolved.asNumber() : -1;
         if (rawSigFlags !== undefined && (!Number.isSafeInteger(existing) || existing < 0)) {
             throw pdfError("AcroForm /SigFlags is malformed");
@@ -477,7 +481,7 @@ export async function preparePdfForTimestamp(
         Type: PDFName.of("Annot"),
         Subtype: PDFName.of("Widget"),
         FT: PDFName.of("Sig"),
-        T: PDFString.of(signatureFieldName),
+        T: pdfTextString(signatureFieldName, "signatureFieldName"),
         V: newSigRef,
         F: 132,
         P: sigPageRef,

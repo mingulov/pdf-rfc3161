@@ -5,7 +5,7 @@ import {
 } from "../constants.js";
 import { type TSAConfig } from "../types.js";
 import { getLogger } from "../utils/logger.js";
-import { formatDiagnosticUrl } from "../utils/url.js";
+import { formatDiagnosticUrl, sanitizeTransportMessage } from "../utils/url.js";
 import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
 
 /**
@@ -13,7 +13,7 @@ import { fetchBytesWithRetry } from "../utils/fetch-with-retry.js";
  *
  * This function uses the Fetch API which is available in:
  * - Modern browsers
- * - Node.js 22.12.0+
+ * - Node.js 22.18.0+
  * - Cloudflare Workers
  * - Deno
  * - Vercel Edge Runtime
@@ -84,7 +84,7 @@ export async function sendTimestampRequest(
             const contentType = response.headers.get("content-type");
             if (contentType && !contentType.includes(TSA_CONTENT_TYPE.RESPONSE)) {
                 getLogger().warn(
-                    `TSA returned unexpected content-type: ${contentType}, expected ${TSA_CONTENT_TYPE.RESPONSE}`
+                    `TSA returned unexpected content-type: ${sanitizeTransportMessage(contentType)}, expected ${TSA_CONTENT_TYPE.RESPONSE}`
                 );
             }
         },

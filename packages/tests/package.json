@@ -23,32 +23,31 @@
         "lint": "eslint browser test fuzz/targets scripts/test-packed-consumer.ts scripts/test-browser-consumer.ts scripts/packed-consumer-spawn.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts scripts/packed-consumer-config.ts scripts/pades-oracles.ts scripts/install-pades-oracles.ts scripts/assert-pades-oracles.ts scripts/release-metadata.ts scripts/offline-pades-conformance.ts --fix"
     },
     "dependencies": {
-        "asn1js": "^3.0.10",
+        "asn1js": "^3.1.0",
         "commander": "^15.0.0",
         "pdf-lib-incremental-save": "1.17.4",
         "pdf-rfc3161": "workspace:*",
         "pdf-rfc3161-cli": "workspace:*",
-        "pkijs": "^3.4.1",
-        "pvutils": "^1.2.0"
+        "pkijs": "^3.4.1"
     },
     "devDependencies": {
         "@arethetypeswrong/cli": "0.18.5",
         "@jazzer.js/core": "4.0.0",
-        "@types/node": "^26.6.3",
+        "@types/node": "^26.6.5",
         "@typescript/native": "npm:typescript@7.0.2",
-        "@vitest/coverage-v8": "^5.0.2",
+        "@vitest/coverage-v8": "^5.0.5",
         "esbuild": "0.28.2",
-        "eslint": "^10.11.0",
+        "eslint": "^10.13.0",
         "fast-check": "4.10.2",
         "pdf-lib": "^1.17.1",
-        "playwright": "^1.63.0",
+        "playwright": "^1.64.1",
         "publint": "0.3.25",
         "tsx": "^4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
         "verifiedby": "0.1.0",
-        "vitest": "^5.0.2"
+        "vitest": "^5.0.5"
     },
     "engines": {
-        "node": ">=22.12.0"
+        "node": ">=22.18.0"
     }
 }

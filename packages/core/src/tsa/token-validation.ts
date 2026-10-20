@@ -221,7 +221,8 @@ function responseStatusValue(schema: asn1js.BaseBlock): { status: number; status
             }
             values.push(value.valueBlock.value);
         }
-        if (values.length === 0) throw malformedResponse("TimeStampResp status strings are malformed");
+        if (values.length === 0)
+            throw malformedResponse("TimeStampResp status strings are malformed");
         statusString = values.join("; ");
         index++;
     }
@@ -624,6 +625,119 @@ function validateRequiredCmsAttributes(signerInfo: pkijs.SignerInfo): void {
     }
 }
 
+const RSA_PKCS1_SIGNATURE_OIDS: ReadonlySet<string> = new Set([
+    "1.2.840.113549.1.1.1",
+    "1.2.840.113549.1.1.5",
+    "1.2.840.113549.1.1.11",
+    "1.2.840.113549.1.1.12",
+    "1.2.840.113549.1.1.13",
+]);
+const ECDSA_SIGNATURE_OIDS: ReadonlySet<string> = new Set([
+    "1.2.840.10045.4.1",
+    "1.2.840.10045.4.3.2",
+    "1.2.840.10045.4.3.3",
+    "1.2.840.10045.4.3.4",
+]);
+const CMS_SIGNATURE_HASH_OIDS: Readonly<Record<string, string>> = {
+    "1.2.840.113549.1.1.5": ID_SHA1,
+    "1.2.840.113549.1.1.11": "2.16.840.1.101.3.4.2.1",
+    "1.2.840.113549.1.1.12": "2.16.840.1.101.3.4.2.2",
+    "1.2.840.113549.1.1.13": "2.16.840.1.101.3.4.2.3",
+    "1.2.840.10045.4.1": ID_SHA1,
+    "1.2.840.10045.4.3.2": "2.16.840.1.101.3.4.2.1",
+    "1.2.840.10045.4.3.3": "2.16.840.1.101.3.4.2.2",
+    "1.2.840.10045.4.3.4": "2.16.840.1.101.3.4.2.3",
+};
+
+function hasNullOrAbsentParameters(algorithm: pkijs.AlgorithmIdentifier): boolean {
+    return (
+        algorithm.algorithmParams === undefined || algorithm.algorithmParams instanceof asn1js.Null
+    );
+}
+
+/**
+ * PKIjs chooses most verification families from SPKI, not the signature
+ * OID. Bind the declared CMS algorithm to the key before that primitive
+ * runs. WebCrypto also fixes RSA-PSS to MGF1 with the signature hash and
+ * trailerField 1; declarations it cannot execute must not be ignored.
+ */
+function validateCmsSignatureAlgorithm(
+    algorithm: pkijs.AlgorithmIdentifier,
+    certificate: pkijs.Certificate,
+    digestAlgorithm: pkijs.AlgorithmIdentifier
+): void {
+    const keyOid = certificate.subjectPublicKeyInfo.algorithm.algorithmId;
+    const signatureOid = algorithm.algorithmId;
+    const signatureHashOid = CMS_SIGNATURE_HASH_OIDS[signatureOid];
+    if (
+        !ESS_HASH_ALGORITHMS[digestAlgorithm.algorithmId] ||
+        !hasNullOrAbsentParameters(digestAlgorithm) ||
+        (signatureHashOid !== undefined && signatureHashOid !== digestAlgorithm.algorithmId)
+    ) {
+        throw verificationFailed("Timestamp CMS digest and signature algorithms are inconsistent");
+    }
+    if (keyOid === "1.2.840.113549.1.1.1" && RSA_PKCS1_SIGNATURE_OIDS.has(signatureOid)) {
+        if (!hasNullOrAbsentParameters(algorithm)) {
+            throw verificationFailed("Timestamp RSA signature parameters must be absent or NULL");
+        }
+        return;
+    }
+    if (keyOid === "1.2.840.10045.2.1" && ECDSA_SIGNATURE_OIDS.has(signatureOid)) {
+        if (algorithm.algorithmParams !== undefined) {
+            throw verificationFailed("Timestamp ECDSA signature parameters must be absent");
+        }
+        return;
+    }
+    if (keyOid === "1.2.840.113549.1.1.1" && signatureOid === "1.2.840.113549.1.1.10") {
+        try {
+            const schema: unknown = algorithm.algorithmParams;
+            if (!(schema instanceof asn1js.Sequence)) throw new Error("Missing PSS parameters");
+            const params = new pkijs.RSASSAPSSParams({ schema });
+            // Round-tripping prevents ignored/duplicate fields and lossy
+            // INTEGER decoding from supplying a different executable policy.
+            if (
+                !bytesEqual(
+                    new Uint8Array(schema.toBER(false)),
+                    new Uint8Array(params.toSchema().toBER(false))
+                )
+            ) {
+                throw new Error("Malformed PSS parameters");
+            }
+            if (
+                !ESS_HASH_ALGORITHMS[params.hashAlgorithm.algorithmId] ||
+                params.hashAlgorithm.algorithmId !== digestAlgorithm.algorithmId ||
+                !hasNullOrAbsentParameters(params.hashAlgorithm) ||
+                params.maskGenAlgorithm.algorithmId !== "1.2.840.113549.1.1.8" ||
+                !(params.maskGenAlgorithm.algorithmParams instanceof asn1js.Sequence) ||
+                !Number.isSafeInteger(params.saltLength) ||
+                params.saltLength < 0 ||
+                params.trailerField !== 1
+            ) {
+                throw new Error("Unsupported PSS parameters");
+            }
+            const maskHash = new pkijs.AlgorithmIdentifier({
+                schema: params.maskGenAlgorithm.algorithmParams,
+            });
+            if (
+                maskHash.algorithmId !== params.hashAlgorithm.algorithmId ||
+                !hasNullOrAbsentParameters(maskHash) ||
+                !bytesEqual(
+                    new Uint8Array(params.maskGenAlgorithm.algorithmParams.toBER(false)),
+                    new Uint8Array(maskHash.toSchema().toBER(false))
+                )
+            ) {
+                throw new Error("Unsupported PSS mask generation");
+            }
+            return;
+        } catch {
+            throw verificationFailed(
+                "Timestamp RSA-PSS signature parameters are unsupported or malformed"
+            );
+        }
+    }
+    throw verificationFailed("Timestamp signature algorithm is not compatible with the signer key");
+}
+
 /** Verifies CMS content digest and signature after a prior original-SID selection. */
 export async function verifyTimestampCmsSignature(
     signedData: pkijs.SignedData,
@@ -631,6 +745,11 @@ export async function verifyTimestampCmsSignature(
     signerCertificate: pkijs.Certificate
 ): Promise<void> {
     validateRequiredCmsAttributes(signerInfo);
+    validateCmsSignatureAlgorithm(
+        signerInfo.signatureAlgorithm,
+        signerCertificate,
+        signerInfo.digestAlgorithm
+    );
     const originalCertificates = signedData.certificates;
     const originalContentType = signedData.encapContentInfo.eContentType;
     const originalSid = signerInfo.sid as asn1js.BaseBlock | pkijs.IssuerAndSerialNumber;
@@ -705,14 +824,12 @@ function validateIssuerSerial(schema: asn1js.BaseBlock, certificate: pkijs.Certi
 }
 
 function isDisplayText(schema: asn1js.BaseBlock): boolean {
-    if (
-        !(
-            schema instanceof asn1js.IA5String ||
-            schema instanceof asn1js.VisibleString ||
-            schema instanceof asn1js.BmpString ||
-            schema instanceof asn1js.Utf8String
-        )
-    ) {
+    if (!(
+        schema instanceof asn1js.IA5String ||
+        schema instanceof asn1js.VisibleString ||
+        schema instanceof asn1js.BmpString ||
+        schema instanceof asn1js.Utf8String
+    )) {
         return false;
     }
     const value = schema.valueBlock.value;

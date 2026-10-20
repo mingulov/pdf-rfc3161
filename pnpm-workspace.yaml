@@ -4,16 +4,12 @@ packages:
 allowBuilds:
   esbuild: true
 
-minimumReleaseAgeExclude:
-  - '@types/node@26.5.0'
-  - lucide-react@1.42.0
-
 overrides:
   esbuild: 0.28.2
-  '@typescript-eslint/tsconfig-utils': 8.71.0
-  '@typescript-eslint/types': 8.71.0
-  eslint: 10.11.0
-  typescript-eslint: 8.71.0
+  '@typescript-eslint/tsconfig-utils': 8.71.2
+  '@typescript-eslint/types': 8.71.2
+  eslint: 10.13.0
+  typescript-eslint: 8.71.2
   # @stryker-mutator 10.0.0 (latest) pulls qs 6.15.1 via typed-rest-client;
-  # force the patched 6.16.0 so `pnpm audit --audit-level=moderate` passes.
-  qs: 6.16.0
+  # force the patched 6.16.1 so `pnpm audit --audit-level=moderate` passes.
+  qs: 6.16.1
