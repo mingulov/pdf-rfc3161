@@ -3,8 +3,7 @@ import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { completeLTVData } from "../../../core/src/pdf/ltv.js";
 import { getCRLDistributionPoints } from "../../../core/src/pki/crl-utils.js";
-import { getOCSPURI } from "../../../core/src/pki/ocsp-utils.js";
-import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
+import { createOCSPRequest, getOCSPURI } from "../../../core/src/pki/ocsp-utils.js";
 import {
     createCrlCandidate,
     createOcspResponseCandidate,
@@ -33,23 +32,39 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.slice().buffer;
 }
 
+function parseCertificate(bytes: Uint8Array): pkijs.Certificate {
+    const asn1 = asn1js.fromBER(toArrayBuffer(bytes));
+    if (asn1.offset === -1) throw new Error("fixture certificate is not DER");
+    return new pkijs.Certificate({ schema: asn1.result });
+}
+
+function certIdKeyHash(request: Uint8Array): string {
+    const asn1 = asn1js.fromBER(toArrayBuffer(request));
+    if (asn1.offset === -1) throw new Error("captured OCSP request is not DER");
+    const parsed = new pkijs.OCSPRequest({ schema: asn1.result });
+    const first = parsed.tbsRequest.requestList[0];
+    if (!first) throw new Error("captured OCSP request has no requests");
+    return Buffer.from(first.reqCert.issuerKeyHash.valueBlock.valueHexView).toString("hex");
+}
+
 async function certificatePair(): Promise<Uint8Array[]> {
-    const fixture = await createRFC3161TokenFixture({ certificates: "decoyFirst" });
-    const signerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.signerCertificate));
-    const issuerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.decoyCertificate));
-    if (
-        signerAsn1.offset !== fixture.signerCertificate.length ||
-        issuerAsn1.offset !== fixture.decoyCertificate.length
-    ) {
-        throw new Error("fixture certificates must be complete DER");
-    }
-    const signer = new pkijs.Certificate({ schema: signerAsn1.result });
-    const issuer = new pkijs.Certificate({ schema: issuerAsn1.result });
-    signer.issuer = issuer.subject;
-    return [
-        new Uint8Array(signer.toSchema(true).toBER(false)),
-        new Uint8Array(issuer.toSchema().toBER(false)),
-    ];
+    // Real issuance: LTV OCSP collection binds requests to signature-verified
+    // issuers, so the pair must verify, not merely share a subject name.
+    const caKeys = await generateRSAKeyPair();
+    const leafKeys = await generateRSAKeyPair();
+    const leaf = await chainCertificateBytes({
+        subject: "LTV Test Leaf",
+        issuerName: "LTV Test CA",
+        serial: 11001,
+        keys: leafKeys,
+        signerKeys: caKeys,
+    });
+    const ca = await chainCertificateBytes({
+        subject: "LTV Test CA",
+        serial: 11002,
+        keys: caKeys,
+    });
+    return [leaf, ca];
 }
 
 function sequenceContents(bytes: Uint8Array): Uint8Array {
@@ -614,6 +629,89 @@ describe("issuer-gated AIA chain building and serial-twin handling (T05)", () =>
 
         expect(ocspFetcher).toHaveBeenCalledTimes(1);
         expect(result.data.ocspResponses).toHaveLength(1);
+    });
+
+    it("binds the OCSP CertID to the signature-verified issuer under same-subject twins", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const caAKeys = await generateRSAKeyPair();
+        const caBKeys = await generateRSAKeyPair();
+        const leaf = await chainCertificateBytes({
+            subject: "Twin Leaf",
+            issuerName: "Twin CA",
+            serial: 4242,
+            keys: leafKeys,
+            signerKeys: caBKeys,
+        });
+        // Wrong issuer first: same subject, different key, never signed the leaf.
+        const caA = await chainCertificateBytes({
+            subject: "Twin CA",
+            serial: 9001,
+            keys: caAKeys,
+        });
+        const caB = await chainCertificateBytes({
+            subject: "Twin CA",
+            serial: 9002,
+            keys: caBKeys,
+        });
+        const ocspFetcher = vi.fn(
+            async (_url: string, _request: Uint8Array): Promise<Uint8Array> =>
+                createOcspResponseCandidate("good")
+        );
+
+        const result = await completeLTVData(
+            { certificates: [leaf, caA, caB], crls: [], ocspResponses: [] },
+            { fetchers: { ocspFetcher } }
+        );
+
+        expect(ocspFetcher).toHaveBeenCalledTimes(1);
+        const firstCall = ocspFetcher.mock.calls[0];
+        expect(firstCall).toBeDefined();
+        const captured = firstCall?.[1];
+        expect(captured).toBeInstanceOf(Uint8Array);
+        if (!(captured instanceof Uint8Array)) throw new Error("no captured OCSP request");
+        const leafCert = parseCertificate(leaf);
+        const caACert = parseCertificate(caA);
+        const caBCert = parseCertificate(caB);
+        const expectedB = await createOCSPRequest(leafCert, caBCert, { includeNonce: false });
+        const expectedA = await createOCSPRequest(leafCert, caACert, { includeNonce: false });
+        expect(certIdKeyHash(captured)).toBe(certIdKeyHash(expectedB));
+        expect(certIdKeyHash(captured)).not.toBe(certIdKeyHash(expectedA));
+        expect(result.data.ocspResponses).toHaveLength(1);
+    });
+
+    it("issues no OCSP request when no candidate verifies as issuer", async () => {
+        vi.mocked(getOCSPURI).mockReturnValue("https://ocsp.example.test");
+        vi.mocked(getCRLDistributionPoints).mockReturnValue([]);
+        const leafKeys = await generateRSAKeyPair();
+        const absentCaKeys = await generateRSAKeyPair();
+        const wrongCaKeys = await generateRSAKeyPair();
+        // Signed by an absent CA; the present CA only shares the subject name.
+        const leaf = await chainCertificateBytes({
+            subject: "Orphan Leaf",
+            issuerName: "Absent CA",
+            serial: 4243,
+            keys: leafKeys,
+            signerKeys: absentCaKeys,
+        });
+        const wrongCa = await chainCertificateBytes({
+            subject: "Absent CA",
+            serial: 9003,
+            keys: wrongCaKeys,
+        });
+        const ocspFetcher = vi.fn(
+            async (_url: string, _request: Uint8Array): Promise<Uint8Array> =>
+                createOcspResponseCandidate("good")
+        );
+
+        const result = await completeLTVData(
+            { certificates: [leaf, wrongCa], crls: [], ocspResponses: [] },
+            { fetchers: { ocspFetcher } }
+        );
+
+        expect(ocspFetcher).not.toHaveBeenCalled();
+        expect(result.data.ocspResponses).toHaveLength(0);
     });
 
     it("retains same-serial issuers fetched for different targets", async () => {

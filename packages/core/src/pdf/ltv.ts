@@ -11,7 +11,7 @@ import {
 import { fetchOCSPResponse } from "../pki/ocsp-client.js";
 import { getCRLDistributionPoints } from "../pki/crl-utils.js";
 import { fetchCRL } from "../pki/crl-client.js";
-import { getCaIssuers, findIssuer, verifyIssuance } from "../pki/cert-utils.js";
+import { getCaIssuers, resolveVerifiedIssuer, verifyIssuance } from "../pki/cert-utils.js";
 import { parseCanonicalDERSequenceTree, requireSchemaRoundTrip } from "../pki/der-utils.js";
 import { fetchCertificate } from "../pki/cert-client.js";
 import { toArrayBuffer, bytesToHex } from "../utils.js";
@@ -393,8 +393,13 @@ export async function completeLTVData(
         // We skip the root (last one usually, or self-signed) effectively because we won't find an issuer for it
         // that is *different* (or if we do, root OCSP is rare/uncommon).
         for (const cert of certs) {
-            // Find issuer
-            const issuer = findIssuer(cert, certsBySubject.get(cert.issuer.toString()) ?? []);
+            // Verified issuer only: OCSP CertIDs bind the issuer key hash,
+            // so a name-only first match could embed another issuer's GOOD
+            // response under serial-twin confusion.
+            const issuer = await resolveVerifiedIssuer(
+                cert,
+                certsBySubject.get(cert.issuer.toString()) ?? []
+            );
 
             if (!issuer) {
                 // If we can't find the issuer, we can't fetch OCSP (needs issuer hash)

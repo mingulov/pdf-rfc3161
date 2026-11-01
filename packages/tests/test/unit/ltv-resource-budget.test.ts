@@ -7,7 +7,6 @@
 // honestly (partial LTV + diagnostics; strict validation yields unknown).
 import { createHash } from "node:crypto";
 import { beforeEach, afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 import { completeLTVData, type LTVData, type LTVSettings } from "../../../core/src/pdf/ltv.js";
 import type { OperationBudgetLimits } from "../../../core/src/utils/operation-budget.js";
@@ -24,7 +23,6 @@ import {
     type TestCertificateAuthority,
 } from "../fixtures/signed-revocation-material.js";
 import { createCrlFixture, createOcspResponseCandidate } from "../fixtures/revocation-material.js";
-import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
 vi.mock(
     "../../../core/src/pki/ocsp-utils.js",
@@ -70,32 +68,17 @@ function settingsWithBudget(settings: LTVSettings, limits: OperationBudgetLimits
     return { ...settings, budget: makeBudget(limits) } as LTVSettings;
 }
 
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-    return bytes.slice().buffer;
-}
-
 function sha256Hex(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");
 }
 
 /** Signer/issuer DER pair with the signer issued by the decoy (existing pattern). */
 async function certificatePair(): Promise<Uint8Array[]> {
-    const fixture = await createRFC3161TokenFixture({ certificates: "decoyFirst" });
-    const signerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.signerCertificate));
-    const issuerAsn1 = asn1js.fromBER(toArrayBuffer(fixture.decoyCertificate));
-    if (
-        signerAsn1.offset !== fixture.signerCertificate.length ||
-        issuerAsn1.offset !== fixture.decoyCertificate.length
-    ) {
-        throw new Error("fixture certificates must be complete DER");
-    }
-    const signer = new pkijs.Certificate({ schema: signerAsn1.result });
-    const issuer = new pkijs.Certificate({ schema: issuerAsn1.result });
-    signer.issuer = issuer.subject;
-    return [
-        new Uint8Array(signer.toSchema(true).toBER(false)),
-        new Uint8Array(issuer.toSchema().toBER(false)),
-    ];
+    // Real issuance: LTV OCSP collection binds requests to
+    // signature-verified issuers (see ltv-validation-material twin tests).
+    const ca = await createTestCA("T08 Budget CA", { serial: 8101 });
+    const leaf = await createTestLeaf(ca, { commonName: "T08 Budget Leaf", serial: 8102 });
+    return [derOf(leaf.cert), derOf(ca.cert)];
 }
 
 function derOf(cert: pkijs.Certificate): Uint8Array {
