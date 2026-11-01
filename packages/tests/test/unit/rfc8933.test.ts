@@ -8,6 +8,7 @@ import {
     validateTimestampTokenRFC8933Compliance,
     RFC8933_CONSTANTS,
 } from "../../../core/src/rfcs/rfc8933.js";
+import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
 
 // Initialize pkijs with Node.js webcrypto
@@ -47,6 +48,23 @@ function createMockSignedData(): pkijs.SignedData {
 
     signedData.signerInfos = [signerInfo];
     return signedData;
+}
+
+function attachProtectionAttribute(signedData: pkijs.SignedData, digestOid: string): void {
+    const signerInfo = signedData.signerInfos[0];
+    const value = new asn1js.Sequence({
+        value: [
+            new pkijs.AlgorithmIdentifier({ algorithmId: digestOid }).toSchema(),
+            new pkijs.AlgorithmIdentifier({
+                algorithmId: "1.2.840.113549.1.1.11",
+            }).toSchema(),
+        ],
+    });
+    const attr = new pkijs.Attribute({
+        type: RFC8933_CONSTANTS.CMS_ALGORITHM_PROTECT_OID,
+        values: [value],
+    });
+    (signerInfo as any).signedAttrs = { attributes: [attr] };
 }
 
 function createMockTimestampToken(): Uint8Array {
@@ -150,8 +168,53 @@ describe("RFC 8933 CMS Algorithm Identifier Protection", () => {
 
         const result = validateRFC8933Compliance(signedData);
 
-        // Our implementation assumes compliance unless proven otherwise
+        // No protection attribute means no contradicting evidence
         expect(result.digestAlgorithmConsistency).toBe(true);
+    });
+
+    it("should pass when the protection attribute repeats the declared digest", () => {
+        const signedData = createMockSignedData();
+        attachProtectionAttribute(
+            signedData,
+            "2.16.840.1.101.3.4.2.1" // SHA-256, matches SignerInfo
+        );
+
+        const result = validateRFC8933Compliance(signedData);
+
+        expect(result.digestAlgorithmConsistency).toBe(true);
+        expect(result.hasAlgorithmProtection).toBe(true);
+        expect(result.compliant).toBe(true);
+    });
+
+    it("should fail when the protection attribute contradicts the declared digest", () => {
+        const signedData = createMockSignedData();
+        attachProtectionAttribute(
+            signedData,
+            "2.16.840.1.101.3.4.2.3" // SHA-384 vs declared SHA-256
+        );
+
+        const result = validateRFC8933Compliance(signedData);
+
+        expect(result.digestAlgorithmConsistency).toBe(false);
+        expect(result.compliant).toBe(false);
+        expect(result.issues).toContain(
+            "Digest algorithm mismatch between SignerInfo and CMSAlgorithmProtection attribute"
+        );
+    });
+
+    it("should fail on a malformed protection attribute value", () => {
+        const signedData = createMockSignedData();
+        const signerInfo = signedData.signerInfos[0];
+        const attr = new pkijs.Attribute({
+            type: RFC8933_CONSTANTS.CMS_ALGORITHM_PROTECT_OID,
+            values: [new asn1js.OctetString({ valueHex: new Uint8Array([1]).buffer })],
+        });
+        (signerInfo as any).signedAttrs = { attributes: [attr] };
+
+        const result = validateRFC8933Compliance(signedData);
+
+        expect(result.digestAlgorithmConsistency).toBe(false);
+        expect(result.compliant).toBe(false);
     });
 
     it("should work with different validation options", () => {

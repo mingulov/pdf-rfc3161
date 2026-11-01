@@ -51,12 +51,12 @@ export function validateRFC8933Compliance(
     }
 
     for (const signerInfo of signedData.signerInfos) {
-        // Check 1: Same digest algorithm for content and signed attributes
+        // Check 1: declared digest matches the protected digest, when present
         const digestAlgorithmConsistency = validateDigestAlgorithmConsistency(signerInfo);
         if (!digestAlgorithmConsistency) {
             result.digestAlgorithmConsistency = false;
             result.issues.push(
-                "Digest algorithm inconsistency between content and signed attributes"
+                "Digest algorithm mismatch between SignerInfo and CMSAlgorithmProtection attribute"
             );
             if (options.strict) {
                 result.compliant = false;
@@ -84,36 +84,57 @@ export function validateRFC8933Compliance(
 }
 
 /**
- * Validates that the same digest algorithm is used for both content and signed attributes.
+ * Detects digest-algorithm contradictions between SignerInfo and the optional
+ * CMSAlgorithmProtection attribute (RFC 6211).
  *
- * RFC 8933 Section 3: "the same digest algorithm MUST be used to compute
- * the digest of the encapContentInfo eContent OCTET STRING and the message-digest attribute"
+ * This is deliberately narrower than RFC 8933 Section 3 ("the same digest
+ * algorithm MUST be used to compute the digest of the encapContentInfo
+ * eContent OCTET STRING and the message-digest attribute"): proving that
+ * requires the original content plus async hashing, which this synchronous
+ * report-level helper does not have. What it does check is real: when the
+ * protection attribute is present, its repeated digest algorithm must equal
+ * the SignerInfo digest algorithm. Absence of the (optional) attribute is
+ * no contradicting evidence, so it yields true.
  *
  * @param signerInfo - The SignerInfo to validate
- * @returns True if digest algorithms are consistent
+ * @returns False only on a detected contradiction or undecodable input
  */
 function validateDigestAlgorithmConsistency(signerInfo: pkijs.SignerInfo): boolean {
     try {
-        // Get digest algorithm from SignerInfo.digestAlgorithm
         const signerDigestAlgorithm = signerInfo.digestAlgorithm.algorithmId;
         if (!signerDigestAlgorithm) {
             return false; // Cannot determine algorithm
         }
-
-        // For timestamp tokens, we need to check if signed attributes exist
-        // and if the message-digest attribute was computed with the same algorithm
         if (!signerInfo.signedAttrs) {
-            return true; // No signed attributes, nothing to validate
+            return true; // No signed attributes, nothing to compare
         }
 
-        // In practice, validating this requires access to the original content
-        // and signed attributes. For our use case with timestamp tokens,
-        // we assume the TSA has implemented this correctly unless we can detect otherwise.
-
-        // We can check that the digestAlgorithm in SignerInfo is consistent
-        // with what's declared, but full validation requires the original data.
-
-        return true; // Assume compliant unless we can prove otherwise
+        const signedAttrs =
+            (signerInfo.signedAttrs as unknown as { attributes?: pkijs.Attribute[] }).attributes ??
+            signerInfo.signedAttrs;
+        if (!Array.isArray(signedAttrs)) {
+            return true;
+        }
+        const protection = signedAttrs.find(
+            (attr) => attr.type === RFC8933_CONSTANTS.CMS_ALGORITHM_PROTECT_OID
+        );
+        if (protection === undefined || protection.values.length === 0) {
+            return true; // Optional attribute absent: no contradicting evidence
+        }
+        // CMSAlgorithmProtection ::= SEQUENCE { digestAlgorithm, signatureAlgorithm }
+        const outer: unknown = protection.values[0];
+        if (!(outer instanceof asn1js.Sequence)) {
+            return false;
+        }
+        const inner = outer.valueBlock.value[0];
+        if (!(inner instanceof asn1js.Sequence)) {
+            return false;
+        }
+        const oidBlock = inner.valueBlock.value[0];
+        if (!(oidBlock instanceof asn1js.ObjectIdentifier)) {
+            return false;
+        }
+        return oidBlock.valueBlock.toString() === signerDigestAlgorithm;
     } catch {
         return false;
     }
@@ -198,7 +219,12 @@ export interface RFC8933ValidationResult {
     compliant: boolean;
     /** List of compliance issues found */
     issues: string[];
-    /** Whether digest algorithms are consistent */
+    /**
+     * No digest-algorithm contradiction detected. True when the optional
+     * CMSAlgorithmProtection attribute is absent or repeats the declared
+     * digest; this is absence-of-contradiction, not a verified content
+     * binding (see validateDigestAlgorithmConsistency).
+     */
     digestAlgorithmConsistency: boolean;
     /** Whether CMSAlgorithmProtection attribute is present */
     hasAlgorithmProtection: boolean;
