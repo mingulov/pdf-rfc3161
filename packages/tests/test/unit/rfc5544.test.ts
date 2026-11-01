@@ -125,6 +125,24 @@ describe("RFC 5544 TimeStampedData", () => {
             expect(parsed.metaData?.otherMetaData?.["1.2.3.4"]).toEqual(["custom", "metadata"]);
         });
 
+        it("should reject an envelope with trailing bytes", () => {
+            const envelope = createTimeStampedData(mockToken, {
+                data: testData,
+                fileName: "test.pdf",
+            });
+            const trailing = new Uint8Array(envelope.length + 1);
+            trailing.set(envelope);
+            trailing[envelope.length] = 0x00;
+
+            expect(() => parseTimeStampedData(trailing)).toThrow(TimestampError);
+            try {
+                parseTimeStampedData(trailing);
+            } catch (error) {
+                expect(error).toBeInstanceOf(TimestampError);
+                expect((error as TimestampError).code).toBe(TimestampErrorCode.INVALID_RESPONSE);
+            }
+        });
+
         it("should throw TimestampError when parsing an invalid envelope", () => {
             const invalidEnvelope = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
 

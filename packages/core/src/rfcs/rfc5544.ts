@@ -162,7 +162,7 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
     try {
         // Parse CMS ContentInfo
         const asn1 = asn1js.fromBER(toArrayBuffer(envelope));
-        if (asn1.offset === -1) {
+        if (asn1.offset === -1 || asn1.offset !== envelope.byteLength) {
             throw new TimestampError(
                 TimestampErrorCode.INVALID_RESPONSE,
                 "Failed to parse TimeStampedData envelope"
