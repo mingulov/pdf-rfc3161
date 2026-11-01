@@ -115,8 +115,8 @@ describe("CLI PAdES safety", { concurrent: false }, () => {
         });
         const address = server.address();
         if (!address || typeof address === "string") throw new Error("Local TSA has no TCP address");
-        // `.localhost` is a special-use loopback domain. Unlike an IP literal,
-        // it exercises the public CLI without adding a test-only SSRF bypass.
+        // Loopback mock TSA: reachable only through the documented
+        // --allow-private-urls opt-out, like an on-premise TSA.
         tsaUrl = `http://tsa.localhost:${String(address.port)}/tsr`;
     });
 
@@ -136,6 +136,7 @@ describe("CLI PAdES safety", { concurrent: false }, () => {
             input,
             output,
             "--no-ltv",
+            "--allow-private-urls",
             ...flags,
         ]);
 
@@ -158,6 +159,7 @@ describe("CLI PAdES safety", { concurrent: false }, () => {
             input,
             output,
             "--no-ltv",
+            "--allow-private-urls",
         ]);
         expect(timestamped).toMatchObject({ code: 0, stderr: "" });
 

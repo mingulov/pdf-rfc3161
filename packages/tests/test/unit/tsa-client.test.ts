@@ -222,6 +222,19 @@ describe("TSA Client", () => {
             expect(warnSpy).not.toHaveBeenCalled();
         });
 
+        it("allows dotted-localhost TSA URLs with allowPrivateUrls (on-prem/test opt-out)", async () => {
+            const responseBytes = new Uint8Array([0x30, 0x03, 0x02, 0x01, 0x00]);
+            mockFetch.mockResolvedValueOnce(tsrResponse(responseBytes));
+
+            const result = await sendTimestampRequest(new Uint8Array([0x30, 0x05]), {
+                url: "http://tsa.localhost:34147/tsr",
+                allowPrivateUrls: true,
+            });
+
+            expect(result).toEqual(responseBytes);
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+
         it("T12 P1: redacts long quoted query tails from transport causes", async () => {
             const marker = "T12_FIXTURE_SECRET";
             const fixtureUrl = `https://tsa.example.test/ts?token="${"a".repeat(600)}${marker}"`;

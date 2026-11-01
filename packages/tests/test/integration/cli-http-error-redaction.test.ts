@@ -96,7 +96,7 @@ describe("CLI HTTP error redaction", { concurrent: false }, () => {
         const output = join(directory, `output-${String(flags.length)}.pdf`);
         writeFileSync(input, await makeInput(true));
 
-        const result = await runCli(["timestamp", tsaUrl, input, output, "--no-ltv", "--retry", "0", ...flags]);
+        const result = await runCli(["timestamp", tsaUrl, input, output, "--no-ltv", "--retry", "0", "--allow-private-urls", ...flags]);
 
         expect(result.code).toBe(1);
         expect(result.stderr).toContain("NETWORK_ERROR");
