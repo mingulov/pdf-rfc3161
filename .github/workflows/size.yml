@@ -43,14 +43,19 @@ jobs:
       # Main ESM entry-point budget. October 2026 CMS algorithm/parameter
       # validation and PDF metadata encoding increase raw size 263983 ->
       # 267933 bytes (+3950); gzip level 9 is 57931 -> 58734 (+803).
-      # Keep a hard 262 KiB ceiling; see docs/maintenance-audit-2026-10.md.
+      # November 2026 audit hardening (SHA-1 CMS rejection, *.localhost SSRF
+      # block, verified-issuer LTV OCSP, RFC 8933 contradiction detection,
+      # RFC 5544 trailing-byte rejection, shared-breaker accessors,
+      # allowPrivateUrls plumbing) increases raw size 267933 -> 269523
+      # bytes (+1590); gzip level 9 is 58445 -> 58769 (+324, `gzip -9 -n`).
+      # Keep a hard 264 KiB ceiling; see docs/maintenance-audit-2026-10.md.
       # Raise only deliberately with measured bundle-diff attribution.
-      - name: Enforce ESM bundle size budget (<= 262 KiB)
+      - name: Enforce ESM bundle size budget (<= 264 KiB)
         run: |
           SIZE=$(stat -c%s packages/core/dist/index.js)
-          MAX=268288
-          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 262 KiB)"
+          MAX=270336
+          echo "ESM main bundle: $SIZE bytes (maximum: $MAX bytes / 264 KiB)"
           if [ "$SIZE" -gt "$MAX" ]; then
-            echo "::error::ESM bundle exceeds 262 KiB (268288 bytes) budget"
+            echo "::error::ESM bundle exceeds 264 KiB (270336 bytes) budget"
             exit 1
           fi
