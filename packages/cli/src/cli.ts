@@ -501,6 +501,9 @@ program
                         console.log(
                             `SUCCESS: All ${String(timestamps.length)} timestamp(s) are cryptographically consistent; TSA trust was NOT EVALUATED (no --trust-store supplied).`
                         );
+                        // Exit 2 (not 0): automation must not mistake
+                        // untrusted-but-consistent output for trusted output.
+                        process.exit(2);
                     }
                 } else {
                     console.log(
