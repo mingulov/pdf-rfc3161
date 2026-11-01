@@ -46,6 +46,20 @@ describe("validateUrl (H4 SSRF guard)", () => {
             expectsRejection("https://LOCALHOST/foo"));
         it("rejects ip6-localhost", () => expectsRejection("http://ip6-localhost"));
         it("rejects ip6-loopback", () => expectsRejection("http://ip6-loopback"));
+        it("rejects foo.localhost subdomain", () =>
+            expectsRejection("http://foo.localhost/ocsp"));
+        it("rejects nested a.b.localhost", () => expectsRejection("http://a.b.localhost/x"));
+        it("rejects FOO.LOCALHOST (case-insensitive)", () =>
+            expectsRejection("https://FOO.LOCALHOST/foo"));
+        it("rejects foo.localhost with trailing dot", () =>
+            expectsRejection("https://foo.localhost./x"));
+    });
+
+    describe("localhost lookalikes", () => {
+        it("allows localhost.example.com", () =>
+            expect(() => validateUrl("https://localhost.example.com/x")).not.toThrow());
+        it("allows example.com/localhost path", () =>
+            expect(() => validateUrl("https://example.com/localhost")).not.toThrow());
     });
 
     describe("IPv4 reserved ranges", () => {
