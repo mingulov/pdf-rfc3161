@@ -669,6 +669,11 @@ function validateCmsSignatureAlgorithm(
     const keyOid = certificate.subjectPublicKeyInfo.algorithm.algorithmId;
     const signatureOid = algorithm.algorithmId;
     const signatureHashOid = CMS_SIGNATURE_HASH_OIDS[signatureOid];
+    // SHA-1 collision resistance is broken: reject it as a CMS signature
+    // hash or declared digest before any consistency or crypto check.
+    if (digestAlgorithm.algorithmId === ID_SHA1 || signatureHashOid === ID_SHA1) {
+        throw verificationFailed("Timestamp CMS SHA-1 signature algorithms are not supported");
+    }
     if (
         !ESS_HASH_ALGORITHMS[digestAlgorithm.algorithmId] ||
         !hasNullOrAbsentParameters(digestAlgorithm) ||

@@ -27,7 +27,7 @@ async function mutateAlgorithm(algorithmId: string, algorithmParams?: asn1js.Bas
 
 async function signedCms(
     algorithm: "RSA-PSS" | "ECDSA" | "RSASSA-PKCS1-v1_5",
-    hash: "SHA-256" | "SHA-384" | "SHA-512"
+    hash: "SHA-1" | "SHA-256" | "SHA-384" | "SHA-512"
 ) {
     const fixture = await createRFC3161TokenFixture();
     const parsed = parseTimestampToken(fixture.rawToken);
@@ -259,5 +259,57 @@ describe("CMS signature algorithm binding", () => {
                 verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signer)
             ).rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
         }
+    });
+
+    it.each(["RSASSA-PKCS1-v1_5", "ECDSA"] as const)(
+        "rejects genuine SHA-1 CMS signatures (%s)",
+        async (algorithm) => {
+            const { parsed, signer } = await signedCms(algorithm, "SHA-1");
+            await expect(
+                verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signer)
+            ).rejects.toMatchObject({
+                code: "VERIFICATION_FAILED",
+                message: expect.stringContaining("SHA-1"),
+            });
+        }
+    );
+
+    it("rejects a SHA-1 digest declaration with the SHA-1 reason", async () => {
+        const fixture = await createRFC3161TokenFixture();
+        const parsed = parseTimestampToken(fixture.rawToken);
+        const signer = parsed.signedData.certificates?.[0];
+        if (!(signer instanceof pkijs.Certificate)) throw new Error("Missing signer");
+        parsed.signerInfo.digestAlgorithm = new pkijs.AlgorithmIdentifier({
+            algorithmId: "1.3.14.3.2.26",
+        });
+        await expect(
+            verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signer)
+        ).rejects.toMatchObject({
+            code: "VERIFICATION_FAILED",
+            message: expect.stringContaining("SHA-1"),
+        });
+    });
+
+    it("rejects Ed25519 signer keys as incompatible with CMS timestamp signatures", async () => {
+        const fixture = await createRFC3161TokenFixture();
+        const parsed = parseTimestampToken(fixture.rawToken);
+        const signer = parsed.signedData.certificates?.[0];
+        if (!(signer instanceof pkijs.Certificate)) throw new Error("Missing signer");
+        const keys = await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
+            "sign",
+            "verify",
+        ]);
+        const jwk = await crypto.subtle.exportKey("jwk", keys.publicKey);
+        if (typeof jwk.x !== "string") throw new Error("Ed25519 JWK has no x coordinate");
+        // pkijs importKey cannot ingest raw OKP keys; build the SPKI manually.
+        signer.subjectPublicKeyInfo.algorithm = new pkijs.AlgorithmIdentifier({
+            algorithmId: "1.3.101.112",
+        });
+        signer.subjectPublicKeyInfo.subjectPublicKey = new asn1js.BitString({
+            valueHex: Uint8Array.from(Buffer.from(jwk.x, "base64url")).buffer as ArrayBuffer,
+        });
+        await expect(
+            verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signer)
+        ).rejects.toMatchObject({ code: "VERIFICATION_FAILED" });
     });
 });
