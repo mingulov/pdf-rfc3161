@@ -17,6 +17,31 @@ identifiers and unsupported parameters before cryptographic verification.
 PDF metadata is encoded as literal text, not pre-escaped PDF syntax; callers
 should pass the intended text directly, including parentheses and backslashes.
 
+CMS signature algorithms using SHA-1 are now rejected outright, since SHA-1
+is collision-broken. Timestamps from a legacy TSA that still signs with
+SHA-1 will fail verification; migrate the TSA to SHA-256 or newer.
+
+`pdf-rfc3161 verify` now exits with code 2 (instead of 0) when timestamps
+are cryptographically consistent but TSA trust was not evaluated (no
+`--trust-store` supplied). The output message is unchanged; scripts that
+key on the exit code should treat 2 as "consistent but untrusted".
+
+TSA, OCSP, CRL, and AIA URLs whose hostname sits under `*.localhost`
+are now rejected as SSRF risks (RFC 6761 reserves the whole suffix for
+loopback), joining the existing loopback/private-range blocks. On-prem
+deployments that timestamp against a private TSA should pass
+`allowPrivateUrls: true` (library) or `--allow-private-urls` (CLI) to
+opt back in explicitly.
+
+The `timestamp` and `archive` commands now refuse to write when the output
+path resolves to the same file as the input, instead of destroying the
+original. Pass a different output path; there is no force flag.
+
+The `signatureFieldName` prepare option is capped at 2048 characters and
+must not contain NUL bytes, matching the existing reason/location/contact
+limits. Longer names now fail with a `PDF_ERROR` instead of producing a
+malformed field.
+
 ## 0.2.2 -> 0.3.0
 
 ### HTTP transport rejects redirects, fails fast on 4xx, and bounds bodies
