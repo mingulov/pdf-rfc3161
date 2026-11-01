@@ -8,12 +8,17 @@ const mocks = vi.hoisted(() => ({
     verifyPdfTimestamps: vi.fn(),
     getDSSInfo: vi.fn(),
     extractLTVData: vi.fn(),
+    useStateSeeds: [] as unknown[],
 }));
 
 vi.mock("../../../demo/node_modules/react/index.js", async (importOriginal) => ({
     ...await importOriginal<Record<string, unknown>>(),
     // Exercise the real event handlers without needing a browser renderer.
-    useState: (initial: unknown) => [initial, mocks.setState],
+    // Tests may queue useStateSeeds to render with pre-set state instead.
+    useState: (initial: unknown) => [
+        mocks.useStateSeeds.length > 0 ? mocks.useStateSeeds.shift() : initial,
+        mocks.setState,
+    ],
 }));
 
 vi.mock("pdf-rfc3161", () => ({
@@ -55,6 +60,7 @@ describe("demo PDF-level bounded verification", () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        mocks.useStateSeeds.length = 0;
         mocks.extractTimestamps.mockResolvedValue([timestamp]);
         mocks.verifyTimestamp.mockResolvedValue(timestamp);
         mocks.verifyPdfTimestamps.mockResolvedValue([timestamp]);
@@ -100,4 +106,55 @@ describe("demo PDF-level bounded verification", () => {
             }
         }
     );
+});
+
+describe("demo trust presentation", () => {
+    function collectText(value: unknown, out: string[]): void {
+        if (typeof value === "string") {
+            out.push(value);
+            return;
+        }
+        if (typeof value === "number" || typeof value === "boolean") {
+            return;
+        }
+        if (Array.isArray(value)) {
+            for (const child of value) collectText(child, out);
+            return;
+        }
+        if (value === null || typeof value !== "object") return;
+        const element = value as ElementShape;
+        collectText(element.props?.children, out);
+    }
+
+    it("ValidatorPanel pairs every result card with a trust disclaimer and a Signer label", async () => {
+        const makeResult = (isValid: boolean) => ({
+            isValid,
+            info: {
+                genTime: new Date("2026-01-01"),
+                hashAlgorithm: "SHA-256",
+                policy: "1.2.3",
+                serialNumber: "42",
+            },
+            chain: [{ subject: "CN=Example TSA", issuer: "CN=Root", serial: "01" }],
+            errors: isValid ? undefined : ["boom"],
+        });
+        // ValidatorPanel useState order: file, isValidating, results, dssInfo.
+        mocks.useStateSeeds.push(
+            new File([Uint8Array.of(1, 2, 3)], "input.pdf"),
+            false,
+            [makeResult(true), makeResult(false)],
+            null
+        );
+        const componentPath = fileURLToPath(
+            new URL("../../../demo/src/components/ValidatorPanel.tsx", import.meta.url)
+        );
+        const component = await import(componentPath) as { default: () => ElementShape };
+        const texts: string[] = [];
+        collectText(component.default(), texts);
+
+        const disclaimers = texts.filter((t) => t.includes("TSA trust NOT EVALUATED"));
+        expect(disclaimers).toHaveLength(2);
+        expect(texts).toContain("Signer:");
+        expect(texts).not.toContain("TSA:");
+    });
 });

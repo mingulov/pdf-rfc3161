@@ -1,7 +1,7 @@
 // test/integration/cli.integration.test.ts - CLI Integration Tests
 import { describe, it, expect } from "vitest";
 import { spawn } from "child_process";
-import { writeFileSync, unlinkSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { assertCliDistIsFresh, CLI_DIST_PATH } from "../utils/cli-dist.js";
@@ -161,6 +161,24 @@ describe("CLI Integration Tests", () => {
             const result = await runCli(["invalid-command"]);
             expect(result.code).toBe(1); // Commander exits with code 1 for unknown commands
             expect(result.stderr).toContain("unknown command");
+        });
+
+        it("should refuse timestamp output equal to the input path", async () => {
+            const before = readFileSync(inputPdf);
+            // The TSA URL is deliberately invalid: the guard must fire before
+            // any network attempt, so this stays offline-safe.
+            const result = await runCli(["timestamp", "not-a-url", inputPdf, inputPdf]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
+            expect(readFileSync(inputPdf)).toEqual(before);
+        });
+
+        it("should refuse archive -o output equal to the input path", async () => {
+            const before = readFileSync(inputPdf);
+            const result = await runCli(["archive", "not-a-url", inputPdf, "-o", inputPdf]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
+            expect(readFileSync(inputPdf)).toEqual(before);
         });
     });
 
