@@ -27,6 +27,7 @@ const nonMatrixWorkflowFiles = [
     ".github/workflows/security.yml",
     ".github/workflows/size.yml",
     ".github/workflows/deploy-demo.yml",
+    ".github/workflows/fuzz.yml",
 ];
 const maintainedDocumentationFiles = [
     "README.md",

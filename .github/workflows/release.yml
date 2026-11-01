@@ -309,6 +309,11 @@ jobs:
                   sha256sum --check SHA256SUMS
                   sha512sum --check SHA512SUMS
 
+            # Provenance: both stage jobs authenticate via OIDC trusted
+            # publishing with no long-lived token, for which npm generates
+            # provenance attestations automatically -- the --provenance flag
+            # is not required.
+            # https://docs.npmjs.com/generating-provenance-statements/
             - name: Stage pdf-rfc3161
               run: npm stage publish release-artifacts/core/*.tgz --access public
 
