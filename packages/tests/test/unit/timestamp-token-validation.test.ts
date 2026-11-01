@@ -632,6 +632,9 @@ describe("signer validity encodings (T09a fix round 1)", () => {
             // Self-consistent garbage: re-encodes byte-identically, so only
             // the parser-error check rejects it.
             { name: "1899 fixed point", wire: { notBefore: "-11130000000Z" } },
+            // Rollover normalizes to Jan 2050: re-encoding must yield a
+            // coded rejection, never a raw asn1js RangeError.
+            { name: "month 13 crossing 2049 boundary", wire: { notBefore: "491301000000Z" } },
         ];
         for (const vector of vectors) {
             const { session, token } = await prepareSessionWithToken({

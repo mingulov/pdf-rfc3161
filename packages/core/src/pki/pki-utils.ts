@@ -225,7 +225,9 @@ export function validityOk(certificate: pkijs.Certificate): boolean {
     }
     const validity = parsed.result.valueBlock.value.find(
         (field) =>
-            field instanceof asn1js.Sequence && field.valueBlock.value[0] instanceof asn1js.UTCTime
+            field instanceof asn1js.Sequence &&
+            (field.valueBlock.value[0] instanceof asn1js.UTCTime ||
+                field.valueBlock.value[0] instanceof asn1js.GeneralizedTime)
     );
     if (!(validity instanceof asn1js.Sequence)) return false;
     const times = validity.valueBlock.value;
@@ -234,12 +236,17 @@ export function validityOk(certificate: pkijs.Certificate): boolean {
         times.length === 2 &&
         times.every((field, index) => {
             const bound = bounds[index];
-            return (
-                bound !== undefined &&
-                !field.error &&
-                bytesToHex(bound.toSchema().toBER(false)) ===
-                    bytesToHex(field.valueBeforeDecodeView)
-            );
+            if (bound === undefined || field.error) return false;
+            let reencoded: string;
+            try {
+                reencoded = bytesToHex(bound.toSchema().toBER(false));
+            } catch {
+                // asn1js v4 rejects out-of-range years at encode time
+                // (e.g. a rollover normalizing past 2049): fail closed,
+                // never let a raw RangeError escape the validity gate.
+                return false;
+            }
+            return reencoded === bytesToHex(field.valueBeforeDecodeView);
         })
     );
 }
