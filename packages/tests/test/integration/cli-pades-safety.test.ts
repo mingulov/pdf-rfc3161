@@ -164,7 +164,7 @@ describe("CLI PAdES safety", { concurrent: false }, () => {
         expect(timestamped).toMatchObject({ code: 0, stderr: "" });
 
         const withoutTrust = await runCli(["verify", output]);
-        expect(withoutTrust).toMatchObject({ code: 0, stderr: "" });
+        expect(withoutTrust).toMatchObject({ code: 2, stderr: "" });
         expect(withoutTrust.stdout).toContain("Cryptographically consistent; TSA trust NOT EVALUATED");
         expect(withoutTrust.stdout).not.toContain("[OK] Verified");
         expect(withoutTrust.stdout).not.toContain("TSA Name:");

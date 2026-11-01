@@ -62,6 +62,7 @@ describe("CLI verify batch routing", () => {
         const log = vi.spyOn(console, "log").mockImplementation((message?: unknown) => {
             output.push(String(message));
         });
+        const exit = stubProcessExit();
 
         try {
             await program.parseAsync(["node", "pdf-rfc3161", "verify", "input.pdf"], {
@@ -72,13 +73,16 @@ describe("CLI verify batch routing", () => {
             expect(output.join("\n")).toContain("Found 2 timestamp(s)");
             expect(output.join("\n")).toContain("Timestamp 1:");
             expect(output.join("\n")).toContain("Timestamp 2:");
+            expect(exit).toHaveBeenCalledWith(2);
         } finally {
             log.mockRestore();
+            exit.mockRestore();
         }
     });
 
     it("forwards verify --ignore-encryption to DSS inspection and timestamp discovery", async () => {
         const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exit = stubProcessExit();
 
         try {
             await program.parseAsync(
@@ -93,10 +97,38 @@ describe("CLI verify batch routing", () => {
                 expect.any(Uint8Array),
                 expect.objectContaining({ ignoreEncryption: true })
             );
+            expect(exit).toHaveBeenCalledWith(2);
         } finally {
             log.mockRestore();
+            exit.mockRestore();
+        }
+    });
+
+    it("exits 1 when only some timestamps verify", async () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const exit = stubProcessExit();
+        vi.mocked(verifyPdfTimestamps).mockResolvedValueOnce([
+            timestamp("First"),
+            { ...timestamp("Second"), verified: false },
+        ]);
+
+        try {
+            await program.parseAsync(["node", "pdf-rfc3161", "verify", "input.pdf"], {
+                from: "node",
+            });
+
+            expect(exit).toHaveBeenCalledWith(1);
+        } finally {
+            log.mockRestore();
+            exit.mockRestore();
         }
     });
 });
+
+function stubProcessExit() {
+    // Record the code without terminating the runner: the exit call is the
+    // last statement of its branch, so swallowing it is faithful.
+    return vi.spyOn(process, "exit").mockImplementation((() => undefined) as () => never);
+}
 
 process.env.CLI_TEST_MODE = originalCliTestMode;
