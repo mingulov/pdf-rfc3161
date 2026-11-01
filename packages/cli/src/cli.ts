@@ -1,6 +1,7 @@
 import { Command, Option } from "commander";
+import { realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
     timestampPdf,
     archiveTimestamp,
@@ -8,6 +9,7 @@ import {
     validateTimestampTokenRFC8933Compliance,
     KNOWN_TSA_URLS,
     TimestampError,
+    TimestampErrorCode,
     SimpleTrustStore,
     type HashAlgorithm,
     type TrustStore,
@@ -110,6 +112,7 @@ program
                 // Handle output file logic: explicit argument > -o flag > auto-generated
                 const outputFile =
                     bucketOutput ?? options.output ?? generateOutputFilename(inputFile);
+                assertOutputNotInput(inputFile, outputFile);
 
                 if (options.verbose) {
                     console.log(`Input:     ${inputFile}`);
@@ -252,6 +255,7 @@ program
             try {
                 const outputFile =
                     bucketOutput ?? cmdOptions.output ?? generateOutputFilename(inputFile);
+                assertOutputNotInput(inputFile, outputFile);
 
                 if (cmdOptions.verbose) {
                     console.log(`RFC 3161 document-timestamp renewal`);
@@ -567,6 +571,33 @@ function handleError(err: unknown, verbose: boolean): void {
         console.error("An unknown error occurred");
     }
     process.exit(1);
+}
+
+/**
+ * Resolve a path for same-file comparison: canonicalize through the
+ * filesystem when the path exists (follows symlinks, normalizes case on
+ * macOS/Windows tmpdirs), otherwise fall back to absolute resolution so a
+ * not-yet-created output still compares correctly against the input.
+ */
+function resolveSameFileCandidate(candidate: string): string {
+    try {
+        return realpathSync(candidate);
+    } catch {
+        return resolve(candidate);
+    }
+}
+
+/**
+ * Refuse to write the output over the input file. Called before any read
+ * or network attempt so a same-path invocation fails fast and offline.
+ */
+function assertOutputNotInput(inputFile: string, outputFile: string): void {
+    if (resolveSameFileCandidate(outputFile) === resolveSameFileCandidate(inputFile)) {
+        throw new TimestampError(
+            TimestampErrorCode.INVALID_ARGUMENT,
+            `Refusing to overwrite the input file (output "${outputFile}" resolves to the same path). Choose a different output path.`
+        );
+    }
 }
 
 function generateOutputFilename(inputFile: string): string {

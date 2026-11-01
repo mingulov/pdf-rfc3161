@@ -230,6 +230,11 @@ export default function ValidatorPanel() {
                             </div>
                         </div>
 
+                        <div className="mb-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                            TSA trust NOT EVALUATED: this demo checks cryptographic
+                            consistency only and supplies no trust store.
+                        </div>
+
                         {result.errors && (
                             <div className="mb-4 bg-red-100 text-red-700 p-3 rounded text-sm flex items-start gap-2">
                                 <AlertTriangle className="w-4 h-4 mt-0.5" />
@@ -243,7 +248,7 @@ export default function ValidatorPanel() {
                             <div className="grid grid-cols-2 gap-2">
                                 <div><span className="text-gray-500">Hash Algo:</span> {result.info.hashAlgorithm}</div>
                                 <div><span className="text-gray-500">Policy:</span> {result.info.policy}</div>
-                                <div><span className="text-gray-500">TSA:</span> {result.chain[0]?.subject ?? "Unknown"}</div>
+                                <div><span className="text-gray-500">Signer:</span> {result.chain[0]?.subject ?? "Unknown"}</div>
                                 <div>
                                     <span className="text-gray-500">LTV Status:</span>
                                     {dssInfo ? <span className="ml-2 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">Present</span> : <span className="ml-2 text-gray-400">Not embedded</span>}
