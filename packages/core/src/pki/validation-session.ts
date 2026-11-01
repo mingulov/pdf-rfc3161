@@ -346,6 +346,7 @@ export class ValidationSession {
                     this.results.push({
                         cert: certReq.cert,
                         revocationStatus: "unknown",
+                        // eslint-disable-next-line @typescript-eslint/no-deprecated -- the session itself maintains the alias.
                         isValid: false,
                         sources: [],
                         errors: [budget.certificateRefusal()],
@@ -379,6 +380,7 @@ export class ValidationSession {
         const result: ValidationResult = {
             cert: req.cert,
             revocationStatus: "unknown",
+            // eslint-disable-next-line @typescript-eslint/no-deprecated -- the session itself maintains the alias.
             isValid: false,
             sources: [],
             errors: [],

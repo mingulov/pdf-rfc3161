@@ -56,6 +56,8 @@ async function createSignedPair(options: {
     issuer.serialNumber = new asn1js.Integer({ value: 7001 });
     issuer.subject = distinguishedName("Cache Test CA");
     issuer.issuer = distinguishedName("Cache Test CA");
+    issuer.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+    issuer.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
     issuer.subjectPublicKeyInfo = await importKeyForCertificate(issuerKeys.publicKey);
     await issuer.sign(issuerKeys.privateKey, "SHA-256");
 
@@ -64,6 +66,8 @@ async function createSignedPair(options: {
     leaf.serialNumber = new asn1js.Integer({ value: 7002 });
     leaf.subject = distinguishedName("Cache Test Leaf");
     leaf.issuer = issuer.subject;
+    leaf.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+    leaf.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
     leaf.subjectPublicKeyInfo = await importKeyForCertificate(leafKeys.publicKey);
     const extensions: pkijs.Extension[] = [];
     if (options.ocspUrl) {

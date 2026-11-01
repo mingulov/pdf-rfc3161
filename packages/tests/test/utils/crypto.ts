@@ -5,7 +5,6 @@ const _webcrypto = await import("crypto").then((m) => m.webcrypto);
 export const cryptoEngine = new (pkijs.CryptoEngine as pkijs.CryptoEngineConstructor)({
     name: "test",
     crypto: _webcrypto as unknown as Crypto,
-    subtle: _webcrypto.subtle as unknown as SubtleCrypto,
 });
 
 pkijs.setEngine("test", cryptoEngine);

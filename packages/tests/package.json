@@ -23,21 +23,21 @@
         "lint": "eslint browser test fuzz/targets scripts/test-packed-consumer.ts scripts/test-browser-consumer.ts scripts/packed-consumer-spawn.ts scripts/local-tsa-fixture.ts scripts/packed-consumer-path.ts scripts/packed-consumer-config.ts scripts/pades-oracles.ts scripts/install-pades-oracles.ts scripts/assert-pades-oracles.ts scripts/release-metadata.ts scripts/offline-pades-conformance.ts --fix"
     },
     "dependencies": {
-        "asn1js": "^3.1.0",
+        "asn1js": "^4.0.0",
         "commander": "^15.0.0",
         "pdf-lib-incremental-save": "1.17.4",
         "pdf-rfc3161": "workspace:*",
         "pdf-rfc3161-cli": "workspace:*",
-        "pkijs": "^3.4.1"
+        "pkijs": "^4.0.1"
     },
     "devDependencies": {
         "@arethetypeswrong/cli": "0.18.5",
         "@jazzer.js/core": "4.0.0",
-        "@types/node": "^26.6.5",
+        "@types/node": "^26.6.6",
         "@typescript/native": "npm:typescript@7.0.2",
         "@vitest/coverage-v8": "^5.0.5",
         "esbuild": "0.28.2",
-        "eslint": "^10.13.0",
+        "eslint": "^10.14.0",
         "fast-check": "4.10.2",
         "pdf-lib": "^1.17.1",
         "playwright": "^1.64.1",

@@ -682,6 +682,8 @@ describe("certificate byte identity edge cases (T05 fix round 2)", () => {
         inMemoryCa.serialNumber = new asn1js.Integer({ value: 903 });
         inMemoryCa.subject = distinguishedName("P2 InMemory CA");
         inMemoryCa.issuer = distinguishedName("P2 InMemory CA");
+        inMemoryCa.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+        inMemoryCa.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
         inMemoryCa.subjectPublicKeyInfo = await importKeyForCertificate(caKeys.publicKey);
         await inMemoryCa.sign(caKeys.privateKey, "SHA-256");
         parsedTwin = roundTripCertificate(inMemoryCa);
