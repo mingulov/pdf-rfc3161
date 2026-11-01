@@ -1,7 +1,7 @@
 // test/integration/cli.integration.test.ts - CLI Integration Tests
 import { describe, it, expect } from "vitest";
 import { spawn } from "child_process";
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from "fs";
+import { writeFileSync, readFileSync, linkSync, symlinkSync, unlinkSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { assertCliDistIsFresh, CLI_DIST_PATH } from "../utils/cli-dist.js";
@@ -15,6 +15,8 @@ describe("CLI Integration Tests", () => {
     const testDir = tmpdir();
     const inputPdf = join(testDir, "test-input.pdf");
     const outputPdf = join(testDir, "test-output.pdf");
+    const hardlinkPdf = join(testDir, "test-input-hardlink.pdf");
+    const symlinkPdf = join(testDir, "test-input-symlink.pdf");
 
     // Create a minimal valid PDF for testing
     const minimalPdf = new Uint8Array([
@@ -109,6 +111,10 @@ describe("CLI Integration Tests", () => {
     afterEach(() => {
         // Clean up test files
         try {
+            // Aliases first: a symlink check would miss its own dangling
+            // entry once the input it points to is gone.
+            if (existsSync(hardlinkPdf)) unlinkSync(hardlinkPdf);
+            if (existsSync(symlinkPdf)) unlinkSync(symlinkPdf);
             if (existsSync(inputPdf)) unlinkSync(inputPdf);
             if (existsSync(outputPdf)) unlinkSync(outputPdf);
         } catch {
@@ -176,6 +182,33 @@ describe("CLI Integration Tests", () => {
         it("should refuse archive -o output equal to the input path", async () => {
             const before = readFileSync(inputPdf);
             const result = await runCli(["archive", "not-a-url", inputPdf, "-o", inputPdf]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
+            expect(readFileSync(inputPdf)).toEqual(before);
+        });
+
+        it("should refuse timestamp output that is a hardlink of the input", async () => {
+            const before = readFileSync(inputPdf);
+            linkSync(inputPdf, hardlinkPdf);
+            const result = await runCli(["timestamp", "not-a-url", inputPdf, hardlinkPdf]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
+            expect(readFileSync(inputPdf)).toEqual(before);
+        });
+
+        it("should refuse archive -o output that is a hardlink of the input", async () => {
+            const before = readFileSync(inputPdf);
+            linkSync(inputPdf, hardlinkPdf);
+            const result = await runCli(["archive", "not-a-url", inputPdf, "-o", hardlinkPdf]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
+            expect(readFileSync(inputPdf)).toEqual(before);
+        });
+
+        it("should refuse timestamp output that is a symlink to the input", async () => {
+            const before = readFileSync(inputPdf);
+            symlinkSync(inputPdf, symlinkPdf);
+            const result = await runCli(["timestamp", "not-a-url", inputPdf, symlinkPdf]);
             expect(result.code).not.toBe(0);
             expect(result.stderr).toMatch(/Refusing to overwrite the input file/);
             expect(readFileSync(inputPdf)).toEqual(before);
