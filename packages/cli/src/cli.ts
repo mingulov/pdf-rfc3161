@@ -1,5 +1,5 @@
 import { Command, Option } from "commander";
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import {
@@ -176,6 +176,10 @@ program
 
                 const result = await timestampPdf(timestampOptions);
 
+                // Re-verify just before writing: the TSA round-trip above
+                // leaves a long check-to-write window otherwise.
+                assertOutputNotInput(inputFile, outputFile);
+
                 // Write output
                 await writeFile(outputFile, result.pdf);
 
@@ -300,6 +304,10 @@ program
                     signatureFieldName: cmdOptions.name,
                     includeExistingRevocationData: cmdOptions.update,
                 });
+
+                // Re-verify just before writing: the archive round-trip above
+                // leaves a long check-to-write window otherwise.
+                assertOutputNotInput(inputFile, outputFile);
 
                 await writeFile(outputFile, result.pdf);
 
@@ -588,14 +596,36 @@ function resolveSameFileCandidate(candidate: string): string {
 }
 
 /**
+ * Filesystem identity of an existing path. statSync follows symlinks, so
+ * this catches same-path, symlink, hardlink, and case-variant aliases of
+ * one file. Returns null when the path cannot be stated (missing file).
+ */
+function fileIdentity(candidate: string): string | null {
+    try {
+        const stats = statSync(candidate);
+        return `${stats.dev.toString()}:${stats.ino.toString()}`;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Refuse to write the output over the input file. Called before any read
- * or network attempt so a same-path invocation fails fast and offline.
+ * or network attempt so a same-path invocation fails fast and offline,
+ * and again immediately before writing to narrow the check-to-write
+ * window. (A local hardlink swap in between remains theoretically
+ * possible; this guard targets operator error, not a hostile filesystem.)
  */
 function assertOutputNotInput(inputFile: string, outputFile: string): void {
-    if (resolveSameFileCandidate(outputFile) === resolveSameFileCandidate(inputFile)) {
+    const inputId = fileIdentity(inputFile);
+    const outputId = fileIdentity(outputFile);
+    const sameFile =
+        (inputId !== null && inputId === outputId) ||
+        resolveSameFileCandidate(outputFile) === resolveSameFileCandidate(inputFile);
+    if (sameFile) {
         throw new TimestampError(
             TimestampErrorCode.INVALID_ARGUMENT,
-            `Refusing to overwrite the input file (output "${outputFile}" resolves to the same path). Choose a different output path.`
+            `Refusing to overwrite the input file (output "${outputFile}" is the same file as the input). Choose a different output path.`
         );
     }
 }
