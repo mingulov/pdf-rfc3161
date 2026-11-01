@@ -205,21 +205,10 @@ describe("TSA Client", () => {
             expect(warnSpy).not.toHaveBeenCalled();
         });
 
-        it("does not warn for dotted-localhost TSA URLs (local fixture shape)", async () => {
-            const responseBytes = new Uint8Array([0x30, 0x03, 0x02, 0x01, 0x00]);
-            mockFetch.mockResolvedValueOnce(tsrResponse(responseBytes));
-
-            const result = await sendTimestampRequest(new Uint8Array([0x30, 0x05]), {
-                url: "http://tsa.localhost:34147/tsr",
-            });
-
-            expect(result).toEqual(responseBytes);
-            expect(warnSpy).not.toHaveBeenCalled();
-        });
-
         it.each([
             "http://localhost/tsr",
             "http://localhost./tsr",
+            "http://tsa.localhost:34147/tsr",
             "http://127.0.0.1/tsr",
             "http://127.1.2.3/tsr",
             "http://[::1]/tsr",

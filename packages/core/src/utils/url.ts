@@ -145,6 +145,20 @@ const RESTRICTED_LITERAL_HOSTNAMES = new Set([
     "ip6-loopback",
 ]);
 
+/**
+ * True for hostnames that always route to the local machine: the restricted
+ * literals plus `*.localhost` (RFC 6761 reserves the whole suffix for
+ * loopback, so `foo.localhost` is as local as bare `localhost`).
+ * Callers pass the lowercased `URL.hostname`.
+ */
+function isRestrictedHostname(hostname: string): boolean {
+    return (
+        RESTRICTED_LITERAL_HOSTNAMES.has(hostname) ||
+        hostname === "localhost" ||
+        hostname.endsWith(".localhost")
+    );
+}
+
 function stripBrackets(hostname: string): string {
     if (hostname.startsWith("[") && hostname.endsWith("]")) {
         return hostname.slice(1, -1);
@@ -282,7 +296,7 @@ export function validateUrl(urlString: string, options: ValidateUrlOptions = {})
         return;
     }
 
-    if (RESTRICTED_LITERAL_HOSTNAMES.has(rawHost)) {
+    if (isRestrictedHostname(rawHost)) {
         throw new TimestampError(
             TimestampErrorCode.NETWORK_ERROR,
             `URL targets a restricted hostname: ${rawHost}`
@@ -292,7 +306,7 @@ export function validateUrl(urlString: string, options: ValidateUrlOptions = {})
     // Trailing-dot canonicalisation: `localhost.` resolves to localhost.
     if (rawHost.endsWith(".")) {
         const stripped = rawHost.slice(0, -1);
-        if (RESTRICTED_LITERAL_HOSTNAMES.has(stripped)) {
+        if (isRestrictedHostname(stripped)) {
             throw new TimestampError(
                 TimestampErrorCode.NETWORK_ERROR,
                 `URL targets a restricted hostname: ${rawHost}`
