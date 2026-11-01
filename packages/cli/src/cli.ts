@@ -33,6 +33,7 @@ interface CliOptions {
     verbose: boolean;
     optimize: boolean;
     omitM: boolean;
+    allowPrivateUrls: boolean;
 }
 
 const program = new Command();
@@ -82,6 +83,11 @@ program
     .option("--name <text>", "Name of the signature field", "Timestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
     .option("--retry <n>", "Number of retry attempts", "3")
+    .option(
+        "--allow-private-urls",
+        "Allow loopback/private TSA URLs (on-premise TSAs; off by default)",
+        false
+    )
     .option("-v, --verbose", "Verbose output", false)
     .option("--optimize", "Optimize signature size (2-pass)", false)
     .option("--omit-m", "Compatibility syntax: /M is already omitted by default", false)
@@ -147,6 +153,7 @@ program
                         hashAlgorithm: options.algorithm,
                         timeout: parseInt(options.timeout, 10),
                         retry: parseInt(options.retry, 10),
+                        allowPrivateUrls: options.allowPrivateUrls,
                     },
                     reason: options.reason,
                     location: options.location,
@@ -229,6 +236,11 @@ program
     .option("--name <text>", "Name of the signature field", "ArchiveTimestamp")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
     .option("--retry <n>", "Number of retry attempts", "3")
+    .option(
+        "--allow-private-urls",
+        "Allow loopback/private TSA URLs (on-premise TSAs; off by default)",
+        false
+    )
     .option("-v, --verbose", "Verbose output", false)
     .action(
         async (
@@ -279,6 +291,7 @@ program
                         hashAlgorithm: cmdOptions.algorithm,
                         timeout: parseInt(cmdOptions.timeout, 10),
                         retry: parseInt(cmdOptions.retry, 10),
+                        allowPrivateUrls: cmdOptions.allowPrivateUrls,
                     },
                     signatureFieldName: cmdOptions.name,
                     includeExistingRevocationData: cmdOptions.update,

@@ -20,6 +20,13 @@ export interface TSAConfig {
     retry?: number;
     /** Base delay in ms between retries, doubles each retry (default: 1000) */
     retryDelay?: number;
+    /**
+     * Allow loopback, private-network, and `.localhost` TSA URLs
+     * (default: false). For on-premise TSAs and tests only; the URL must
+     * still be caller-supplied. Cert-supplied AIA/OCSP/CRL URLs never
+     * honor this flag.
+     */
+    allowPrivateUrls?: boolean;
 }
 
 /**

@@ -41,6 +41,13 @@ export interface FetchWithRetryOptions {
     body?: BodyInit;
     config: FetchWithRetryConfig;
     /**
+     * Bypass the loopback/private-hostname SSRF guard for this call.
+     * Only the caller-supplied TSA request path may set this; OCSP, CRL,
+     * AIA, and cert fetches always validate unconditionally because
+     * their URLs come from untrusted certificates.
+     */
+    allowPrivateUrls?: boolean;
+    /**
      * Optional per-URL circuit-breaker map. OPEN short-circuits with
      * TimestampError(CIRCUIT_OPEN): zero fetches, no backoff. Success
      * records success; exhausted retryables record one failure. Terminal
@@ -209,7 +216,7 @@ export async function fetchBytesWithRetry(options: FetchWithRetryOptions): Promi
     assertValidFetchConfig(config);
     // H4: validate once up-front so a bad URL fails fast instead of consuming
     // the full retry budget.
-    validateUrl(url);
+    validateUrl(url, { allowPrivateUrls: options.allowPrivateUrls });
     // Caller cancellation wins over every other local verdict, including
     // an already-open breaker.
     throwIfCallerAborted(callerSignal);

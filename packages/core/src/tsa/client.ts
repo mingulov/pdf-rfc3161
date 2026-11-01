@@ -69,6 +69,7 @@ export async function sendTimestampRequest(
             "Content-Type": TSA_CONTENT_TYPE.REQUEST,
             ...config.headers,
         },
+        allowPrivateUrls: config.allowPrivateUrls,
         // Copy into a fresh ArrayBuffer (not SharedArrayBuffer).
         body: new Uint8Array(request).buffer,
         config: {
