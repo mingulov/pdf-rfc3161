@@ -1,11 +1,17 @@
 version: 2
 
+# Scheduled version updates are disabled (limit 0): bumps are handled by a
+# monthly manual rollup PR instead of per-dependency bot PRs, because pnpm
+# overrides, packed-consumer pins, and fixture compatibility need a single
+# human-verified update. This limit does not affect Dependabot security
+# updates (repo setting), which should stay enabled for CVE coverage.
+
 updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 0
     groups:
       types:
         patterns:
@@ -28,7 +34,7 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       codeql:
         patterns:
@@ -38,3 +44,4 @@ updates:
     directory: "/packages/tests/python"
     schedule:
       interval: monthly
+    open-pull-requests-limit: 0
