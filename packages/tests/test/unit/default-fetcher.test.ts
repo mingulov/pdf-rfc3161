@@ -522,4 +522,39 @@ describe("DefaultFetcher", () => {
             expect(mockFetch.mock.calls.length).toBe(fetchesBeforeOpen);
         });
     });
+
+    describe("shared transport policy with explicit options", () => {
+        it("reuses the OCSP singleton breaker map with explicit timeout/retries", async () => {
+            const custom = new DefaultFetcher({ timeout: 100, maxRetries: 0 });
+            const url = "http://ocsp.custom-breaker.example.com/";
+            const request = new Uint8Array([0x01, 0x02, 0x03]);
+            mockFetch.mockRejectedValue(new Error("Network error"));
+
+            for (let call = 0; call < 3; call++) {
+                await expectRejected(custom.fetchOCSP(url, request));
+            }
+
+            expect(getOCSPCircuitState(url)).toBe(CircuitState.OPEN);
+            const fetchesBeforeOpen = mockFetch.mock.calls.length;
+            const fourth = await expectRejected(custom.fetchOCSP(url, request));
+            expect((fourth as TimestampError).code).toBe(TimestampErrorCode.CIRCUIT_OPEN);
+            expect(mockFetch.mock.calls.length).toBe(fetchesBeforeOpen);
+        });
+
+        it("reuses the CRL singleton breaker map with explicit timeout/retries", async () => {
+            const custom = new DefaultFetcher({ timeout: 100, maxRetries: 0 });
+            const url = "http://crl.custom-breaker.example.com/ca.crl";
+            mockFetch.mockRejectedValue(new Error("Network error"));
+
+            for (let call = 0; call < 3; call++) {
+                await expectRejected(custom.fetchCRL(url));
+            }
+
+            expect(getCRLCircuitState(url)).toBe(CircuitState.OPEN);
+            const fetchesBeforeOpen = mockFetch.mock.calls.length;
+            const fourth = await expectRejected(custom.fetchCRL(url));
+            expect((fourth as TimestampError).code).toBe(TimestampErrorCode.CIRCUIT_OPEN);
+            expect(mockFetch.mock.calls.length).toBe(fetchesBeforeOpen);
+        });
+    });
 });
