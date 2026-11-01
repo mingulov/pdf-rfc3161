@@ -197,13 +197,10 @@ export class TimestampSession {
      */
     async createTimestampRequest(reqOptions: TimestampRequestOptions = {}): Promise<Uint8Array> {
         this.throwIfDisposed();
-        // (Legacy soft guard retained as defence-in-depth for code paths that
-        // mutated internal state before the disposed flag was introduced.)
+        // Disposed sessions are already rejected by throwIfDisposed() above, so
+        // reaching this branch means a fresh session with empty input bytes.
         if (this.pdfBytes.length === 0 && this.prepared === null) {
-            throw new TimestampError(
-                TimestampErrorCode.STATE_ERROR,
-                "Session has been disposed. Create a new TimestampSession."
-            );
+            throw new TimestampError(TimestampErrorCode.PDF_ERROR, "PDF must not be empty.");
         }
         // Setter-provided reservations bypass the constructor check, and the
         // sizing getter remaps negative/NaN to the default, so validate the
