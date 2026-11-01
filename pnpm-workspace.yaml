@@ -6,10 +6,14 @@ allowBuilds:
 
 overrides:
   esbuild: 0.28.2
-  '@typescript-eslint/tsconfig-utils': 8.71.2
-  '@typescript-eslint/types': 8.71.2
-  eslint: 10.13.0
-  typescript-eslint: 8.71.2
-  # @stryker-mutator 10.0.0 (latest) pulls qs 6.15.1 via typed-rest-client;
+  '@typescript-eslint/tsconfig-utils': 8.72.1
+  '@typescript-eslint/types': 8.72.1
+  eslint: 10.14.0
+  typescript-eslint: 8.72.1
+  # eslint 10 / @stryker-mutator 10.1.1 declare minimatch ^10.2.4, but 10.x is
+  # affected by GHSA-g3hv-75wg-m249 (globparts DoS, patched >=11.0.1);
+  # force the patched 11.0.3 so `pnpm audit --audit-level=moderate` passes.
+  minimatch: 11.0.3
+  # @stryker-mutator 10.1.1 pulls qs 6.15.1 via typed-rest-client;
   # force the patched 6.16.1 so `pnpm audit --audit-level=moderate` passes.
   qs: 6.16.1

@@ -562,6 +562,8 @@ async function chainCertificateBytes(options: {
         })
     );
     cert.issuer = issuer;
+    cert.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+    cert.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
     cert.subjectPublicKeyInfo = await importKeyForCertificate(options.keys.publicKey);
     if (options.caIssuersUrl) {
         const accessDescription = new pkijs.AccessDescription({

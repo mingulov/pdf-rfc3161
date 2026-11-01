@@ -616,6 +616,7 @@ describe("RFC 3161 document-timestamp renewal -- wrapper wiring", () => {
             await archiveTimestamp({
                 pdf: mockPdf,
                 tsa: mockTsaConfig,
+                // eslint-disable-next-line @typescript-eslint/no-deprecated -- compatibility coverage
                 rejectOnRevocationWarning: true,
             });
 

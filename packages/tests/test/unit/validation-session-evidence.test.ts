@@ -67,6 +67,8 @@ async function createLeafCertificate(options: {
     } else {
         cert.issuer = cert.subject;
     }
+    cert.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+    cert.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
     const extensions: pkijs.Extension[] = [];
     if (options.ocspUrl) {
         const aia = new pkijs.InfoAccess({
@@ -126,6 +128,8 @@ async function createIssuerCertificate(publicKey: CryptoKey): Promise<pkijs.Cert
         })
     );
     issuer.issuer = issuer.subject;
+    issuer.notBefore = new pkijs.Time({ value: new Date("2020-01-01T00:00:00Z") });
+    issuer.notAfter = new pkijs.Time({ value: new Date("2030-01-01T00:00:00Z") });
     issuer.subjectPublicKeyInfo = await importKeyForCertificate(publicKey);
     return issuer;
 }

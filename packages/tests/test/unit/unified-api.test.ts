@@ -67,6 +67,7 @@ describe("Unified API Tests", () => {
                 policy: "1.2.3.4.5",
             },
             enableLTV: false,
+            // eslint-disable-next-line @typescript-eslint/no-deprecated -- compatibility coverage
             rejectOnRevocationWarning: false,
         });
 
