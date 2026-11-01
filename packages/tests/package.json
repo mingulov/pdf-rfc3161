@@ -28,7 +28,7 @@
         "pdf-lib-incremental-save": "1.17.4",
         "pdf-rfc3161": "workspace:*",
         "pdf-rfc3161-cli": "workspace:*",
-        "pkijs": "^3.4.1"
+        "pkijs": "^4.0.1"
     },
     "devDependencies": {
         "@arethetypeswrong/cli": "0.18.5",

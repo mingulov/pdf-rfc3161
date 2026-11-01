@@ -42,7 +42,7 @@
         "asn1js": "^3.1.0",
         "commander": "^15.0.0",
         "pdf-rfc3161": "workspace:*",
-        "pkijs": "^3.4.1"
+        "pkijs": "^4.0.1"
     },
     "devDependencies": {
         "@types/node": "^26.6.5",

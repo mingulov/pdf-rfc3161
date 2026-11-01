@@ -15,7 +15,7 @@
         "asn1js": "^3.1.0",
         "lucide-react": "^1.59.0",
         "pdf-rfc3161": "workspace:*",
-        "pkijs": "^3.4.1",
+        "pkijs": "^4.0.1",
         "react": "^19.3.1",
         "react-dom": "^19.3.1"
     },
