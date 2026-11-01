@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import * as asn1js from "asn1js";
 import * as pkijs from "pkijs";
-import { isCertValidAtTime } from "../../../core/src/pki/pki-utils.js";
+import { isCertValidAtTime, validityOk } from "../../../core/src/pki/pki-utils.js";
+import { createRFC3161TokenFixture } from "../fixtures/rfc3161-token.js";
 
 function certWithValidity(notBefore: Date, notAfter: Date): pkijs.Certificate {
     const cert = new pkijs.Certificate();
@@ -42,4 +44,18 @@ describe("isCertValidAtTime (G2)", () => {
         expect(isCertValidAtTime(broken, new Date("2024-06-15T12:00:00Z"))).toBe(false);
     });
 
+});
+
+describe("validityOk encoding gate", () => {
+    it("accepts well-formed GeneralizedTime validity encodings", async () => {
+        const fixture = await createRFC3161TokenFixture({ signerValidityGeneralizedTime: true });
+        const asn1 = asn1js.fromBER(fixture.signerCertificate.slice().buffer);
+        if (asn1.offset === -1) throw new Error("fixture signer is not DER");
+        const cert = new pkijs.Certificate({ schema: asn1.result });
+        expect(
+            cert.notBefore.type === pkijs.TimeType.GeneralizedTime ||
+                cert.notAfter.type === pkijs.TimeType.GeneralizedTime
+        ).toBe(true);
+        expect(validityOk(cert)).toBe(true);
+    });
 });
