@@ -9,6 +9,19 @@ const SYNTHETIC_PDF = new Uint8Array([
 ]);
 
 describe("TimestampSession dispose() semantics", () => {
+    it("reports empty input on a fresh session as PDF_ERROR, not disposed", async () => {
+        const session = new TimestampSession(new Uint8Array(0));
+
+        let caught: unknown;
+        try {
+            await session.createTimestampRequest();
+        } catch (e) {
+            caught = e;
+        }
+        expect(caught).toBeInstanceOf(TimestampError);
+        expect((caught as TimestampError).code).toBe(TimestampErrorCode.PDF_ERROR);
+    });
+
     it("dispose before createTimestampRequest blocks the call", async () => {
         const session = new TimestampSession(SYNTHETIC_PDF);
         session.dispose();
