@@ -164,6 +164,17 @@ export function getCRLCircuitState(url: string): CircuitState | undefined {
 }
 
 /**
+ * Access the shared CRL circuit breaker map.
+ * Lets alternate transports (e.g. custom-config DefaultFetcher) record
+ * into the same per-URL breakers as the default path.
+ *
+ * @internal For DefaultFetcher's custom-config path only.
+ */
+export function getCRLCircuitBreakers(): CircuitBreakerMap {
+    return crlCircuitBreakers;
+}
+
+/**
  * Reset all CRL circuit breakers
  * Useful for testing or after service recovery
  */

@@ -1,7 +1,7 @@
 import type { RevocationDataFetcher, RevocationFetchContext } from "../validation-types.js";
 import { fetchBytesWithRetry } from "../../utils/fetch-with-retry.js";
-import { fetchOCSPResponse } from "../ocsp-client.js";
-import { fetchCRL } from "../crl-client.js";
+import { fetchOCSPResponse, getOCSPCircuitBreakers } from "../ocsp-client.js";
+import { fetchCRL, getCRLCircuitBreakers } from "../crl-client.js";
 import { DEFAULT_OCSP_CONFIG, DEFAULT_CRL_CONFIG } from "../../constants.js";
 import type { OperationBudget } from "../../utils/operation-budget.js";
 
@@ -17,7 +17,8 @@ const INITIAL_BACKOFF_MS = 500;
  * transport policy (including their singleton breaker maps); that moves
  * the default CRL per-attempt timeout from 5 s to the client's 15 s and
  * its backoff from 500 ms to 1 s. Explicit timeout/maxRetries keep the
- * historical direct policy instead.
+ * historical direct timeout/retry values but still record into the same
+ * shared singleton breaker maps.
  */
 export class DefaultFetcher implements RevocationDataFetcher {
     private readonly timeout: number | undefined;
@@ -91,6 +92,7 @@ export class DefaultFetcher implements RevocationDataFetcher {
                 maxResponseBytes: DEFAULT_OCSP_CONFIG.maxResponseBytes,
             },
             serviceLabel: "OCSP responder",
+            circuitBreakers: getOCSPCircuitBreakers(),
             signal: options.signal,
             budget: options.budget,
         });
@@ -140,6 +142,7 @@ export class DefaultFetcher implements RevocationDataFetcher {
                 maxResponseBytes: DEFAULT_CRL_CONFIG.maxResponseBytes,
             },
             serviceLabel: "CRL server",
+            circuitBreakers: getCRLCircuitBreakers(),
             signal: options.signal,
             budget: options.budget,
         });
