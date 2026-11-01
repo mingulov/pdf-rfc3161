@@ -242,6 +242,27 @@ describe("CMS signature algorithm binding", () => {
         }
     });
 
+    it("rejects RSA-PSS parameters naming SHA-1 under a SHA-256 digest", async () => {
+        const { parsed, signer } = await signedCms("RSA-PSS", "SHA-256");
+        const original = parsed.signerInfo.signatureAlgorithm.algorithmParams as asn1js.Sequence;
+        // SHA-1 is a known ESS hash, so only the PSS-hash/digest equality
+        // check stands between this relabelled token and crypto: both the
+        // main hash and the MGF1 hash name SHA-1 while the SignerInfo
+        // digest stays SHA-256.
+        const params = new pkijs.RSASSAPSSParams({ schema: original });
+        params.hashAlgorithm.algorithmId = "1.3.14.3.2.26";
+        params.maskGenAlgorithm.algorithmParams = new pkijs.AlgorithmIdentifier({
+            algorithmId: "1.3.14.3.2.26",
+        }).toSchema();
+        parsed.signerInfo.signatureAlgorithm.algorithmParams = params.toSchema();
+        await expect(
+            verifyTimestampCmsSignature(parsed.signedData, parsed.signerInfo, signer)
+        ).rejects.toMatchObject({
+            code: "VERIFICATION_FAILED",
+            message: "Timestamp RSA-PSS signature parameters are unsupported or malformed",
+        });
+    });
+
     it("rejects unsupported or malformed CMS digest identifiers", async () => {
         const fixture = await createRFC3161TokenFixture();
         for (const digest of [
