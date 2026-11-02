@@ -262,6 +262,19 @@ jobs:
       - name: Install pyHanko
         run: uv pip install --system --require-hashes -r packages/tests/python/requirements.lock
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+          cache-dependency-path: 'packages/tests/dss-oracle/pom.xml'
+
+      - name: Record Java toolchain versions
+        run: |
+          java -version
+          mvn -version | head -3
+
       - name: Build
         run: pnpm build
 

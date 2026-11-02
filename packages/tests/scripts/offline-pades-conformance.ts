@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,7 @@ import {
     issuingDistributionPointExtension,
 } from "../test/fixtures/signed-revocation-material.js";
 import { createLocalTsa, createUnrelatedTrustAnchor, TSA_POLICY } from "./local-tsa-fixture";
+import { assertDssCase, parseDssOutput, type DssReport } from "../test/utils/dss-verdict";
 import {
     activatePadesOracleEnvironment,
     assertPadesOracleTools,
@@ -69,6 +70,9 @@ const PYHANKO_INSTALL_GUIDANCE =
 const EXPECTED_PYHANKO_VERSION = "0.38.0";
 const EXPECTED_CERTVALIDATOR_VERSION = "0.33.0";
 const EXPECTED_VERIFIEDBY_VERSION = "0.1.0";
+const DSS_INSTALL_GUIDANCE =
+    "Install a JDK 17+ and Maven 3.9+, then rerun: the DSS oracle builds from packages/tests/dss-oracle.";
+const EXPECTED_DSS_VERSION = "6.2";
 const ID_SIGNED_DATA = "1.2.840.113549.1.7.2";
 const OCSP_URL = "http://ocsp.example.com/";
 const CRL_URL = "http://crl.example.com/tsa.crl";
@@ -197,6 +201,7 @@ interface EngineVersions {
     pyhanko: string;
     certvalidator: string;
     verifiedby: string;
+    dss: string;
 }
 
 interface LedgerEntry {
@@ -813,6 +818,48 @@ function parsePyhankoSummary(output: string): PyhankoSummary {
     return { timestampCount, intact, trusted, timestamps: verdicts };
 }
 
+const DSS_ORACLE_JAR = "dss-oracle-jar-with-dependencies.jar";
+
+/** Builds the DSS oracle jar when missing or older than its sources. */
+function ensureDssOracle(): string {
+    const directory = join(process.cwd(), "dss-oracle");
+    const jar = join(directory, "target", DSS_ORACLE_JAR);
+    const sources = [
+        join(directory, "pom.xml"),
+        join(directory, "src/main/java/pdfrfc3161/dss/DssOracle.java"),
+        join(directory, "src/main/resources/dss-oracle.properties"),
+    ];
+    let stale = !existsSync(jar);
+    if (!stale) {
+        const jarTime = statSync(jar).mtimeMs;
+        stale = sources.some((source) => statSync(source).mtimeMs > jarTime);
+    }
+    if (stale) {
+        assertSuccess(
+            "mvn",
+            ["-q", "-DskipTests", "-f", join(directory, "pom.xml"), "package"],
+            DSS_INSTALL_GUIDANCE
+        );
+    }
+    if (!existsSync(jar)) {
+        throw new Error(`DSS oracle jar is missing after build: ${jar}. ${DSS_INSTALL_GUIDANCE}`);
+    }
+    return jar;
+}
+
+function runDss(pdfPath: string, rootCert: string): DssReport {
+    const jar = ensureDssOracle();
+    const result = run(
+        "java",
+        ["-jar", jar, "--pdf", pdfPath, "--trust", rootCert],
+        DSS_INSTALL_GUIDANCE
+    );
+    if (result.status !== 0) {
+        throw new Error(`DSS oracle failed for ${pdfPath}: ${commandFailure(result)}`);
+    }
+    return parseDssOutput(result.stdout);
+}
+
 function runPyhanko(
     ctx: SectionContext,
     pdfPath: string,
@@ -899,6 +946,12 @@ function collectEngineVersions(ctx: SectionContext): EngineVersions {
     );
     const python = requirePinnedPython(ctx.python);
     const { pyhanko, certvalidator } = pyhankoVersions(ctx.python, ctx.verifierPath);
+    const dss = assertSuccess(
+        "java",
+        ["-jar", ensureDssOracle(), "--version"],
+        DSS_INSTALL_GUIDANCE
+    ).stdout.trim();
+    assert.equal(dss, EXPECTED_DSS_VERSION, `Expected DSS ${EXPECTED_DSS_VERSION}, got ${dss}`);
     return {
         openssl,
         qpdf: qpdfFirstLine,
@@ -906,6 +959,7 @@ function collectEngineVersions(ctx: SectionContext): EngineVersions {
         pyhanko,
         certvalidator,
         verifiedby: verifiedbyVersion(),
+        dss,
     };
 }
 
@@ -2874,6 +2928,55 @@ async function sectionClosureC03(
     ledger.record(section, "verifiedby", "C03 tamper", "mismatch", "mismatch");
     ledger.record(section, "pyhanko", "C03 tamper", "rejected", "rejected");
 }
+
+// DSS validates PAdES structure, CMS/timestamp cryptography, and ETSI
+// indications under direct leaf trust. Chain-to-root is asserted by the
+// openssl, pyHanko, and verifiedby legs and revocation by the revocation
+// sections; pointing DSS at the root would demand revocation data our
+// distribution-point-free fixture certificates cannot supply.
+async function sectionDssOracle(
+    ctx: SectionContext,
+    tsaConfig: string,
+    tsaCert: string
+): Promise<void> {
+    const section = "dss-oracle";
+    const { ledger } = ctx;
+
+    const unsignedInput = await createOnePagePdf("Offline PAdES dss-unsigned");
+    const unsignedPath = writeArtifact(ctx, "dss-unsigned.pdf", unsignedInput, "unsigned DSS control");
+    const unsignedReport = runDss(unsignedPath, tsaCert);
+    assertDssCase(unsignedReport, { signatures: 0, timestamps: [] });
+    ledger.record(section, "dss", "unsigned input", "0 timestamps", "0 timestamps");
+
+    const rsaInput = await createOnePagePdf("Offline PAdES dss-rsa-sha256");
+    const stamped = await stampWithLocalTsa(ctx, "dss-rsa-sha256", rsaInput, tsaConfig, "SHA-256");
+    const stampedReport = runDss(stamped.pdfPath, tsaCert);
+    assertDssCase(stampedReport, { signatures: 0, timestamps: [{ indication: "PASSED" }] });
+    ledger.record(section, "dss", "RSA/SHA-256 timestamp", "1 PASSED", "1 PASSED");
+
+    const ecDir = join(ctx.workdir, "tsa-dss-ec");
+    mkdirSync(ecDir, { recursive: true });
+    const ecTsa = createLocalTsa(ecDir, { keyType: "EC" });
+    const ecInput = await createOnePagePdf("Offline PAdES dss-ec-sha384");
+    const ecStamped = await stampWithLocalTsa(ctx, "dss-ec-sha384", ecInput, ecTsa.config, "SHA-384");
+    const ecReport = runDss(ecStamped.pdfPath, ecTsa.tsaCert);
+    assertDssCase(ecReport, { signatures: 0, timestamps: [{ indication: "PASSED" }] });
+    ledger.record(section, "dss", "EC/SHA-384 timestamp", "1 PASSED", "1 PASSED");
+
+    const [timestamp] = await extractTimestamps(stamped.pdf);
+    if (!timestamp) throw new Error("dss-rsa-sha256 is missing its timestamp for the tamper case");
+    const { tampered, offset } = tamperCoveredWhitespace(stamped.pdf, timestamp.byteRange);
+    const tamperedPath = writeArtifact(ctx, "dss-tampered.pdf", tampered, "covered-byte tampered DSS control");
+    const tamperedReport = runDss(tamperedPath, tsaCert);
+    assertDssCase(tamperedReport, { signatures: 0, timestamps: [{ indication: "FAILED" }] });
+    ledger.record(
+        section,
+        "dss",
+        `tampered copy rejected at ${offset.toString()}`,
+        "1 FAILED",
+        "1 FAILED"
+    );
+}
 const REQUIRED_SECTION_COUNTS = [
     "section:hash-breadth",
     "section:multi-signature",
@@ -2883,6 +2986,7 @@ const REQUIRED_SECTION_COUNTS = [
     "section:token-rigor",
     "section:revocation",
     "section:c03-closure",
+    "section:dss-oracle",
 ];
 
 const REQUIRED_ORACLE_COUNTS = [
@@ -2894,6 +2998,7 @@ const REQUIRED_ORACLE_COUNTS = [
     "oracle:pyhanko",
     "oracle:verifiedby",
     "oracle:library",
+    "oracle:dss",
 ];
 
 // sol-finalgap O2 (practical close): bare nonzero checks let a removed
@@ -2912,6 +3017,7 @@ const REQUIRED_MINIMUM_COUNTS: Record<string, number> = {
     "section:token-rigor": 12,
     "section:revocation": 26,
     "section:c03-closure": 12,
+    "section:dss-oracle": 4,
     "oracle:openssl-ts": 51,
     "oracle:openssl-verify": 10,
     "oracle:openssl-ocsp": 5,
@@ -2920,8 +3026,9 @@ const REQUIRED_MINIMUM_COUNTS: Record<string, number> = {
     "oracle:pyhanko": 20,
     "oracle:verifiedby": 27,
     "oracle:library": 47,
+    "oracle:dss": 4,
 };
-const REQUIRED_MINIMUM_TOTAL = 182;
+const REQUIRED_MINIMUM_TOTAL = 186;
 
 const RECORDED_LIMITATIONS = [
     "OpenSSL 3.0.13 ts -verify -attime treats notAfter as exclusive while the library and pyHanko 0.38.0 (tolerance 0) treat it as inclusive; pinned at the exact na instant in validity-boundaries and token-rigor.",
@@ -2970,6 +3077,7 @@ async function runConformance(options: ConformanceOptions): Promise<void> {
             goodOcspDer: revocation.goodOcspDer,
             tsaCertDer,
         });
+        await sectionDssOracle(ctx, config, tsaCert);
 
         for (const key of [...REQUIRED_SECTION_COUNTS, ...REQUIRED_ORACLE_COUNTS]) {
             const minimum = REQUIRED_MINIMUM_COUNTS[key] ?? 1;

@@ -24,6 +24,7 @@ and [ETSI TS 102 778-4](https://www.etsi.org/deliver/etsi_TS/102700_102799/10277
 | qpdf                 | PDF syntax, xref, and JSON object-graph input      | CMS/TSA trust or DSS policy |
 | OpenSSL              | RFC 3161 token and imprint cryptography            | PDF object semantics       |
 | pyHanko 0.38.0       | timestamp discovery, integrity, local-root trust   | normative VRI-key encoding |
+| EU DSS 6.2           | DocTimeStamp ETSI indication under direct leaf trust | chain-to-root, revocation |
 | Adobe Acrobat Reader | manual viewer classification and UI/trust behavior | deterministic CI           |
 
 The matrix describes the project-owned test layer, not a claim that every listed tool
@@ -89,6 +90,22 @@ the structural issue #61/#62 mutation fixtures. Assert the expected outcomes and
 when zero fixtures are checked. Such a differential must not replace the required PDF
 structure, RFC 3161 cryptography, local-root trust, or manual viewer checks above.
 
+EU DSS 6.2 is the first validator admitted under this policy: Maven Central
+`eu.europa.ec.joinup.sd-dss` modules `dss-pades`, `dss-validation`,
+`dss-pades-pdfbox`, and `dss-utils-apache-commons`, exercised with
+project-owned unsigned, RSA/SHA-256, and EC/SHA-384 fixtures plus a
+one-byte covered-range tamper fixture, asserting the ETSI indication
+per timestamp with `oracle:dss` and total minimums. DSS runs under
+direct TSA-leaf trust: chain-to-root stays with the openssl, pyHanko,
+and verifiedby legs and revocation with the revocation sections, since
+the distribution-point-free fixture certificates cannot supply the
+revocation data a root-anchored DSS validation demands. Poppler `pdfsig`
+and MuPDF `mutool sign` were evaluated against the same DocTimeStamp
+fixtures and rejected: `pdfsig` lists the field but never verifies
+timestamp tokens (`Signature has not yet been verified` for intact and
+tampered copies alike, even with the signer trusted), and `mutool`
+reports the timestamp field as not signed.
+
 ## License and redistribution boundary
 
 This section is technical release guidance, not legal advice. Recheck the exact release
@@ -102,6 +119,10 @@ and all transitive dependencies before distribution.
 - Any additional comparison tool must remain outside the published JavaScript package
   until its exact release, transitive dependencies, redistribution model, and required
   notices have been reviewed.
+- [EU DSS 6.2](https://github.com/esig/dss) core is LGPL-2.1. It runs here as a
+  separately built CI tool in its own JVM process (Maven Central artifacts,
+  checksum-verified on download) and is never bundled into the published
+  JavaScript package.
 
 ## Related boundaries
 
