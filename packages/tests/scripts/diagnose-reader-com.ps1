@@ -1,135 +1,99 @@
 <#
 .SYNOPSIS
-    TEMPORARY v2 diagnostic: embedding-server and dialog evidence. DO NOT MERGE.
+    TEMPORARY v3 diagnostic: integrity-level split evidence. DO NOT MERGE.
 
 .DESCRIPTION
-    Never fails: every probe reports its outcome. P1 pre-launches Reader
-    as an embedding server and then connects COM to it. P2 enumerates the
-    Reader process windows during a plain launch (a first-run/EULA dialog
-    would appear here). P3 reports the registered LocalServer32 command.
-    All processes this script starts are closed by it.
+    Reports the integrity level of this process and of a warm-launched
+    Reader process, plus the default PDF handler. A High/Medium split
+    between the COM client and the Reader server explains E_FAIL.
 #>
 $ErrorActionPreference = "Continue"
 
-function Section {
-    param([string]$Name)
-    ""
-    "=== $Name ==="
-}
-
-function Get-OwnedReaderExe {
-    foreach ($key in @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Acrobat.exe",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\Acrobat.exe"
-    )) {
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class IntegrityQuery {
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr buffer, int length, out int needed);
+    [DllImport("advapi32.dll")]
+    static extern IntPtr GetSidSubAuthority(IntPtr sid, uint index);
+    [DllImport("advapi32.dll")]
+    static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+    public static string LevelOf(int pid) {
+        var process = System.Diagnostics.Process.GetProcessById(pid);
+        IntPtr token;
+        if (!OpenProcessToken(process.Handle, 8u, out token)) return "query-failed";
         try {
-            $exe = (Get-ItemProperty -LiteralPath $key -Name "(default)" -ErrorAction Stop)."(default)"
-            if (-not [string]::IsNullOrWhiteSpace($exe) -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
-                return $exe
-            }
-        } catch {
-        }
-    }
-    return $null
-}
-
-function Stop-OwnedProcess {
-    param($Process)
-    try {
-        $Process.CloseMainWindow() | Out-Null
-    } catch {
-    }
-    try {
-        $Process.WaitForExit(10000) | Out-Null
-    } catch {
-    }
-    try {
-        $Process.Refresh()
-        if (-not $Process.HasExited) {
-            Stop-Process -Id $Process.Id -Force
-        }
-    } catch {
-    }
-}
-
-Section "p0-exe"
-$exe = Get-OwnedReaderExe
-"exe=$exe"
-
-Section "p1-embedding-server"
-if ($null -eq $exe) {
-    "P1 SKIPPED (no exe)"
-} else {
-    try {
-        $server = Start-Process -FilePath $exe -ArgumentList "-Embedding" -PassThru
-        Start-Sleep -Seconds 20
-        $server.Refresh()
-        "P1 server alive=$(-not $server.HasExited) responding=$($server.Responding) title=$($server.MainWindowTitle)"
-        try {
-            $app = New-Object -ComObject AcroExch.App
-            "P1 COM-CONNECT ok"
+            int needed;
+            GetTokenInformation(token, 25, IntPtr.Zero, 0, out needed);
+            IntPtr buffer = Marshal.AllocHGlobal(needed);
             try {
-                $app.Exit()
-            } catch {
+                if (!GetTokenInformation(token, 25, buffer, needed, out needed)) return "query-failed";
+                IntPtr sid = Marshal.ReadIntPtr(buffer);
+                byte count = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+                uint rid = (uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
+                return "0x" + rid.ToString("X");
+            } finally {
+                Marshal.FreeHGlobal(buffer);
             }
-            try {
-                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($app)
-            } catch {
-            }
-        } catch {
-            "P1 COM-CONNECT failed: $($_.Exception.Message)"
+        } finally {
+            CloseHandle(token);
         }
-        Stop-OwnedProcess -Process $server
-    } catch {
-        "P1 PROBE-ERROR $($_.Exception.Message)"
     }
 }
+"@
 
-Section "p2-dialogs"
-if ($null -eq $exe) {
-    "P2 SKIPPED (no exe)"
-} else {
-    try {
-        Add-Type -AssemblyName UIAutomationClient
-        $plain = Start-Process -FilePath $exe -PassThru
-        Start-Sleep -Seconds 15
-        $plain.Refresh()
-        "P2 alive=$(-not $plain.HasExited) responding=$($plain.Responding) mainTitle=$($plain.MainWindowTitle)"
-        try {
-            $root = [System.Windows.Automation.AutomationElement]::RootElement
-            $windows = $root.FindAll(
-                [System.Windows.Automation.TreeScope]::Children,
-                [System.Windows.Automation.Condition]::TrueCondition
-            )
-            foreach ($window in $windows) {
-                try {
-                    if ($window.Current.ProcessId -eq $plain.Id) {
-                        "P2 window title=$($window.Current.Name) class=$($window.Current.ClassName)"
-                    }
-                } catch {
-                }
-            }
-        } catch {
-            "P2 UIA-PROBE-ERROR $($_.Exception.Message)"
-        }
-        Stop-OwnedProcess -Process $plain
-    } catch {
-        "P2 PROBE-ERROR $($_.Exception.Message)"
-    }
-}
+"self pid=$PID IL=$([IntegrityQuery]::LevelOf($PID))"
 
-Section "p3-localserver-cmdline"
+$exe = $null
 try {
-    $clsid = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Classes\AcroExch.App\CLSID" `
+    $exe = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Acrobat.exe" `
         -Name "(default)" -ErrorAction Stop)."(default)"
-    $command = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Classes\CLSID\$clsid\LocalServer32" `
-        -Name "(default)" -ErrorAction Stop)."(default)"
-    "P3 clsid=$clsid"
-    "P3 localserver=$command"
 } catch {
-    "P3 PROBE-ERROR $($_.Exception.Message)"
+}
+"reader exe=$exe"
+
+if ($null -ne $exe) {
+    try {
+        $reader = Start-Process -FilePath $exe -PassThru
+        Start-Sleep -Seconds 15
+        $reader.Refresh()
+        if ($reader.HasExited) {
+            "reader exited during warmup"
+        } else {
+            "reader pid=$($reader.Id) IL=$([IntegrityQuery]::LevelOf($reader.Id)) title=$($reader.MainWindowTitle)"
+        }
+        try {
+            $reader.CloseMainWindow() | Out-Null
+        } catch {
+        }
+        try {
+            $reader.WaitForExit(10000) | Out-Null
+        } catch {
+        }
+        try {
+            $reader.Refresh()
+            if (-not $reader.HasExited) {
+                Stop-Process -Id $reader.Id -Force
+            }
+        } catch {
+        }
+    } catch {
+        "reader PROBE-ERROR $($_.Exception.Message)"
+    }
 }
 
-""
-"=== v2 diagnostic complete (always exits 0) ==="
+try {
+    $choice = (Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.pdf\UserChoice" `
+        -Name "ProgId" -ErrorAction Stop).ProgId
+    "default pdf handler=$choice"
+} catch {
+    "default pdf handler=unknown"
+}
+
+"=== v3 diagnostic complete (always exits 0) ==="
 exit 0
