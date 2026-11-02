@@ -24,7 +24,7 @@ and [ETSI TS 102 778-4](https://www.etsi.org/deliver/etsi_TS/102700_102799/10277
 | qpdf                 | PDF syntax, xref, and JSON object-graph input      | CMS/TSA trust or DSS policy |
 | OpenSSL              | RFC 3161 token and imprint cryptography            | PDF object semantics       |
 | pyHanko 0.38.0       | timestamp discovery, integrity, local-root trust   | normative VRI-key encoding |
-| Adobe Acrobat Reader | manual viewer classification and UI/trust behavior | deterministic CI           |
+| Adobe Acrobat Reader | manual viewer classification plus automated signature-state oracle on Windows CI | UI wording contracts |
 
 The matrix describes the project-owned test layer, not a claim that every listed tool
 implements every check itself. In particular, `qpdf --check` validates PDF structure;
@@ -77,7 +77,10 @@ be cleaned up by its caller.
 - Acrobat Reader is a manual compatibility observation. Use the reproducible checklist
   in [manual-acrobat-validation.md](manual-acrobat-validation.md), record the exact
   Reader build and environment, and do not turn one build's UI wording into an API
-  contract.
+  contract. The Windows CI job additionally drives Reader through COM automation
+  (`test/unit/acrobat-reader.test.ts`) across unsigned, timestamped, LTV, and
+  tampered fixtures, asserting only signature-field presence and numeric
+  `signatureValidate` codes.
 
 ## Additional validator policy
 
@@ -99,6 +102,10 @@ and all transitive dependencies before distribution.
   is MIT. [OpenSSL 3](https://docs.openssl.org/3.0/man7/migration_guide/) is Apache-2.0.
   They are suitable as separately installed CI tools for this MIT project; they are not
   bundled into the published JavaScript package.
+- [Adobe Acrobat Reader](https://get.adobe.com/reader/) is installed at CI time as a
+  Windows-only oracle tool. It is fetched from Adobe during the run and is not
+  redistributed, bundled into the published JavaScript package, or executed with
+  hostile input outside the generated fixtures.
 - Any additional comparison tool must remain outside the published JavaScript package
   until its exact release, transitive dependencies, redistribution model, and required
   notices have been reviewed.

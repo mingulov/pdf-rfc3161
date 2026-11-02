@@ -6,6 +6,11 @@ make a universal claim about other Reader versions, trust settings, operating sy
 or PDF viewers. The expected wording below is an observation to record for the tested
 build, not a contract.
 
+A separate automated harness (`test/unit/acrobat-reader.test.ts`, driven on Windows
+CI through COM automation) covers signature classification, integrity, and the
+one-byte tamper control. This manual protocol remains the record for trust-source
+observations, UI wording, screenshots, and LTV UI state.
+
 Use [validation-tools.md](validation-tools.md) for the role boundaries of Acrobat,
 qpdf, pyHanko, and OpenSSL. Do not process an untrusted PDF outside
 resource-limited isolation; the supported signing workflow expects a clean,
