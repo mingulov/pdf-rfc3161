@@ -16,7 +16,7 @@ import {
 // It compares CONTENT, not modification times. The mtime sweep this replaced
 // failed a rebuild-free `pnpm test` after any operation that rewrites a file
 // without changing it -- a branch switch, a fresh clone, `eslint --fix` on an
-// already-clean file -- which contradicts CLAUDE.md's promise that `pnpm test`
+// already-clean file -- which contradicts AGENTS.md's promise that `pnpm test`
 // needs no build, and trained everyone to ignore the message. The build writes
 // a hash of the sources it consumed (packages/cli/scripts/build-manifest.ts);
 // here we recompute it and compare.
