@@ -331,23 +331,32 @@ jobs:
             if ($recorded -ne 0) {
                 throw "Reader Protected Mode lockdown did not persist"
             }
-            $appPathKeys = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
-                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
-                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe"
+            # Reader 26 unified the executable as Acrobat.exe; older
+            # releases register AcroRd32.exe. Probe every combination.
+            $exeNames = @("AcroRd32.exe", "Acrobat.exe")
+            $appPathRoots = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths",
+                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
             )
             $exePath = $null
-            foreach ($key in $appPathKeys) {
-                try {
-                    $candidate = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
-                        -ErrorAction Stop)."(default)"
-                    if (-not [string]::IsNullOrWhiteSpace($candidate) -and `
-                        (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-                        $exePath = $candidate
-                        "Reader install registered at $key"
-                        break
+            foreach ($root in $appPathRoots) {
+                foreach ($exeName in $exeNames) {
+                    $key = Join-Path $root $exeName
+                    try {
+                        $candidate = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
+                            -ErrorAction Stop)."(default)"
+                        if (-not [string]::IsNullOrWhiteSpace($candidate) -and `
+                            (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                            $exePath = $candidate
+                            "Reader install registered at $key"
+                            break
+                        }
+                    } catch {
                     }
-                } catch {
+                }
+                if ($null -ne $exePath) {
+                    break
                 }
             }
             if ($null -eq $exePath) {
@@ -359,7 +368,8 @@ jobs:
                     if (-not (Test-Path -LiteralPath $adobeRoot -PathType Container)) {
                         continue
                     }
-                    $found = Get-ChildItem -LiteralPath $adobeRoot -Filter "AcroRd32.exe" `
+                    $found = Get-ChildItem -LiteralPath $adobeRoot `
+                        -Include "AcroRd32.exe", "Acrobat.exe" `
                         -Recurse -Depth 4 -File -ErrorAction SilentlyContinue | Select-Object -First 1
                     if ($null -ne $found) {
                         $exePath = $found.FullName

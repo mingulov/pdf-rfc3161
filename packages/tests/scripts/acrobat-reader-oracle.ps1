@@ -72,21 +72,26 @@ function Read-ManifestCases {
 
 function Get-ReaderVersion {
     # Best-effort identity record: probe every registration the Adobe
-    # installer is known to use (64-bit, 32-bit-redirected, per-user).
-    $appPathKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
-        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe"
+    # installer is known to use (64-bit, 32-bit-redirected, per-user;
+    # AcroRd32.exe before and Acrobat.exe since the Reader 26 unification).
+    $exeNames = @("AcroRd32.exe", "Acrobat.exe")
+    $appPathRoots = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
     )
-    foreach ($key in $appPathKeys) {
-        try {
-            $exePath = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
-                -ErrorAction Stop)."(default)"
-            if (-not [string]::IsNullOrWhiteSpace($exePath) -and `
-                (Test-Path -LiteralPath $exePath -PathType Leaf)) {
-                return (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
+    foreach ($root in $appPathRoots) {
+        foreach ($exeName in $exeNames) {
+            $key = Join-Path $root $exeName
+            try {
+                $exePath = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
+                    -ErrorAction Stop)."(default)"
+                if (-not [string]::IsNullOrWhiteSpace($exePath) -and `
+                    (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+                    return (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
+                }
+            } catch {
             }
-        } catch {
         }
     }
     return $null
