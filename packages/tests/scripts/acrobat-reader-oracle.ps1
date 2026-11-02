@@ -70,10 +70,10 @@ function Read-ManifestCases {
     return $manifest.cases
 }
 
-function Get-ReaderVersion {
-    # Best-effort identity record: probe every registration the Adobe
-    # installer is known to use (64-bit, 32-bit-redirected, per-user;
-    # AcroRd32.exe before and Acrobat.exe since the Reader 26 unification).
+function Get-ReaderExePath {
+    # Probe every registration the Adobe installer is known to use
+    # (64-bit, 32-bit-redirected, per-user; AcroRd32.exe before and
+    # Acrobat.exe since the Reader 26 unification).
     $exeNames = @("AcroRd32.exe", "Acrobat.exe")
     $appPathRoots = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
@@ -88,13 +88,97 @@ function Get-ReaderVersion {
                     -ErrorAction Stop)."(default)"
                 if (-not [string]::IsNullOrWhiteSpace($exePath) -and `
                     (Test-Path -LiteralPath $exePath -PathType Leaf)) {
-                    return (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
+                    return $exePath
                 }
             } catch {
             }
         }
     }
     return $null
+}
+
+function Get-ReaderVersion {
+    param([string]$ExePath)
+    if ([string]::IsNullOrWhiteSpace($ExePath)) {
+        return $null
+    }
+    try {
+        return (Get-Item -LiteralPath $ExePath).VersionInfo.ProductVersion
+    } catch {
+        return $null
+    }
+}
+
+function Start-ReaderWarmup {
+    param([string]$ExePath)
+    # A fresh Reader install often refuses its first COM activation until
+    # the executable has launched once. Launch it, let first-run
+    # initialization settle, then ask it to close (best effort: a lingering
+    # window on an ephemeral runner is harmless).
+    try {
+        $process = Start-Process -FilePath $ExePath -PassThru
+        Start-Sleep -Seconds 15
+        try {
+            $process.CloseMainWindow() | Out-Null
+        } catch {
+        }
+        try {
+            $process.WaitForExit(15000) | Out-Null
+        } catch {
+        }
+    } catch {
+    }
+}
+
+function Get-ComDiagnostics {
+    $lines = @()
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $lines += "user=$($identity.Name) admin=$admin"
+    } catch {
+    }
+    try {
+        $session = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+        $lines += "session=$session"
+    } catch {
+    }
+    try {
+        $registered = Test-Path -LiteralPath "HKCR:\AcroExch.App"
+        $lines += "AcroExch.App registered=$registered"
+    } catch {
+    }
+    try {
+        $running = @(Get-Process -Name "Acrobat", "AcroRd32" -ErrorAction SilentlyContinue)
+        $lines += "reader processes running=$($running.Count)"
+    } catch {
+    }
+    return ($lines -join " ")
+}
+
+function New-ReaderComApp {
+    param([string]$ExePath)
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            return New-Object -ComObject AcroExch.App
+        } catch {
+            $lastError = $_
+        }
+        if ($attempt -lt 3) {
+            if ([string]::IsNullOrWhiteSpace($ExePath)) {
+                Start-Sleep -Seconds 10
+            } else {
+                Start-ReaderWarmup -ExePath $ExePath
+            }
+        }
+    }
+    $detail = "unknown error"
+    if ($null -ne $lastError) {
+        $detail = $lastError.Exception.Message
+    }
+    throw "Could not create AcroExch.App after 3 attempts: $detail [$(Get-ComDiagnostics)]"
 }
 
 function Read-JsScalar {
@@ -163,9 +247,10 @@ function Use-ComObject {
 }
 
 $cases = Read-ManifestCases -Path $ManifestPath
-$readerVersion = Get-ReaderVersion
+$readerExePath = Get-ReaderExePath
+$readerVersion = Get-ReaderVersion -ExePath $readerExePath
 
-$app = New-Object -ComObject AcroExch.App
+$app = New-ReaderComApp -ExePath $readerExePath
 try {
     try {
         $app.Hide()
