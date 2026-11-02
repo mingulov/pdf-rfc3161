@@ -331,9 +331,52 @@ jobs:
             if ($recorded -ne 0) {
                 throw "Reader Protected Mode lockdown did not persist"
             }
-            $exePath = (Get-ItemProperty `
-                -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe" `
-                -Name "(default)")."(default)"
+            $appPathKeys = @(
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
+                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
+                "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe"
+            )
+            $exePath = $null
+            foreach ($key in $appPathKeys) {
+                try {
+                    $candidate = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
+                        -ErrorAction Stop)."(default)"
+                    if (-not [string]::IsNullOrWhiteSpace($candidate) -and `
+                        (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                        $exePath = $candidate
+                        "Reader install registered at $key"
+                        break
+                    }
+                } catch {
+                }
+            }
+            if ($null -eq $exePath) {
+                $searchRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace($_)
+                }
+                foreach ($root in $searchRoots) {
+                    $adobeRoot = Join-Path $root "Adobe"
+                    if (-not (Test-Path -LiteralPath $adobeRoot -PathType Container)) {
+                        continue
+                    }
+                    $found = Get-ChildItem -LiteralPath $adobeRoot -Filter "AcroRd32.exe" `
+                        -Recurse -Depth 4 -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($null -ne $found) {
+                        $exePath = $found.FullName
+                        "Reader install found by file search at $exePath"
+                        break
+                    }
+                }
+            }
+            if ($null -eq $exePath) {
+                "Adobe registry and install diagnostics:"
+                Get-ChildItem -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths" `
+                    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSChildName
+                Get-ChildItem -LiteralPath "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths" `
+                    -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSChildName
+                winget list --id Adobe.Acrobat.Reader.64-bit --accept-source-agreements
+                throw "Adobe Acrobat Reader executable was not found after install"
+            }
             $version = (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
             "Acrobat Reader $version at $exePath"
 

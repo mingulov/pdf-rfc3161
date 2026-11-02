@@ -71,13 +71,25 @@ function Read-ManifestCases {
 }
 
 function Get-ReaderVersion {
-    try {
-        $appPathsKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe"
-        $exePath = (Get-ItemProperty -LiteralPath $appPathsKey -Name "(default)")."(default)"
-        return (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
-    } catch {
-        return $null
+    # Best-effort identity record: probe every registration the Adobe
+    # installer is known to use (64-bit, 32-bit-redirected, per-user).
+    $appPathKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\AcroRd32.exe"
+    )
+    foreach ($key in $appPathKeys) {
+        try {
+            $exePath = (Get-ItemProperty -LiteralPath $key -Name "(default)" `
+                -ErrorAction Stop)."(default)"
+            if (-not [string]::IsNullOrWhiteSpace($exePath) -and `
+                (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+                return (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
+            }
+        } catch {
+        }
     }
+    return $null
 }
 
 function Read-JsScalar {
