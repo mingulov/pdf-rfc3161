@@ -2,7 +2,7 @@
 
 This document covers breaking changes between major releases of `pdf-rfc3161`.
 
-## 0.3.0 -> next minor (unreleased)
+## 0.3.0 -> 0.4.0
 
 The minimum supported Node.js version is now **22.18.0**. Node.js 22.12 through
 22.17 are no longer supported. Upgrade Node.js before installing the next

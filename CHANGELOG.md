@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
+## [0.4.0] - 2026-11-02
+
+### Added
+
+- `allowPrivateUrls` opt-out for callers timestamping against on-premise or
+  other private TSAs: `TSAConfig.allowPrivateUrls` in the library and
+  `--allow-private-urls` on the CLI `timestamp` and `archive` commands.
+  The flag defaults to off and is honored only on the caller-supplied TSA
+  request path; certificate-supplied AIA/OCSP/CRL fetches never honor it.
+  See MIGRATION.md.
+
+### Changed
+
+- **Behavior (Node.js runtime floor):** the minimum supported Node.js
+  version is now 22.18.0 (previously 22.12.0); Node.js 22.12 through 22.17
+  are no longer supported. The repository now builds with tsup 9 and the
+  asn1js 4.0.0 / pkijs 4.0.1 majors. See MIGRATION.md.
+- **Behavior (SHA-1 CMS rejection):** timestamp tokens that use SHA-1 as
+  the CMS signature hash or declared digest are now rejected up front with
+  `VERIFICATION_FAILED` on both the embed and verify paths, instead of
+  fully verifying against a collision-broken hash. Timestamps from a
+  legacy TSA that still signs with SHA-1 will fail verification; migrate
+  the TSA to SHA-256 or newer. See MIGRATION.md.
+- **Behavior (CMS algorithm consistency):** inconsistent CMS
+  signature-algorithm identifiers and unsupported parameters are now
+  rejected before cryptographic verification. See MIGRATION.md.
+- **Behavior (CLI verify exit code):** `pdf-rfc3161 verify` without
+  `--trust-store` now exits with code 2 (instead of 0) when timestamps
+  are cryptographically consistent but TSA trust was not evaluated. Exit
+  codes are now 0 = verified and trusted, 2 = consistent but untrusted,
+  1 = failure or partial. The output message is unchanged; scripts that
+  key on the exit code should treat 2 as "consistent but untrusted".
+  See MIGRATION.md.
+- **Behavior (SSRF guard):** TSA, OCSP, CRL, and AIA URLs whose hostname
+  sits under `*.localhost` are now rejected with the restricted-hostname
+  `NETWORK_ERROR` (RFC 6761 reserves the whole suffix for loopback),
+  joining the existing loopback/private-range blocks. On-premise
+  deployments should pass `allowPrivateUrls: true` (library) or
+  `--allow-private-urls` (CLI) to opt back in explicitly. See
+  MIGRATION.md.
+- **Behavior (overwrite guard):** the `timestamp` and `archive` commands
+  now refuse to write when the output path resolves to the same file as
+  the input (compared by file identity and re-verified before each
+  write), instead of destroying the original. Pass a different output
+  path; there is no force flag. See MIGRATION.md.
+- **Behavior (PDF metadata):** reason/location/contact metadata is now
+  encoded as literal text; callers should pass the intended text
+  directly, including parentheses and backslashes. The
+  `signatureFieldName` prepare option is capped at 2048 characters and
+  must not contain NUL bytes, matching the existing reason/location/
+  contact limits. Longer names now fail with a `PDF_ERROR` instead of
+  producing a malformed field. See MIGRATION.md.
+- **Behavior (LTV issuer binding):** LTV OCSP requests are now built only
+  from signature-verified issuers; unverifiable candidates are skipped
+  instead of being bound through the structural name-only match, so a
+  same-subject serial twin can no longer bind a wrong-issuer GOOD
+  response.
+- **Behavior (RFC 5544 strictness):** trailing bytes after the first DER
+  value in TimeStampedData envelopes are now rejected; the parser
+  requires full input consumption like the strict token parser.
+- **Behavior (RFC 8933 digest check):** when the optional
+  CMSAlgorithmProtection attribute is present, its repeated digest
+  algorithm must now equal the SignerInfo digest, otherwise a mismatch is
+  reported. Absence still passes (optional attribute, no contradicting
+  evidence); the narrowed semantics are spelled out in the helper docs
+  instead of claiming a verified content binding.
+
+### Fixed
+
+- GeneralizedTime certificate-validity handling is now spelled out
+  explicitly and fails closed: an asn1js re-encoding failure on
+  out-of-range rollover years (for example a month-13 rollover
+  normalizing past 2049) now yields the coded `VERIFICATION_FAILED`
+  rejection instead of escaping as a raw `RangeError`.
+- Empty `TimestampSession` input now reports `PDF_ERROR` instead of a
+  disposed-session error.
+- `DefaultFetcher` instances created with a custom config now share the
+  module circuit breakers, matching the default instance.
+- Supply chain refreshed (November 2026 rollup, including fast-uri
+  3.1.9 and a minimatch override for GHSA-g3hv-75wg-m249). Scheduled
+  Dependabot version updates are disabled in favor of a monthly manual
+  rollup; Dependabot security updates are unaffected.
+
 ## [0.3.0] - 2026-10-03
 
 ### Changed
