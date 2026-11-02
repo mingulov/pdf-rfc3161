@@ -304,8 +304,9 @@ jobs:
         run: |
             $ErrorActionPreference = "Stop"
             for ($attempt = 1; $attempt -le 3; $attempt++) {
-                winget install --exact --id Adobe.Acrobat.Reader.64-bit `
-                    --silent --accept-source-agreements --accept-package-agreements `
+                winget install --exact --id Adobe.Acrobat.Reader.64-bit --scope machine `
+                    --override "-sfx_nu /sAll /rs /msi EULA_ACCEPT=YES" `
+                    --accept-source-agreements --accept-package-agreements `
                     --disable-interactivity --no-upgrade
                 if ($LASTEXITCODE -eq 0) {
                     break
@@ -330,6 +331,16 @@ jobs:
             $recorded = (Get-ItemProperty -LiteralPath $policyKey -Name "bProtectedMode").bProtectedMode
             if ($recorded -ne 0) {
                 throw "Reader Protected Mode lockdown did not persist"
+            }
+            foreach ($eulaKey in @(
+                "HKCU:\Software\Adobe\Acrobat Reader\DC\AdobeViewer",
+                "HKCU:\Software\Adobe\Adobe Acrobat\DC\AdobeViewer"
+            )) {
+                if (-not (Test-Path -LiteralPath $eulaKey)) {
+                    New-Item -Path $eulaKey -Force | Out-Null
+                }
+                New-ItemProperty -LiteralPath $eulaKey -Name "EULA" `
+                    -Value 1 -PropertyType DWord -Force | Out-Null
             }
             # Reader 26 unified the executable as Acrobat.exe; older
             # releases register AcroRd32.exe. Probe every combination.
