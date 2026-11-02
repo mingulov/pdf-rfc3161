@@ -109,14 +109,21 @@ function Get-ReaderVersion {
     }
 }
 
+$script:LastWarmupPid = $null
+$script:LastWarmupExited = $null
+
 function Start-ReaderWarmup {
     param([string]$ExePath)
     # A fresh Reader install often refuses its first COM activation until
     # the executable has launched once. Launch it, let first-run
-    # initialization settle, then ask it to close (best effort: a lingering
-    # window on an ephemeral runner is harmless).
+    # initialization settle, then close exactly the process this warmup
+    # started: a lingering Reader instance hijacks single-instance COM
+    # activation and fails it. Only the owned PID is ever stopped.
+    $script:LastWarmupPid = $null
+    $script:LastWarmupExited = $null
     try {
         $process = Start-Process -FilePath $ExePath -PassThru
+        $script:LastWarmupPid = $process.Id
         Start-Sleep -Seconds 15
         try {
             $process.CloseMainWindow() | Out-Null
@@ -124,6 +131,16 @@ function Start-ReaderWarmup {
         }
         try {
             $process.WaitForExit(15000) | Out-Null
+        } catch {
+        }
+        try {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force
+                Start-Sleep -Seconds 5
+                $process.Refresh()
+            }
+            $script:LastWarmupExited = $process.HasExited
         } catch {
         }
     } catch {
@@ -145,7 +162,7 @@ function Get-ComDiagnostics {
     } catch {
     }
     try {
-        $registered = Test-Path -LiteralPath "HKCR:\AcroExch.App"
+        $registered = Test-Path -LiteralPath "HKLM:\SOFTWARE\Classes\AcroExch.App"
         $lines += "AcroExch.App registered=$registered"
     } catch {
     }
@@ -154,6 +171,7 @@ function Get-ComDiagnostics {
         $lines += "reader processes running=$($running.Count)"
     } catch {
     }
+    $lines += "warmupPid=$($script:LastWarmupPid) warmupExited=$($script:LastWarmupExited)"
     return ($lines -join " ")
 }
 

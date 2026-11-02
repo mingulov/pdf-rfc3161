@@ -389,15 +389,25 @@ jobs:
             }
             $version = (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion
             "Acrobat Reader $version at $exePath"
+            $leftovers = Get-Process -Name "Acrobat", "AcroRd32" -ErrorAction SilentlyContinue
+            foreach ($leftover in $leftovers) {
+                try {
+                    $leftover.CloseMainWindow() | Out-Null
+                } catch {
+                }
+            }
+            Start-Sleep -Seconds 10
+            $stillThere = @(Get-Process -Name "Acrobat", "AcroRd32" -ErrorAction SilentlyContinue)
+            if ($stillThere.Count -gt 0) {
+                $describe = ($stillThere | ForEach-Object {
+                    "$($_.Id):$($_.MainWindowTitle)"
+                }) -join "; "
+                throw "Reader processes linger after install: $describe"
+            }
+            "Reader pre-activation slate is clean"
 
       - name: Test native PDF readers
         run: pnpm --filter pdf-rfc3161-tests exec vitest run test/unit/native-pdf-compatibility.test.ts
-
-      # TEMPORARY diagnostic for Acrobat COM E_FAIL. DO NOT MERGE.
-      - name: Diagnose Reader COM (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: powershell.exe -NoLogo -NoProfile -NonInteractive -File packages/tests/scripts/diagnose-reader-com.ps1
 
       - name: Test Acrobat Reader oracle (Windows)
         if: runner.os == 'Windows'
