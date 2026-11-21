@@ -48,3 +48,7 @@ packages/*/CHANGELOG.md
 # T17 Stryker mutation pilot (sandbox + published reports)
 .stryker-tmp/
 reports/mutation/
+
+# Agent session scratch (private working notes, never tracked)
+.audit/
+.superpowers/
