@@ -60,6 +60,9 @@ export default tseslint.config(
             "@typescript-eslint/no-unsafe-call": "off",
             "@typescript-eslint/no-unsafe-argument": "off",
             "@typescript-eslint/no-unsafe-return": "off",
+            // Test fakes and pdf-lib/asn1js fixture casts use the same
+            // intentional-unsafe pattern as the no-unsafe family above.
+            "@typescript-eslint/no-unsafe-class-instance-assignment": "off",
             "preserve-caught-error": "off",
             "@typescript-eslint/require-await": "off",
             "@typescript-eslint/no-require-imports": "off",
