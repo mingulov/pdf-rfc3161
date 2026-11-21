@@ -191,6 +191,9 @@ export function parseTimeStampedData(envelope: Uint8Array): ParsedTimeStampedDat
             );
         }
 
+        // Any shape mismatch crashes below and funnels through the
+        // normalized wrapper (stable message plus cause, pinned by tests).
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-class-instance-assignment
         const timeStampedDataSeq = timeStampedDataAsn1.result as asn1js.Sequence;
         const values = timeStampedDataSeq.valueBlock.value;
 
@@ -405,9 +408,12 @@ function parseMetaData(metaDataSeq: asn1js.Sequence): ParsedTimeStampedData["met
                     attrSet.valueBlock.value.every((v) => v instanceof asn1js.Utf8String)
                 ) {
                     const oid = attrId.valueBlock.toString();
-                    otherMetaData[oid] = attrSet.valueBlock.value.map(
-                        (v: asn1js.AsnType) => (v as asn1js.Utf8String).valueBlock.value
-                    );
+                    otherMetaData[oid] = attrSet.valueBlock.value.map((v: asn1js.AsnType) => {
+                        // Every element passed the instanceof gate above.
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-class-instance-assignment
+                        const text = v as asn1js.Utf8String;
+                        return text.valueBlock.value;
+                    });
                 }
             }
         }

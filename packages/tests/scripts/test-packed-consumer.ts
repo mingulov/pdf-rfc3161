@@ -235,7 +235,7 @@ function writeConsumerPackage(consumerDirectory: string, artifacts: PackedArtifa
                     // isolation hides transitive copies installed under
                     // pdf-rfc3161/node_modules. Pins match the versions the
                     // packed tarballs were built and verified against.
-                    asn1js: "4.0.0",
+                    asn1js: "4.1.0",
                     "pdf-lib-incremental-save": "1.17.4",
                     pkijs: "4.0.1",
                 },
