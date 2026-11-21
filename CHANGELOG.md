@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 For breaking-change migration guidance, see [MIGRATION.md](./MIGRATION.md).
 
+## [0.4.1] - 2026-11-21
+
+### Changed
+
+- Supply-chain refresh, no behavior change: asn1js 4.0.0 -> 4.1.0,
+  commander 15.0.0 -> 15.1.0, eslint 10.14.0 -> 10.15.0,
+  typescript-eslint 8.72.1 -> 8.73.0, plus current vite, vitest,
+  Playwright, and demo-only minors; `pnpm outdated` is empty.
+- Toolchain pins: pnpm 12.16.1 -> 12.21.0, uv 0.13.3 -> 0.13.9,
+  Python 3.12.15 -> 3.12.16, pyHanko 0.38.0 -> 0.38.2, Ubuntu
+  snapshot 20261020 -> 20261118 (OpenSSL 3.0.13-0ubuntu3.16 ->
+  3.0.13-0ubuntu3.17); GitHub Actions refreshed (setup-uv v10.4.0,
+  pnpm/action-setup v6.1.1, setup-java v6.3.0, codeql-action
+  v4.39.4).
+- typescript-eslint 8.73 compatibility: the new strict
+  `no-unsafe-class-instance-assignment` rule is satisfied in
+  `rfcs/rfc5544.ts` without behavior change and relaxed for test
+  fixtures alongside the existing `no-unsafe-*` test relaxations.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added
