@@ -116,7 +116,9 @@ describe.runIf(process.platform === "darwin")("macOS native PDF compatibility", 
         const result = spawnSync("xcrun", ["swift", "-e", MACOS_ORACLE], {
             encoding: "utf8",
             env: { ...process.env, PDF_RFC3161_NATIVE_PDF: path },
-            timeout: 20_000,
+            // Cold Swift-driver start on a loaded runner exceeded 20 s
+            // twice (ETIMEDOUT flakes); 60 s still fails fast on a hang.
+            timeout: 60_000,
         });
 
         expect(result.error).toBeUndefined();
